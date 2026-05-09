@@ -83,6 +83,15 @@ def connect_db(sid: str):
         return jsonify({"error": f"数据库连接失败: {exc}"}), 400
 
 
+@bp.get("/api/session/<sid>/preview")
+def preview_data(sid: str):
+    sess = session_manager.get(sid)
+    if not sess or not sess.data_source:
+        return jsonify({"error": "no data source"}), 404
+    tables = sess.data_source.get_preview()
+    return jsonify({"source_name": sess.data_source.name, "tables": tables})
+
+
 @bp.delete("/api/session/<sid>/datasource")
 def disconnect_source(sid: str):
     sess = session_manager.get_or_create(sid)

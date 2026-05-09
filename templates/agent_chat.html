@@ -165,11 +165,15 @@
   </div>
 </div>
 
-<!-- Schema viewer -->
+<!-- Data preview modal -->
 <div class="overlay" id="ov-schema" onclick="closeOutside(event,'ov-schema')">
-  <div class="modal">
-    <div class="modal-title">🗂 数据结构</div>
-    <pre class="schema-box" id="schema-view" style="max-height:420px;font-size:12.5px;color:#e2e8f0"></pre>
+  <div class="modal preview-modal">
+    <div class="modal-title" id="preview-title">🗂 数据预览</div>
+    <div class="preview-tabs" id="preview-tabs"></div>
+    <div class="preview-table-wrap" id="preview-table-wrap">
+      <div class="preview-loading">加载中…</div>
+    </div>
+    <div class="preview-footer" id="preview-footer"></div>
     <div class="modal-footer">
       <button class="btn-sm btn-sm-ghost" onclick="closeOverlay('ov-schema')">关闭</button>
     </div>
