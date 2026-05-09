@@ -1,12 +1,12 @@
 $ErrorActionPreference = "Stop"
 
-$RepoUrl = "https://github.com/Zafer-Liu/VizPilot_AI.git"
-$ProjectName = "VizPilot_AI"
-$InstallDir = Join-Path $env:USERPROFILE ".vizpilot-ai"
+$RepoUrl = "https://github.com/Zafer-Liu/Data-Analysis-Agent.git"
+$ProjectName = "Data-Analysis-Agent"
+$InstallDir = Join-Path $env:USERPROFILE ".data-analysis-agent"
 $ProjectDir = Join-Path $InstallDir $ProjectName
 
 function Info($msg) {
-    Write-Host "[VizPilot AI] $msg"
+    Write-Host "[Data-Analysis-Agent] $msg"
 }
 
 Info "Checking Python..."
@@ -38,7 +38,7 @@ Info "Installing dependencies..."
 & ".\.venv\Scripts\python.exe" -m pip install --upgrade pip
 & ".\.venv\Scripts\pip.exe" install -r requirements.txt
 
-$Launcher = Join-Path $env:USERPROFILE "vizpilot-ai.bat"
+$Launcher = Join-Path $env:USERPROFILE "data-analysis-agent.bat"
 
 @"
 @echo off

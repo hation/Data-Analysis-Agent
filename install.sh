@@ -1,14 +1,14 @@
 #!/usr/bin/env sh
 set -eu
 
-REPO_URL="https://github.com/Zafer-Liu/VizPilot_AI.git"
-PROJECT_NAME="VizPilot_AI"
-INSTALL_DIR="$HOME/.vizpilot-ai"
+REPO_URL="https://github.com/Zafer-Liu/Data-Analysis-Agent.git"
+PROJECT_NAME="Data-Analysis-Agent"
+INSTALL_DIR="$HOME/.data-analysis-agent"
 PROJECT_DIR="$INSTALL_DIR/$PROJECT_NAME"
-LAUNCHER="$HOME/.local/bin/vizpilot-ai"
+LAUNCHER="$HOME/.local/bin/data-analysis-agent"
 
 info() {
-  printf '[VizPilot AI] %s\n' "$1"
+  printf '[Data-Analysis-Agent] %s\n' "$1"
 }
 
 if ! command -v python3 >/dev/null 2>&1; then
@@ -51,6 +51,6 @@ EOF
 chmod +x "$LAUNCHER"
 
 info "Installed successfully."
-info "Start with: vizpilot-ai"
+info "Start with: data-analysis-agent"
 info "If command not found, add this to your shell config:"
 info 'export PATH="$HOME/.local/bin:$PATH"'

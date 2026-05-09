@@ -18,9 +18,9 @@ bp = Blueprint("system", __name__)
 PROJECT_ROOT = Path(__file__).parent.parent
 
 # GitHub archive URL (no git required — works for zip installs too)
-ARCHIVE_URL = "https://github.com/Zafer-Liu/VizPilot_AI/archive/refs/heads/main.zip"
+ARCHIVE_URL = "https://github.com/Zafer-Liu/Data-Analysis-Agent/archive/refs/heads/main.zip"
 # The prefix inside the zip (GitHub always uses {repo}-{branch}/)
-ZIP_PREFIX = "VizPilot_AI-main/"
+ZIP_PREFIX = "Data-Analysis-Agent/"
 
 # Paths (relative to project root) that must NEVER be overwritten during update
 # — user data, local config, runtime outputs
@@ -50,7 +50,7 @@ def _is_protected(rel: Path) -> bool:
 
 def _download_zip(url: str, dest: Path, timeout: int = 90) -> None:
     """Download *url* to *dest* with a progress-friendly timeout."""
-    req = urllib.request.Request(url, headers={"User-Agent": "VizPilotUpdater/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Data-Analysis-Agent/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, "wb") as f:
         shutil.copyfileobj(resp, f)
 
@@ -75,7 +75,7 @@ def _apply_update(zip_path: Path) -> Tuple[List[str], List[str], List[str]]:
         with zipfile.ZipFile(zip_path, "r") as zf:
             zf.extractall(tmp)
 
-        # GitHub zips put everything under e.g. "VizPilot_AI-main/"
+        # GitHub zips put everything under e.g. "Data-Analysis-Agent-main/"
         src_root = tmp / ZIP_PREFIX.rstrip("/")
         if not src_root.is_dir():
             # Fallback: find the single top-level directory
