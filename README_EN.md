@@ -262,7 +262,7 @@ Save to apply.
 
 - ✅ Phase 1: Conversational analytics + multi data sources + 43 charts + SSE streaming
 - 🔲 Phase 2: Drag-and-drop dashboards
-- 🔲 Phase 3: `/report` automated report export (Word/PDF)
+- ✅ Phase 3: `/report` automated report export (Word/PDF)
 - 🔲 Phase 4: DuckDB / Spark support for big data
 
 ---

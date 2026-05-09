@@ -353,9 +353,9 @@ registry.py
 
 ## Phase 3
 
-- 🔲 `/report` 自动分析报告
-- 🔲 Word/PDF 导出
-- 🔲 自动业务总结
+- ✅ `/report` 自动分析报告
+- ✅ Word/PDF 导出
+- ✅ 自动业务总结
 
 ---
 
