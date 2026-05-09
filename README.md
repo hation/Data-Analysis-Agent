@@ -3,7 +3,7 @@
 <div align="right">
 
 <p align="center">
-  <img src="Images/banner.png">
+  <img src="Images/Banner.png">
 </p>
 
 <div align="right">
