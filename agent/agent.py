@@ -214,11 +214,23 @@ Behaviour rules:
    or reshaping data before charting. For simple single-table queries with few columns, write
    the SQL directly in generate_chart instead — avoid unnecessary extra round-trips.
 8. When the user invokes /analyze <AnalysisName>, use run_analysis with the named template.
-   After run_analysis succeeds, ALWAYS generate at least one chart from the result tables
-   (decile_result for the main summary, decile_breakdown if a groupby was used).
-   Recommended charts for Data_Decile_Analysis:
-     - Bar_Chart on decile_result: x=decile, y=sum (shows value by bucket)
-     - Line_Chart on decile_result: x=decile, y=cumulative_pct (Pareto curve)
+   After run_analysis succeeds, ALWAYS generate at least one chart from the result tables.
+   Result tables (module-specific, check OUTPUT_TABLES in each module):
+     analysis_result    — primary summary table (always written)
+     analysis_breakdown — secondary per-sample or cross-tab table (if non-empty)
+     analysis_roc       — Decision_Tree only: ROC curve points (fpr/tpr/auc/class)
+     analysis_elbow     — K_Means only: elbow curve (k/inertia/silhouette)
+   Recommended charts per analysis:
+     - Data_Decile_Analysis:
+         Bar_Chart(analysis_result, x=decile, y=sum) + Line_Chart(x=decile, y=cumulative_pct)
+     - Decision_Tree:
+         Bar_Chart(analysis_result, x=feature, y=importance_pct)       — feature importance
+         Heatmap(analysis_breakdown, x=predicted, y=actual, z=count)   — confusion matrix
+         Line_Chart(analysis_roc, x=fpr, y=tpr, series=class)          — ROC curve
+     - K_Means:
+         Bar_Chart(analysis_result, x=cluster, y=count)                — cluster sizes
+         Scatter_Plot(analysis_breakdown, x=<feat1>, y=<feat2>, color=cluster) — cluster view
+         Line_Chart(analysis_elbow, x=k, y=inertia)                    — elbow curve
 
 Complete chart type list (use the exact chart_id shown):
 {_CHART_GUIDE}
@@ -310,7 +322,7 @@ class BusinessAgent:
             return f"Analysis module '{analysis_name}' failed to load."
 
         try:
-            result_df, breakdown_df, markdown = run_fn(
+            ret = run_fn(
                 df=df,
                 target_column=target_column,
                 groupby_column=groupby_column or None,
@@ -319,19 +331,36 @@ class BusinessAgent:
         except Exception as exc:
             return f"Analysis error: {exc}"
 
+        # 支持 3-tuple（旧模块）和 4-tuple（带 extra_df，如 analysis_roc）
+        if len(ret) == 4:
+            result_df, breakdown_df, extra_df, markdown = ret
+        else:
+            result_df, breakdown_df, markdown = ret
+            extra_df = None
+
         # 3. Materialise result tables so LLM can query/chart them
         self.data_source.create_analysis_table(
-            sql=None,          # bypass SQL — write df directly
-            table_name="decile_result",
-            _df=result_df,     # see connector patch below
+            sql=None,               # bypass SQL — write df directly
+            table_name="analysis_result",
+            _df=result_df,
         )
-        self._schema_cache = None  # refresh schema
+        self._schema_cache = None   # refresh schema
 
         if not breakdown_df.empty:
             self.data_source.create_analysis_table(
                 sql=None,
-                table_name="decile_breakdown",
+                table_name="analysis_breakdown",
                 _df=breakdown_df,
+            )
+
+        if extra_df is not None and not extra_df.empty:
+            # 从模块 OUTPUT_TABLES[2] 读取第三张表的名称（各模块可自定义）
+            _out_tbls = entry.get("output_tables", [])
+            extra_table_name = _out_tbls[2] if len(_out_tbls) > 2 else "analysis_roc"
+            self.data_source.create_analysis_table(
+                sql=None,
+                table_name=extra_table_name,
+                _df=extra_df,
             )
 
         return markdown
@@ -380,10 +409,23 @@ class BusinessAgent:
             "   business-relevant numeric column (e.g. revenue, amount, score).\n"
             "4. Optionally choose a groupby_column if the user asked for a breakdown by category.\n"
             "5. Call run_analysis with the chosen parameters.\n"
-            "6. After run_analysis, ALWAYS generate these charts from decile_result:\n"
-            "   a) Bar_Chart: x=decile, y=sum  (value distribution by bucket)\n"
-            "   b) Line_Chart: x=decile, y=cumulative_pct  (Pareto cumulative curve)\n"
-            "   If groupby was used, also generate a Stacked_Bar_Chart from decile_breakdown.\n"
+            "6. After run_analysis, generate charts from the result tables:\n"
+            "   For Data_Decile_Analysis:\n"
+            "     a) Bar_Chart(analysis_result): x=decile, y=sum  (value by bucket)\n"
+            "     b) Line_Chart(analysis_result): x=decile, y=cumulative_pct  (Pareto curve)\n"
+            "   For Decision_Tree — ALWAYS generate all three charts:\n"
+            "     a) Bar_Chart(analysis_result): x=feature, y=importance_pct  (feature importance)\n"
+            "     b) Heatmap(analysis_breakdown): x=predicted, y=actual, z=count  (confusion matrix)\n"
+            "     c) Line_Chart(analysis_roc): x=fpr, y=tpr, series=class  (ROC curve, one line per class)\n"
+            "        The Line_Chart title should include AUC values for each class.\n"
+            "   For K_Means — ALWAYS generate all three charts:\n"
+            "     a) Bar_Chart(analysis_result): x=cluster, y=count  (cluster sizes)\n"
+            "     b) Scatter_Plot(analysis_breakdown): x=<feat1>, y=<feat2>, color=cluster\n"
+            "        (pick the 2 most business-relevant numeric columns for x and y axes)\n"
+            "     c) Line_Chart(analysis_elbow): x=k, y=inertia  (elbow curve)\n"
+            "   K_Means SQL tip: SELECT the numeric features to cluster on directly,\n"
+            "   e.g. SELECT age, income, spending FROM customers. Set n_deciles = K.\n"
+            "   If analysis_breakdown is available for other analyses, generate a Heatmap.\n"
             "7. Conclude with a concise business interpretation (2-4 sentences)."
         ),
         "report": (

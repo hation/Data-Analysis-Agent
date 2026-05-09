@@ -223,4 +223,4 @@ ANALYSIS_DESC = (
 )
 REQUIRED_PARAMS = ["target_column"]
 OPTIONAL_PARAMS = ["groupby_column", "n_deciles"]
-OUTPUT_TABLES   = ["decile_result", "decile_breakdown"]
+OUTPUT_TABLES   = ["analysis_result", "analysis_breakdown"]

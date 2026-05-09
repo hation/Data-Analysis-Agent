@@ -1,35 +1,66 @@
 """
 Analyze module registry.
 Add new analysis modules here; the agent reads this list to know what's available.
+
+Each entry maps analysis_id → directory name under Function/Analyze/.
+Modules are loaded via importlib.util (path-based) so directory names may
+contain hyphens or other characters not valid in Python identifiers.
 """
-import importlib
+import importlib.util
 import os
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
 
-# Each entry: analysis_id → module path (relative to Function/Analyze/)
-_REGISTRY_MAP = {
-    "Data_Decile_Analysis": "Function.Analyze.Data_Decile_Analysis",
+_ANALYZE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# analysis_id → subdirectory name (may contain hyphens)
+_REGISTRY_MAP: Dict[str, str] = {
+    "Data_Decile_Analysis": "Data_Decile_Analysis",
+    "Decision_Tree":        "Decision_Tree",
+    "K_Means":              "K-Means",
 }
+
+
+def _load_module(analysis_id: str, dir_name: str):
+    """
+    Load analyze.py directly from a subdirectory.
+    Using analyze.py (not __init__.py) avoids relative-import issues when
+    the directory name contains hyphens or other non-identifier characters.
+    Each analyze.py is fully self-contained (only imports numpy/pandas).
+    """
+    analyze_path = os.path.join(_ANALYZE_DIR, dir_name, "analyze.py")
+    if not os.path.exists(analyze_path):
+        raise ImportError(f"analyze.py not found in {os.path.join(_ANALYZE_DIR, dir_name)}/")
+    import sys
+    module_key = f"_analyze_mod_{analysis_id}"
+    spec = importlib.util.spec_from_file_location(module_key, analyze_path)
+    mod  = importlib.util.module_from_spec(spec)
+    sys.modules[module_key] = mod          # register so internal imports resolve
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def get_all() -> Dict[str, Dict[str, Any]]:
     """Return metadata for all registered analyses."""
-    result = {}
-    for aid, modpath in _REGISTRY_MAP.items():
+    result: Dict[str, Dict[str, Any]] = {}
+    for aid, dir_name in _REGISTRY_MAP.items():
         try:
-            mod = importlib.import_module(modpath)
+            mod = _load_module(aid, dir_name)
             result[aid] = {
-                "id":          getattr(mod, "ANALYSIS_ID",   aid),
-                "name":        getattr(mod, "ANALYSIS_NAME",  aid),
-                "desc":        getattr(mod, "ANALYSIS_DESC",  ""),
-                "required":    getattr(mod, "REQUIRED_PARAMS", []),
-                "optional":    getattr(mod, "OPTIONAL_PARAMS", []),
-                "output_tables": getattr(mod, "OUTPUT_TABLES", []),
-                "run":         mod.run,
+                "id":            getattr(mod, "ANALYSIS_ID",    aid),
+                "name":          getattr(mod, "ANALYSIS_NAME",  aid),
+                "desc":          getattr(mod, "ANALYSIS_DESC",  ""),
+                "required":      getattr(mod, "REQUIRED_PARAMS", []),
+                "optional":      getattr(mod, "OPTIONAL_PARAMS", []),
+                "output_tables": getattr(mod, "OUTPUT_TABLES",   []),
+                "run":           mod.run,
             }
         except Exception as exc:
-            result[aid] = {"id": aid, "name": aid, "desc": f"(load error: {exc})", "run": None}
+            result[aid] = {
+                "id": aid, "name": aid,
+                "desc": f"(load error: {exc})", "run": None,
+                "output_tables": [],
+            }
     return result
 
 
