@@ -181,23 +181,70 @@ Business Analyst Agent 是一个对话式商业数据分析系统，目标是让
 
 ## 安装方式
 
-### 方式 1：Windows 一键启动（推荐）
+### 方式 1：一键安装 + 启动（推荐）
+
+> 将下面命令中的 `<你的用户名或组织名>` 替换为你的 GitHub 用户名/组织名。
+
+#### Windows（PowerShell）
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/<你的用户名或组织名>/VizPilot_AI/main/install.ps1 | iex
+```
+
+安装完成后可用以下方式启动：
+
+- 双击运行（Windows）：
+  ```bat
+  %USERPROFILE%\vizpilot-ai.bat
+  ```
+- 或进入目录手动启动：
+  ```powershell
+  cd $env:USERPROFILE\.vizpilot-ai\VizPilot_AI
+  .\.venv\Scripts\activate
+  python app.py
+  ```
+
+#### macOS / Linux（Shell）
 
 ```bash
-start.bat
+curl -fsSL https://raw.githubusercontent.com/<你的用户名或组织名>/VizPilot_AI/main/install.sh | sh
+```
+
+安装完成后启动：
+
+```bash
+vizpilot-ai
+```
+
+如果提示 `command not found`，请先把 `~/.local/bin` 加入 PATH（写入 `~/.bashrc` 或 `~/.zshrc`）：
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ---
 
-### 方式 2：手动启动
+### 方式 2：Windows 一键启动（仅已安装依赖时适用）
 
-安装依赖：
+在项目目录下直接运行：
+
+```bat
+start.bat
+```
+
+> 说明：该方式依赖你本机已配置好 Python 环境并安装好依赖（或 `start.bat` 内部已处理依赖安装）。
+
+---
+
+### 方式 3：手动启动（通用）
+
+#### 1）安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-启动服务：
+#### 2）启动服务
 
 ```bash
 python app.py
@@ -209,31 +256,6 @@ python app.py
 
 ```text
 http://localhost:5001
-```
-
----
-
-# 📁 项目结构（建议）
-
-```text
-Business-Analyst-Agent/
-│
-├── app.py
-├── requirements.txt
-├── start.bat
-│
-├── Function/
-│   ├── Charts_generation/
-│   │   ├── charts/
-│   │   └── registry.py
-│   │
-│   ├── SQL/
-│   ├── LLM/
-│   └── DataSource/
-│
-├── Images/
-│
-└── README.md
 ```
 
 ---

@@ -120,26 +120,81 @@ Also supports any **OpenAI SDK compatible API** via custom:
 
 ---
 
-## 📦 Quick Start
+## Installation
 
-### Requirements
-- Python 3.8+
-- Windows (one-click startup supported via `start.bat`)
+### Option 1: One-click Install + Run (Recommended)
 
-### Install & Run
+> Replace `<your-username-or-org>` with your GitHub username/organization.
 
-#### Option 1: Windows One-click Start (Recommended)
+#### Windows (PowerShell)
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/<your-username-or-org>/VizPilot_AI/main/install.ps1 | iex
+```
+
+After installation, you can start the app in either way:
+
+- Double-click to run (Windows):
+  ```bat
+  %USERPROFILE%\vizpilot-ai.bat
+  ```
+- Or start it manually from the project directory:
+  ```powershell
+  cd $env:USERPROFILE\.vizpilot-ai\VizPilot_AI
+  .\.venv\Scripts\activate
+  python app.py
+  ```
+
+#### macOS / Linux (Shell)
+
 ```bash
+curl -fsSL https://raw.githubusercontent.com/<your-username-or-org>/VizPilot_AI/main/install.sh | sh
+```
+
+Start after installation:
+
+```bash
+vizpilot-ai
+```
+
+If you see `command not found`, add `~/.local/bin` to your PATH (in `~/.bashrc` or `~/.zshrc`):
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+---
+
+### Option 2: Windows One-click Start (Only if dependencies are already installed)
+
+Run in the project directory:
+
+```bat
 start.bat
 ```
 
-#### Option 2: Manual Start
+> Note: This option requires Python to be installed and dependencies to be available on your machine (or `start.bat` already handles dependency installation).
+
+---
+
+### Option 3: Manual Start (Universal)
+
+#### 1) Install dependencies
+
 ```bash
 pip install -r requirements.txt
+```
+
+#### 2) Start the service
+
+```bash
 python app.py
 ```
 
-### Open in Browser
+---
+
+## Access URL
+
 ```text
 http://localhost:5001
 ```
