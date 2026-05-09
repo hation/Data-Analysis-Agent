@@ -5,7 +5,7 @@
     "base_url": "https://api.minimax.chat/v1",
     "model": "MiniMax-M2.7",
     "enabled": true,
-    "is_custom": false,
+    "is_custom": true,
     "context_window": null,
     "max_output_tokens": null,
     "enable_thinking": false
