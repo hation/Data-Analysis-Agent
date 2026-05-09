@@ -110,7 +110,6 @@ Also supports any **OpenAI SDK compatible API** via custom:
 ![Data Preview](Images/Data_preview.png)
 
 ---
-
 ### Data Query
 ![Data Query](Images/Data_query.png)
 

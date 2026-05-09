@@ -147,30 +147,17 @@ Business Analyst Agent 是一个对话式商业数据分析系统，目标是让
 
 # 🖼️ 界面预览
 
-## Data Preview
-
+### Data Preview
 ![Data Preview](Images/Data_preview.png)
 
----
 
-## Custom Model
-
-![Custom Model](Images/Custom_model.png)
+### Data Query
+![Data Query](Images/Data_query.png)
 
 ---
 
-## Auto Generated Chart
-
+### Auto Generated Chart
 ![Auto Generated](Images/Auto_generated_image.png)
-
----
-
-# 📦 快速开始
-
-## 环境要求
-
-- Python 3.8+
-- Windows（支持一键启动）
 
 ---
 
