@@ -2,6 +2,12 @@
 
 <div align="right">
 
+<p align="center">
+  <img src="Images/banner.png">
+</p>
+
+<div align="right">
+
 [English](./README_EN.md)
 
 </div>
