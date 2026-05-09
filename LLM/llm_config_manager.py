@@ -10,9 +10,15 @@ import json
 from pathlib import Path
 from typing import Dict, Optional, Any, List
 from dataclasses import dataclass, asdict
-
+import os
+from pathlib import Path
 # 配置文件路径 - 使用相对路径
-CONFIG_DIR = Path(__file__).parent
+if os.environ.get("VERCEL"):
+    CONFIG_DIR = Path("/tmp/LLM")
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+else:
+    CONFIG_DIR = Path(__file__).parent
+
 LLM_CONFIG_FILE = CONFIG_DIR / "llm_config.json"
 
 print(f"[LLM] __file__={__file__}")
