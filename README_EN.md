@@ -260,8 +260,8 @@ Save to apply.
 
 ## 🗺️ Roadmap
 ## Version Development Log
-- [View changelog](Version_Update_Log.md)
-- [View changelog](Version_Update_Log_EN.md)
+- [Version_Update_Log](Version_Update_Log.md)
+- [Version_Update_Log_EN](Version_Update_Log_EN.md)
 ## ✅ Phase 1
 - Conversational analytics + multi data sources + 43 charts + SSE streaming
 ## 🔲 Phase 2
