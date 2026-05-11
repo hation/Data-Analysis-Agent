@@ -322,8 +322,8 @@ class SQLDataSource(DataSource):
             tables = []
         for t in tables:
             try:
-                df, err = self.execute_query(f'SELECT * FROM "{t}" LIMIT {min(max_rows, 200)}')
-                if err or df.empty:
+                df, err = self.execute_query(f'SELECT * FROM `{t}` LIMIT {min(max_rows, 200)}')
+                if err:
                     continue
                 result.append({"name": t, "columns": list(df.columns),
                                "rows": df.fillna("").astype(str).values.tolist(),
