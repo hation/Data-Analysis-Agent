@@ -18,7 +18,7 @@ def download_export(filename: str):
     Security: only filenames composed of word chars, hyphens, and dots
     are accepted to prevent path traversal.
     """
-    if not re.match(r'^[\w\-\.]+$', filename):
+    if ".." in filename or re.search(r'[\\/\x00]', filename):
         abort(400)
 
     filepath = os.path.join(_EXPORT_DIR, filename)

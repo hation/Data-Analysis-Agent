@@ -122,7 +122,22 @@ Also supports any **OpenAI SDK compatible API** via custom:
 
 ## Installation
 
-### Option 1: One-Click Install + Launch (Recommended)
+### Option 1: Windows One-click Start (Recommended)
+
+#### 1) Download and install the package
+![Download installation package](Images/package.png)
+
+#### 2) Unzip and run directly in the project directory:
+
+```bat
+start.bat
+```
+
+> Note: This option requires Python to be installed and dependencies to be available on your machine (or `start.bat` already handles dependency installation).
+
+---
+
+### Option 2: One-Click Install + Launch (Still testing, unstable)
 
 #### Windows (PowerShell)
 
@@ -164,27 +179,29 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ---
 
-### Option 2: Windows One-click Start (Only if dependencies are already installed)
 
-Run in the project directory:
 
-```bat
-start.bat
+### Method 3: Install via GitHub (Command Line)
+
+#### 1) Clone the repository
+
+```bash
+git clone https://github.com/Zafer-Liu/Data-Analysis-Agent.git
 ```
 
-> Note: This option requires Python to be installed and dependencies to be available on your machine (or `start.bat` already handles dependency installation).
+#### 2) Enter the project directory
 
----
+```bash
+cd Data-Analysis-Agent
+```
 
-### Option 3: Manual Start (Universal)
-
-#### 1) Install dependencies
+#### 3) Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-#### 2) Start the service
+#### 4) Start the service
 
 ```bash
 python app.py

@@ -163,9 +163,26 @@ Business Analyst Agent 是一个对话式商业数据分析系统，目标是让
 
 ## 安装方式
 
-### 方式 1：一键安装 + 启动（推荐）
 
-#### Windows（PowerShell）
+
+### 方式 1：安装包下载（推荐）
+
+#### 1) 下载安装包 
+
+![Download installation package](Images/package.png)
+
+#### 2) 解压缩，在项目目录下双击直接运行：
+
+```bat
+start.bat
+```
+
+> 说明：该方式依赖你本机已配置好 Python 环境并安装好依赖（或 `start.bat` 内部已处理依赖安装）。
+
+---
+### 方式 2：一键安装 + 启动（还在测试，不稳定）
+
+#### 1) Windows（PowerShell）
 
 ```powershell
 iwr -useb https://raw.githubusercontent.com/Zafer-Liu/Data-Analysis-Agent/main/install.ps1 | iex
@@ -184,7 +201,7 @@ iwr -useb https://raw.githubusercontent.com/Zafer-Liu/Data-Analysis-Agent/main/i
   python app.py
   ```
 
-#### macOS / Linux（Shell）
+#### 2) macOS / Linux（Shell）
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Zafer-Liu/Data-Analysis-Agent/main/install.sh | sh
@@ -202,29 +219,29 @@ data-analysis-agent
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+
 ---
+### 方式 3：通过 GitHub 安装（命令行）
 
-### 方式 2：Windows 一键启动（仅已安装依赖时适用）
+#### 1) 克隆仓库
 
-在项目目录下直接运行：
-
-```bat
-start.bat
+```bash
+git clone https://github.com/Zafer-Liu/Data-Analysis-Agent.git
 ```
 
-> 说明：该方式依赖你本机已配置好 Python 环境并安装好依赖（或 `start.bat` 内部已处理依赖安装）。
+#### 2) 进入项目目录
 
----
+```bash
+cd Data-Analysis-Agent
+```
 
-### 方式 3：手动启动（通用）
-
-#### 1）安装依赖
+#### 3）安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-#### 2）启动服务
+#### 4）启动服务
 
 ```bash
 python app.py
@@ -237,7 +254,6 @@ python app.py
 ```text
 http://localhost:5001
 ```
-
 ---
 
 # 🛠 Slash Commands

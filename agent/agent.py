@@ -1,413 +1,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Business Analyst Agent — tool-calling loop via OpenAI-compatible SDK."""
+"""Business Analyst Agent — main entry point.
+
+The heavy lifting is split across:
+  prompts.py      — SYSTEM_PROMPT, COMMAND_HINTS, path setup
+  tools_schema.py — AGENT_TOOLS (JSON schemas sent to the LLM)
+  tools_data.py   — DataToolsMixin  (schema / query / analysis / chart / clean)
+  tools_export.py — ExportToolsMixin (Excel / Word / PPT)
+"""
 import json
-import sys
-import os
+import logging
+import time
 from typing import Iterator, List, Dict, Any, Optional
 
-_PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_CHARTS_GEN = os.path.join(_PROJ_ROOT, "Function", "Charts_generation")
-sys.path.insert(0, _PROJ_ROOT)
-sys.path.insert(0, _CHARTS_GEN)
+from .prompts      import SYSTEM_PROMPT, COMMAND_HINTS
+from .tools_schema import AGENT_TOOLS
+from .tools_data   import DataToolsMixin
+from .tools_export import ExportToolsMixin
 
-# ── Analyze registry (lazy-loaded, best-effort) ───────────────────────────
-def _build_analyze_guide() -> str:
-    try:
-        from Function.Analyze.registry import build_agent_desc
-        return build_agent_desc()
-    except Exception:
-        return "  Data_Decile_Analysis — 十分位分析（Decile Analysis）"
-
-_ANALYZE_GUIDE = _build_analyze_guide()
+log = logging.getLogger(__name__)
 
 
-def _build_chart_guide() -> tuple[str, str]:
-    """Return (system_prompt_guide, tool_type_list) built from the registry.
-    Falls back to a hardcoded minimal list if the registry cannot be imported."""
-    try:
-        from charts.registry import REGISTRY
-        lines, ids = [], []
-        current_cat = ""
-        for c in REGISTRY:
-            if "ongoing" in c.name.lower():
-                continue
-            ids.append(c.chart_id)
-            if c.category != current_cat:
-                current_cat = c.category
-                lines.append(f"\n[{current_cat}]")
-            lines.append(f"  {c.chart_id:<35} → {c.desc[:80]}")
-        return "\n".join(lines), ", ".join(ids)
-    except Exception:
-        fallback = (
-            "Bar_Chart, Line_Chart, Pie_Chart, Scatter_Plot, Area_Chart, "
-            "Heatmap, Waterfall, Treemap, Sunburst_Diagram, Nightingale_Chart"
-        )
-        return fallback, fallback
-
-
-_CHART_GUIDE, _CHART_IDS = _build_chart_guide()
-
-# ── Tool schemas sent to the LLM ──────────────────────────────────────────
-
-AGENT_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_schema",
-            "description": (
-                "Get the full schema of the connected data source — tables, columns, "
-                "types, and row counts. Always call this first when the user asks "
-                "about data you haven't seen yet."
-            ),
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_analysis_table",
-            "description": (
-                "Extract specific fields from the raw data and materialise the result "
-                "as a new queryable table. Use this to: (1) select only the columns "
-                "needed for the current analysis, (2) pre-aggregate or filter large "
-                "datasets before charting, (3) join / reshape data into the exact "
-                "shape a chart requires. The resulting table is immediately available "
-                "to query_data and generate_chart by its table_name."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "sql": {
-                        "type": "string",
-                        "description": (
-                            "SQL SELECT that defines the analysis table — "
-                            "select the exact columns needed, apply WHERE filters, "
-                            "GROUP BY aggregations, JOINs, etc."
-                        ),
-                    },
-                    "table_name": {
-                        "type": "string",
-                        "description": (
-                            "Name for the new temp table (default: 'analysis_data'). "
-                            "Use a descriptive name when creating multiple tables."
-                        ),
-                    },
-                },
-                "required": ["sql"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "query_data",
-            "description": "Execute a SQL SELECT query and return the results as a table.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "sql": {
-                        "type": "string",
-                        "description": "A valid SQL SELECT statement using actual column/table names from the schema.",
-                    }
-                },
-                "required": ["sql"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_analysis",
-            "description": (
-                "Run a built-in statistical analysis template on the data.\n"
-                "Steps: (1) call get_schema to know the tables/columns, "
-                "(2) call run_analysis with the appropriate parameters, "
-                "(3) the result is stored as queryable tables — call generate_chart on them.\n\n"
-                "Available analyses:\n"
-                f"{_ANALYZE_GUIDE}"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "analysis_name": {
-                        "type": "string",
-                        "description": "Analysis ID, e.g. 'Data_Decile_Analysis'.",
-                    },
-                    "sql": {
-                        "type": "string",
-                        "description": (
-                            "SQL SELECT to fetch the raw data for analysis. "
-                            "Include the target column and any optional groupby column. "
-                            "Example: SELECT revenue, region FROM sales_data"
-                        ),
-                    },
-                    "target_column": {
-                        "type": "string",
-                        "description": "The numeric column to analyse (must exist in the SQL result).",
-                    },
-                    "groupby_column": {
-                        "type": "string",
-                        "description": "(Optional) A categorical column for additional breakdown.",
-                    },
-                    "n_deciles": {
-                        "type": "integer",
-                        "description": "Number of buckets (default 10). Use 5 for quintiles, 4 for quartiles.",
-                    },
-                },
-                "required": ["analysis_name", "sql", "target_column"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "generate_chart",
-            "description": (
-                "Create a data visualization chart displayed to the user. "
-                "Use after querying to confirm the data shape. "
-                "See the system prompt for the complete chart type list and their field_mapping requirements."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "chart_type": {
-                        "type": "string",
-                        "description": (
-                            f"Exact chart_id from the registry. Available: {_CHART_IDS}"
-                        ),
-                    },
-                    "sql": {
-                        "type": "string",
-                        "description": "SQL query to retrieve data for the chart.",
-                    },
-                    "field_mapping": {
-                        "type": "object",
-                        "description": (
-                            "Maps chart field roles to column names per the chart's data_format. "
-                            'E.g. {"x": "month", "y": "revenue"} or '
-                            '{"label": "product", "value": "sales"}.'
-                        ),
-                    },
-                    "title": {
-                        "type": "string",
-                        "description": "Chart title shown above the visualization.",
-                    },
-                },
-                "required": ["chart_type", "sql", "field_mapping"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "profile_data",
-            "description": (
-                "Profile a data table: per-column missing value %, dtype, "
-                "and for numeric columns: mean/std/min/max/quartiles. "
-                "Also generates distribution histogram charts automatically. "
-                "Call this for the /data command."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "table_name": {
-                        "type": "string",
-                        "description": "Table to profile. Leave empty to use the first available table.",
-                    },
-                    "columns": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional list of columns to limit profiling to.",
-                    },
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "clean_data",
-            "description": (
-                "Clean data in-place and store result as 'cleaned_data' table. "
-                "Supports three operations:\n"
-                "  fill_na   — fill NaN with zero / mean / median\n"
-                "  winsorize — cap values at lower/upper percentiles\n"
-                "  trimming  — remove rows outside [min_val, max_val] on one column"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "operation": {
-                        "type": "string",
-                        "description": "One of: fill_na | winsorize | trimming",
-                    },
-                    "table_name": {
-                        "type": "string",
-                        "description": "Source table name. Leave empty to use the first available raw table.",
-                    },
-                    "columns": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Columns to process (fill_na / winsorize). None = all numeric columns.",
-                    },
-                    "fill_method": {
-                        "type": "string",
-                        "description": "For fill_na: 'zero' | 'mean' | 'median'",
-                    },
-                    "lower_pct": {
-                        "type": "number",
-                        "description": "For winsorize: lower percentile, 0–100 (e.g. 1 for 1st percentile)",
-                    },
-                    "upper_pct": {
-                        "type": "number",
-                        "description": "For winsorize: upper percentile, 0–100 (e.g. 99 for 99th percentile)",
-                    },
-                    "trim_column": {
-                        "type": "string",
-                        "description": "For trimming: the column to filter on",
-                    },
-                    "min_val": {
-                        "type": "number",
-                        "description": "For trimming: minimum value to keep (inclusive)",
-                    },
-                    "max_val": {
-                        "type": "number",
-                        "description": "For trimming: maximum value to keep (inclusive)",
-                    },
-                    "output_table": {
-                        "type": "string",
-                        "description": "Name for the result table (default: 'cleaned_data')",
-                    },
-                },
-                "required": ["operation"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "export_excel",
-            "description": (
-                "Export data tables to an Excel (.xlsx) file. "
-                "Call this ONLY when the user explicitly asked to export data. "
-                "Each table becomes a separate sheet. "
-                "Pass tables=[\"*\"] to export ALL available tables automatically — "
-                "this is the default behaviour unless the user asks for specific tables."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "tables": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "Table names to export. "
-                            "Use [\"*\"] to auto-export every table in the data source "
-                            "(raw data + analysis results). "
-                            "Only specify exact names if the user asked for specific tables."
-                        ),
-                    },
-                    "filename": {
-                        "type": "string",
-                        "description": "Base filename without extension (optional, auto-generated if omitted).",
-                    },
-                },
-                "required": ["tables"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "export_report",
-            "description": (
-                "Generate a Word document (.docx) analysis report. "
-                "Call this ONLY when the user explicitly asked to export a report. "
-                "Query the data first, then compose sections."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {
-                        "type": "string",
-                        "description": "Report title.",
-                    },
-                    "sections": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "heading": {"type": "string"},
-                                "content": {
-                                    "type": "string",
-                                    "description": "Section body text (plain text or markdown-style).",
-                                },
-                            },
-                            "required": ["heading", "content"],
-                        },
-                        "description": (
-                            "Ordered list of report sections. Typical structure: "
-                            "Executive Summary → Key Findings → Data Analysis → Recommendations."
-                        ),
-                    },
-                },
-                "required": ["title", "sections"],
-            },
-        },
-    },
-]
-
-SYSTEM_PROMPT = f"""You are a professional business analyst assistant embedded in a data analytics platform.
-Your job: help users understand and derive insights from their business data through conversation.
-
-Behaviour rules:
-1. Always call get_schema before writing SQL if you don't already know the table structure.
-2. Use exact column and table names from the schema — never guess.
-3. After showing raw data, add a concise business insight (1-3 sentences).
-4. Proactively suggest a relevant chart after answering data questions.
-5. Respond in the same language the user used (Chinese or English).
-6. Format numbers with separators and units where possible (e.g. ¥1,234,567 or 38.5%).
-7. Use create_analysis_table when it genuinely helps: multi-step aggregations, joining sheets,
-   or reshaping data before charting. For simple single-table queries with few columns, write
-   the SQL directly in generate_chart instead — avoid unnecessary extra round-trips.
-8. When the user invokes /analyze <AnalysisName>, use run_analysis with the named template.
-   After run_analysis succeeds, ALWAYS generate at least one chart from the result tables.
-   Result tables (module-specific, check OUTPUT_TABLES in each module):
-     analysis_result    — primary summary table (always written)
-     analysis_breakdown — secondary per-sample or cross-tab table (if non-empty)
-     analysis_roc       — Decision_Tree only: ROC curve points (fpr/tpr/auc/class)
-     analysis_elbow     — K_Means only: elbow curve (k/inertia/silhouette)
-   Recommended charts per analysis:
-     - Data_Decile_Analysis:
-         Bar_Chart(analysis_result, x=decile, y=sum) + Line_Chart(x=decile, y=cumulative_pct)
-     - Decision_Tree:
-         Bar_Chart(analysis_result, x=feature, y=importance_pct)       — feature importance
-         Heatmap(analysis_breakdown, x=predicted, y=actual, z=count)   — confusion matrix
-         Line_Chart(analysis_roc, x=fpr, y=tpr, series=class)          — ROC curve
-     - K_Means:
-         Bar_Chart(analysis_result, x=cluster, y=count)                — cluster sizes
-         Scatter_Plot(analysis_breakdown, x=<feat1>, y=<feat2>, color=cluster) — cluster view
-         Line_Chart(analysis_elbow, x=k, y=inertia)                    — elbow curve
-         cluster_labels — ALL original columns + cluster label; use for any follow-up
-           analysis, e.g. GROUP BY cluster, filter by cluster, join with other tables
-
-Complete chart type list (use the exact chart_id shown):
-{_CHART_GUIDE}
-
-field_mapping key rules (use the required_roles from each chart's description):
-- Most charts: x/y for axes, series for grouping
-- Pie/Nightingale: label+value or names+values
-- Treemap/Sunburst: labels+values (+ optional parents)
-- Sankey/Chord/Arc: source+target+value (or x+y+z)
-- Distribution charts (Box, Violin, Beeswarm, Ridgeline): y (+ optional x for grouping)
-- Parallel coordinates: dimensions (list of column names) + optional color
-- Geographic charts: label+value (+ optional category)
-"""
-
-
-class BusinessAgent:
+class BusinessAgent(DataToolsMixin, ExportToolsMixin):
     MAX_ITERATIONS = 100
 
     def __init__(
@@ -418,544 +32,101 @@ class BusinessAgent:
         enable_thinking: bool = False,
         chart_store: Optional[dict] = None,
         session_chart_ids: Optional[List[str]] = None,
+        color_scheme: str = "mckinsey",
     ):
         self.client = client
         self.model = model
         self.data_source = data_source
         self.enable_thinking = enable_thinking
         self._schema_cache: Optional[str] = None
-        # Chart context for /report export
         self._chart_store: dict = chart_store if chart_store is not None else {}
         self._session_chart_ids: List[str] = session_chart_ids if session_chart_ids is not None else []
+        self.ppt_color_scheme: str = color_scheme
 
     def set_data_source(self, source):
         self.data_source = source
         self._schema_cache = None
 
-    # ── Tool implementations ───────────────────────────────────────────────
+    # ── Agent loop ────────────────────────────────────────────────────────────
 
-    def _tool_get_schema(self) -> str:
-        if not self.data_source:
-            return "No data source connected."
-        if not self._schema_cache:
-            self._schema_cache = self.data_source.get_schema()
-        return self._schema_cache
-
-    def _tool_query_data(self, sql: str) -> str:
-        if not self.data_source:
-            return "No data source. Please connect a database or upload an Excel file first."
-        df, error = self.data_source.execute_query(sql)
-        if error:
-            return f"SQL Error: {error}"
-        return self.data_source.format_result(df)
-
-    def _tool_create_analysis_table(self, sql: str, table_name: str = "analysis_data") -> str:
-        if not self.data_source:
-            return "No data source connected."
-        result = self.data_source.create_analysis_table(sql, table_name)
-        # Invalidate schema cache so the new table shows up in get_schema
-        self._schema_cache = None
-        return result
-
-    # ── DataFrame → DataSource writer (backward-compatible) ───────────────
-
-    def _write_analysis_df(self, df, table_name: str) -> None:
-        """
-        Write *df* into the connected data source as a queryable table.
-
-        Strategy (two-tier for backward compatibility):
-        1. Try the new connector API: create_analysis_table(sql=None, _df=df, ...)
-        2. If the connector is an older version that lacks the *_df* parameter,
-           fall back to writing directly to the underlying SQLite connection:
-           - ExcelDataSource / CSVDataSource → self._conn  (in-memory SQLite)
-           - SQLDataSource                  → self._cache_conn (local SQLite cache)
-        This ensures the result tables are queryable even on older installs
-        without requiring users to manually update connector.py.
-        """
-        import sqlite3
-
-        ds = self.data_source
-
-        # ── Attempt new API ────────────────────────────────────────────────
-        try:
-            ds.create_analysis_table(sql=None, table_name=table_name, _df=df)
-            self._schema_cache = None
-            return
-        except TypeError:
-            pass   # old connector — fall through to direct SQLite write
-
-        # ── Fallback: direct SQLite write ──────────────────────────────────
-        # ExcelDataSource / CSVDataSource store data in self._conn
-        conn = getattr(ds, "_conn", None)
-
-        if conn is None:
-            # SQLDataSource: create/reuse local cache connection
-            if getattr(ds, "_cache_conn", None) is None:
-                ds._cache_conn = sqlite3.connect(":memory:", check_same_thread=False)
-                ds._cache_tables = set()
-            conn = ds._cache_conn
-            ds._cache_tables.add(table_name)
-
-        df.to_sql(table_name, conn, if_exists="replace", index=False)
-        self._schema_cache = None
-
-    # ── Analysis tool ──────────────────────────────────────────────────────
-
-    def _tool_run_analysis(
+    def run(
         self,
-        analysis_name: str,
-        sql: str,
-        target_column: str,
-        groupby_column: str = "",
-        n_deciles: int = 10,
-    ) -> str:
-        """
-        Run a registered analysis template.
-        Returns a markdown summary; also materialises result tables
-        into the data source for subsequent generate_chart calls.
-        """
-        if not self.data_source:
-            return "No data source connected."
-
-        # 1. Fetch raw data
-        df, error = self.data_source.execute_query(sql)
-        if error:
-            return f"SQL Error while fetching data: {error}"
-        if df.empty:
-            return "Query returned no rows — cannot run analysis."
-
-        # 2. Dispatch to analysis module
-        try:
-            from Function.Analyze.registry import get as get_analysis
-            entry = get_analysis(analysis_name)
-        except KeyError as exc:
-            return str(exc)
-        except Exception as exc:
-            return f"Failed to load analysis module '{analysis_name}': {exc}"
-
-        run_fn = entry.get("run")
-        if run_fn is None:
-            return f"Analysis module '{analysis_name}' failed to load."
-
-        try:
-            ret = run_fn(
-                df=df,
-                target_column=target_column,
-                groupby_column=groupby_column or None,
-                n_deciles=n_deciles,
-            )
-        except Exception as exc:
-            return f"Analysis error: {exc}"
-
-        # 支持 3-tuple（旧模块）和 4-tuple（带 extra_df，如 analysis_roc）
-        if len(ret) == 4:
-            result_df, breakdown_df, extra_df, markdown = ret
-        else:
-            result_df, breakdown_df, markdown = ret
-            extra_df = None
-
-        # 3. Materialise result tables so LLM can query/chart them
-        try:
-            self._write_analysis_df(result_df, "analysis_result")
-
-            if not breakdown_df.empty:
-                self._write_analysis_df(breakdown_df, "analysis_breakdown")
-
-            if extra_df is not None and not extra_df.empty:
-                # 从模块 OUTPUT_TABLES[2] 读取第三张表的名称（各模块可自定义）
-                _out_tbls = entry.get("output_tables", [])
-                extra_table_name = _out_tbls[2] if len(_out_tbls) > 2 else "analysis_roc"
-                self._write_analysis_df(extra_df, extra_table_name)
-
-        except Exception as exc:
-            return (
-                markdown
-                + f"\n\n⚠️ **结果表写入失败**：{exc}\n"
-                "分析计算已完成，但结果无法存为可查询表格，请联系开发者。"
-            )
-
-        # 4. K_Means 专属：创建 cluster_labels（全量原始列 + cluster 标签）
-        #    策略：将 SQL 的列列表替换为 SELECT *，重跑同一个查询，
-        #    行顺序不变（相同的 FROM/WHERE/ORDER），按位置合并 cluster 列。
-        #    失败时静默跳过，不影响主流程。
-        if analysis_name == "K_Means" and "cluster" in breakdown_df.columns:
-            markdown += self._kmeans_build_labeled(sql, breakdown_df)
-
-        return markdown
-
-    def _kmeans_build_labeled(self, sql: str, breakdown_df) -> str:
-        """
-        创建 cluster_labels 表（全量原始列 + cluster）。
-        将 SELECT <cols> FROM ... 替换为 SELECT * FROM ...，重新查询一次；
-        若行数与 breakdown_df 吻合则按位置合并 cluster 列并写表。
-        返回追加到 markdown 末尾的说明文字（可为空串）。
-        """
-        import re
-        try:
-            # 把 SELECT ... FROM 替换成 SELECT * FROM（保留 WHERE/ORDER/LIMIT 等）
-            labeled_sql = re.sub(
-                r"(?is)\bSELECT\b.+?\bFROM\b",
-                "SELECT *\nFROM",
-                sql,
-                count=1,
-            )
-            full_df, err = self.data_source.execute_query(labeled_sql)
-            if err or full_df.empty:
-                return ""
-            if len(full_df) != len(breakdown_df):
-                # 行数不匹配（含聚合/distinct 等），跳过
-                return ""
-
-            labeled_df = full_df.copy().reset_index(drop=True)
-            labeled_df["cluster"] = breakdown_df["cluster"].values
-            self._write_analysis_df(labeled_df, "cluster_labels")
-            self._schema_cache = None
-
-            cols_preview = ", ".join(str(c) for c in labeled_df.columns[:8])
-            if len(labeled_df.columns) > 8:
-                cols_preview += ", ..."
-            return (
-                "\n\n---\n"
-                "### 📌 数据标签表 `cluster_labels`\n"
-                f"已将聚类结果（cluster 列）回写到原始数据，"
-                f"生成包含所有原始字段的标签表：\n\n"
-                f"**列：** `{cols_preview}`\n\n"
-                "可直接用于后续分析，例如：\n"
-                "```sql\n"
-                "-- 查看各簇的详细记录\n"
-                "SELECT * FROM cluster_labels WHERE cluster = 0 LIMIT 20\n\n"
-                "-- 统计各簇某字段的均值\n"
-                "SELECT cluster, AVG(target_col) AS avg_val FROM cluster_labels GROUP BY cluster\n"
-                "```"
-            )
-        except Exception:
-            return ""   # 非关键步骤，失败时静默跳过
-
-    def _tool_generate_chart(
-        self, chart_type: str, sql: str, field_mapping: dict, title: str = ""
-    ) -> dict:
-        if not self.data_source:
-            return {"error": "No data source connected."}
-        df, error = self.data_source.execute_query(sql)
-        if error:
-            return {"error": f"Data query failed: {error}"}
-        if df.empty:
-            return {"error": "Query returned no rows — cannot generate chart."}
-
-        from chart_generate import generate_chart as _gen
-
-        options = {"title": title} if title else {}
-        result = _gen(df=df, chart_type=chart_type, mapping=field_mapping, options=options)
-
-        if "error" in result:
-            return {"error": result["error"]}
-        return {"html": result.get("html", ""), "chart_type": chart_type}
-
-    def _get_first_raw_table(self) -> str:
-        """Return the first non-analysis table name, or first table if all are analysis."""
-        tables = self._discover_all_tables()
-        raw = [t for t in tables if not t.startswith("analysis_") and t != "cleaned_data"]
-        return raw[0] if raw else (tables[0] if tables else "")
-
-    def _tool_profile_data(self, table_name: str = "", columns: list = None) -> dict:
-        """Returns {"text": markdown, "charts": [html, ...]}."""
-        if not self.data_source:
-            return {"text": "❌ 请先连接数据源。", "charts": []}
-
-        tname = table_name or self._get_first_raw_table()
-        if not tname:
-            return {"text": "❌ 数据源中没有可用的表格。", "charts": []}
-
-        df, err = self.data_source.execute_query(f'SELECT * FROM "{tname}"')
-        if err or df is None or df.empty:
-            return {"text": f"❌ 读取表 '{tname}' 失败：{err}", "charts": []}
-
-        try:
-            from Function.Clean.data_profile import profile
-            text, charts = profile(df, columns or None)
-            return {"text": f"### 数据概况 · `{tname}`\n\n" + text, "charts": charts}
-        except Exception as exc:
-            return {"text": f"❌ 数据概况生成失败：{exc}", "charts": []}
-
-    def _tool_clean_data(
-        self,
-        operation: str,
-        table_name: str = "",
-        columns=None,
-        fill_method: str = "mean",
-        lower_pct: float = 1.0,
-        upper_pct: float = 99.0,
-        trim_column: str = "",
-        min_val=None,
-        max_val=None,
-        output_table: str = "cleaned_data",
-    ) -> str:
-        if not self.data_source:
-            return "❌ 请先连接数据源。"
-
-        tname = table_name or self._get_first_raw_table()
-        if not tname:
-            return "❌ 数据源中没有可用的表格。"
-
-        df, err = self.data_source.execute_query(f'SELECT * FROM "{tname}"')
-        if err or df is None or df.empty:
-            return f"❌ 读取表 '{tname}' 失败：{err}"
-
-        try:
-            if operation == "fill_na":
-                from Function.Clean.missing_handler import fill_missing
-                cleaned_df, summary = fill_missing(df, fill_method, columns)
-            elif operation == "winsorize":
-                from Function.Clean.winsorize import winsorize
-                cleaned_df, summary = winsorize(df, lower_pct, upper_pct, columns)
-            elif operation == "trimming":
-                if not trim_column:
-                    return "❌ trimming 操作需要指定 trim_column。"
-                if min_val is None or max_val is None:
-                    return "❌ trimming 操作需要同时指定 min_val 和 max_val。"
-                from Function.Clean.trimming import trim
-                cleaned_df, summary = trim(df, trim_column, float(min_val), float(max_val))
-            else:
-                return f"❌ 未知操作 '{operation}'，支持：fill_na / winsorize / trimming"
-        except Exception as exc:
-            return f"❌ 清洗失败：{exc}"
-
-        try:
-            self._write_analysis_df(cleaned_df, output_table)
-            self._schema_cache = None
-        except Exception as exc:
-            return summary + f"\n\n⚠️ 结果表写入失败：{exc}"
-
-        return (
-            summary
-            + f"\n\n✅ 清洗结果已保存为表 `{output_table}`，可直接用于后续分析和图表生成。"
-        )
-
-    def _discover_all_tables(self) -> list:
-        """Return every table name currently available in the data source."""
-        if not self.data_source:
-            return []
-        # Works for ExcelDataSource / CSVDataSource (SQLite in-memory)
-        df, err = self.data_source.execute_query(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY rowid"
-        )
-        if not err and not df.empty:
-            return df["name"].tolist()
-        # Fallback: parse schema string (covers SQLDataSource cache tables too)
-        import re
-        schema = self._tool_get_schema()
-        return re.findall(r"^Table:\s+(\S+)", schema, re.MULTILINE)
-
-    def _tool_export_excel(self, tables: list, filename: str = "") -> str:
-        import datetime
-        from Function.Output.excel_export import export_to_excel
-
-        # ["*"] or empty → auto-discover all tables in the data source
-        if not tables or tables == ["*"]:
-            tables = self._discover_all_tables()
-            if not tables:
-                return "❌ 数据源中没有可用的表格，请先上传数据或运行分析。"
-
-        if not filename:
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"export_{ts}"
-        safe_name = filename.replace(" ", "_").rstrip(".xlsx") + ".xlsx"
-
-        export_dir = os.path.join(_PROJ_ROOT, "outputs", "exports")
-        os.makedirs(export_dir, exist_ok=True)
-        filepath = os.path.join(export_dir, safe_name)
-
-        try:
-            export_to_excel(self.data_source, tables, filepath)
-        except Exception as exc:
-            return f"❌ 导出失败：{exc}"
-
-        return (
-            f"✅ Excel 文件已生成，共 {len(tables)} 张表：{', '.join(tables)}。\n\n"
-            f"[📥 点击下载 {safe_name}](/api/export/{safe_name})"
-        )
-
-    def _tool_export_report(self, title: str, sections: list) -> str:
-        import datetime
-        from Function.Output.report_export import export_to_report
-
-        if not sections:
-            return "❌ 报告内容为空，请提供至少一个章节。"
-
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_name = f"report_{ts}"
-
-        export_dir = os.path.join(_PROJ_ROOT, "outputs", "exports")
-        os.makedirs(export_dir, exist_ok=True)
-        filepath = os.path.join(export_dir, f"{base_name}.docx")
-
-        # Collect chart HTMLs from this session (may be empty if no charts generated)
-        chart_htmls = [
-            self._chart_store[cid]
-            for cid in self._session_chart_ids
-            if cid in self._chart_store
-        ]
-
-        try:
-            result_path, download_name = export_to_report(
-                title, sections, filepath, chart_htmls=chart_htmls
-            )
-        except Exception as exc:
-            return f"❌ 报告生成失败：{exc}"
-
-        n_charts = len(chart_htmls)
-        chart_note = f"（含 {n_charts} 张图表）" if n_charts else ""
-        return (
-            f"✅ 报告已生成，共 {len(sections)} 个章节{chart_note}。\n\n"
-            f"[📥 点击下载 {download_name}](/api/export/{download_name})"
-        )
-
-    # ── Agent loop ─────────────────────────────────────────────────────────
-
-    # ── Slash-command → system-hint mapping ────────────────────────────────
-    COMMAND_HINTS: Dict[str, str] = {
-        "chart": (
-            "The user issued the /chart command. Your primary goal for this turn is to "
-            "generate one or more data visualizations. Query the relevant data first, "
-            "then call generate_chart. End with a brief interpretation of the chart."
-        ),
-        "sql": (
-            "The user issued the /sql command. Execute the SQL they described and show "
-            "the results clearly formatted as a table, then provide a short insight."
-        ),
-        "decile": (
-            "The user issued the /decile command for Data_Decile_Analysis (十分位分析).\n"
-            "Workflow:\n"
-            "1. Call get_schema ONCE to understand the data.\n"
-            "2. Choose the most relevant numeric target_column "
-            "(revenue / amount / score — whatever the user mentioned, or the most business-relevant).\n"
-            "3. Optionally set groupby_column if the user wants a category breakdown.\n"
-            "4. Call run_analysis(analysis_name='Data_Decile_Analysis', sql=..., target_column=...).\n"
-            "   SQL: SELECT <target_col>[, <groupby_col>] FROM <table>\n"
-            "5. Generate BOTH charts from analysis_result:\n"
-            "   a) Bar_Chart: x=decile, y=sum  — value distribution by bucket\n"
-            "   b) Line_Chart: x=decile, y=cumulative_pct  — Pareto cumulative curve\n"
-            "6. Conclude with a 2-4 sentence business interpretation."
-        ),
-        "tree": (
-            "The user issued the /tree command for Decision_Tree analysis.\n"
-            "Workflow:\n"
-            "1. Call get_schema ONCE.\n"
-            "2. target_column = the classification label column.\n"
-            "3. groupby_column = algorithm choice: 'ID3' | 'C4.5' | 'CART' "
-            "(default 'C4.5'; infer from user message if mentioned).\n"
-            "4. n_deciles = max_depth (0 = unlimited; default 0).\n"
-            "5. Call run_analysis(analysis_name='Decision_Tree', sql=..., target_column=..., "
-            "groupby_column=<algorithm>).\n"
-            "   SQL: SELECT <feature_cols>, <target_col> FROM <table>\n"
-            "6. Generate ALL THREE charts:\n"
-            "   a) Bar_Chart(analysis_result): x=feature, y=importance_pct  — feature importance\n"
-            "   b) Heatmap(analysis_breakdown): x=predicted, y=actual, z=count  — confusion matrix\n"
-            "   c) Line_Chart(analysis_roc): x=fpr, y=tpr, series=class  — ROC curve\n"
-            "      Include AUC values in the chart title.\n"
-            "7. Conclude with a 2-4 sentence business interpretation."
-        ),
-        "kmeans": (
-            "The user issued the /kmeans command for K-Means clustering.\n"
-            "Workflow:\n"
-            "1. Call get_schema ONCE.\n"
-            "2. SELECT the numeric feature columns to cluster on.\n"
-            "3. n_deciles = K (number of clusters; default 3, or as specified by the user).\n"
-            "4. groupby_column = optional categorical label column for cluster purity analysis.\n"
-            "5. Call run_analysis(analysis_name='K_Means', sql=..., target_column=<main_numeric_col>, "
-            "n_deciles=<K>).\n"
-            "   SQL: SELECT <numeric_feature_cols>[, <label_col>] FROM <table>\n"
-            "6. Generate ALL THREE charts:\n"
-            "   a) Bar_Chart(analysis_result): x=cluster, y=count  — cluster sizes\n"
-            "   b) Scatter_Plot(analysis_breakdown): x=<feat1>, y=<feat2>, color=cluster\n"
-            "      — pick the 2 most business-relevant numeric columns for x/y\n"
-            "   c) Line_Chart(analysis_elbow): x=k, y=inertia  — elbow curve\n"
-            "7. A bonus table 'cluster_labels' (all original columns + cluster) is auto-created:\n"
-            "   SELECT cluster, AVG(revenue) FROM cluster_labels GROUP BY cluster\n"
-            "8. Conclude with a 2-4 sentence business interpretation."
-        ),
-        "data": (
-            "The user issued the /data command to profile their data.\n"
-            "Call profile_data immediately as your FIRST and ONLY tool call.\n"
-            "Pass table_name if the user specified one; otherwise leave it empty.\n"
-            "Do NOT call get_schema, query_data, or any other tool first.\n"
-            "After profile_data returns, present the stats summary to the user — "
-            "the distribution charts are automatically included."
-        ),
-        "inset": (
-            "The user issued the /inset command to handle missing values.\n"
-            "Call clean_data(operation='fill_na', fill_method=<method>) immediately.\n"
-            "Determine fill_method from the user's message:\n"
-            "  • '0' / 'zero' / '补0' → fill_method='zero'\n"
-            "  • 'mean' / '均值' → fill_method='mean'\n"
-            "  • 'median' / '中位数' → fill_method='median'\n"
-            "  Default to 'mean' if the user did not specify.\n"
-            "Pass table_name if mentioned; otherwise leave empty (auto-detects first table).\n"
-            "Do NOT call any other data tools before clean_data.\n"
-            "After the call, tell the user the cleaned table is saved as 'cleaned_data'."
-        ),
-        "winsorize": (
-            "The user issued the /winsorize command to cap extreme values.\n"
-            "Call clean_data(operation='winsorize', lower_pct=<N>, upper_pct=<M>) immediately.\n"
-            "Extract lower_pct and upper_pct from the user's message (e.g. '1 99' → lower=1, upper=99).\n"
-            "Default: lower_pct=1, upper_pct=99 if not specified.\n"
-            "Do NOT call any other data tools before clean_data.\n"
-            "After the call, tell the user the result is saved as 'cleaned_data'."
-        ),
-        "trimming": (
-            "The user issued the /trimming command to remove rows outside a value range.\n"
-            "Call clean_data(operation='trimming', trim_column=<col>, min_val=<N>, max_val=<M>) immediately.\n"
-            "Extract trim_column, min_val, and max_val from the user's message.\n"
-            "If trim_column is unclear, call get_schema ONCE first to see numeric columns, "
-            "then immediately call clean_data.\n"
-            "Do NOT call query_data or any analysis tool.\n"
-            "After the call, tell the user the result is saved as 'cleaned_data'."
-        ),
-        "export": (
-            "The user issued the /export command to export data to Excel.\n"
-            "Allowed tools this turn: export_excel ONLY.\n"
-            "FORBIDDEN this turn: get_schema, query_data, run_analysis, generate_chart, create_analysis_table.\n"
-            "Workflow:\n"
-            "1. Call export_excel(tables=[\"*\"]) immediately — this auto-exports ALL tables "
-            "(raw data sheets + any analysis result tables) without needing to list them.\n"
-            "   Only pass specific table names if the user explicitly asked for certain tables.\n"
-            "2. Return the download link from the tool result — do NOT add extra commentary."
-        ),
-        "report": (
-            "The user issued the /report command to generate a Word document report.\n"
-            "CRITICAL: The conversation history already contains all data, insights, and charts.\n"
-            "FORBIDDEN this turn: get_schema, query_data, create_analysis_table, run_analysis, generate_chart.\n"
-            "You MUST call export_report as your VERY FIRST tool call — no data tools first.\n"
-            "Workflow:\n"
-            "1. Read the conversation history provided in the messages above.\n"
-            "2. Compose the report entirely from what is already in the conversation:\n"
-            "   - title: a concise, descriptive title\n"
-            "   - sections (Heading 1 level each):\n"
-            "       • Executive Summary — 2-3 sentence overview of what was analysed\n"
-            "       • Key Findings — bullet-style insights extracted from the conversation\n"
-            "       • Detailed Analysis — paste/summarise the numbered results, tables, or "
-            "analysis markdown that appeared earlier in the conversation\n"
-            "       • Recommendations — actionable next steps based on findings\n"
-            "   Each section's content must be plain text summarising what is already known.\n"
-            "3. Call export_report with the composed title and sections.\n"
-            "4. Return the download link from the tool result.\n"
-            "Do NOT re-query or re-analyse data. Summarise the conversation — that is all."
-        ),
-    }
-
-    def run(self, user_message: str, history: List[Dict], command: str = "") -> Iterator[Dict]:
+        user_message: str,
+        history: List[Dict],
+        command: str = "",
+        ppt_title: str = "",
+        ppt_slides: Optional[List] = None,
+        excel_tables: Optional[List] = None,
+        excel_filename: str = "",
+        report_title: str = "",
+        report_sections: Optional[List] = None,
+    ) -> Iterator[Dict]:
         """
         Yields event dicts consumed by the Flask SSE stream:
-          {"type": "tool_start",  "tool": str, "display": str}
-          {"type": "text_delta",  "content": str}   — incremental text chunk (streaming only)
-          {"type": "chart_html",  "html": str}
-          {"type": "text",        "content": str}   — full final text (triggers markdown render)
-          {"type": "usage",       ...}
-          {"type": "reasoning",   "content": str}
+          {"type": "tool_start",    "tool": str, "display": str}
+          {"type": "text_delta",    "content": str}
+          {"type": "chart_html",    "html": str}
+          {"type": "text",          "content": str}
+          {"type": "ppt_outline",   "title": str, "slides": list, "markdown": str}
+          {"type": "excel_outline", "tables": list, "filename": str, "markdown": str}
+          {"type": "report_outline","title": str, "sections": list, "markdown": str}
+          {"type": "usage",         ...}
+          {"type": "reasoning",     "content": str}
           {"type": "done"}
-          {"type": "error",       "message": str}
+          {"type": "error",         "message": str}
         """
-        if not self.data_source:
+        _msg_preview = user_message[:120].replace("\n", " ")
+        log.info("[run] command=%r  msg=%r  model=%s", command or "(none)", _msg_preview, self.model)
+
+        # ── Confirm fast-paths: bypass LLM entirely ───────────────────────────
+        if command == "ppt_confirm":
+            slides = ppt_slides or []
+            yield {"type": "tool_start", "tool": "generate_ppt",
+                   "display": f"生成 PPT：{ppt_title}（{len(slides)} 张）..."}
+            try:
+                result = self._tool_generate_ppt(ppt_title, slides, "")
+            except Exception as exc:
+                yield {"type": "error", "message": f"PPT 生成失败: {exc}"}
+                yield {"type": "done"}
+                return
+            yield {"type": "text", "content": result}
+            yield {"type": "done"}
+            return
+
+        if command == "excel_confirm":
+            tables = excel_tables or ["*"]
+            yield {"type": "tool_start", "tool": "export_excel",
+                   "display": f"导出 Excel → {', '.join(tables)[:50]}..."}
+            try:
+                result = self._tool_export_excel(tables=tables, filename=excel_filename)
+            except Exception as exc:
+                yield {"type": "error", "message": f"Excel 导出失败: {exc}"}
+                yield {"type": "done"}
+                return
+            yield {"type": "text", "content": result}
+            yield {"type": "done"}
+            return
+
+        if command == "report_confirm":
+            sections = report_sections or []
+            yield {"type": "tool_start", "tool": "export_report",
+                   "display": f"生成报告：{report_title}（{len(sections)} 个章节）..."}
+            try:
+                result = self._tool_export_report(title=report_title, sections=sections)
+            except Exception as exc:
+                yield {"type": "error", "message": f"报告生成失败: {exc}"}
+                yield {"type": "done"}
+                return
+            yield {"type": "text", "content": result}
+            yield {"type": "done"}
+            return
+
+        _NO_DATASOURCE_OK = (
+            "ppt", "ppt_confirm", "ppt_revise",
+            "excel_confirm", "excel_revise",
+            "report_confirm", "report_revise",
+        )
+        if not self.data_source and command not in _NO_DATASOURCE_OK:
             yield {
                 "type": "text",
                 "content": (
@@ -966,25 +137,9 @@ class BusinessAgent:
             yield {"type": "done"}
             return
 
-        # Guard: export commands require the word "导出" in the message.
-        if command in ("export", "report") and "导出" not in user_message:
-            hint = (
-                "`/export 导出 分析结果到 Excel`" if command == "export"
-                else "`/report 导出 分析报告`"
-            )
-            yield {
-                "type": "text",
-                "content": (
-                    f"⚠️ `/{command}` 命令需要您在消息中明确写「**导出**」才会执行。\n\n"
-                    f"示例：{hint}"
-                ),
-            }
-            yield {"type": "done"}
-            return
-
         system = SYSTEM_PROMPT
-        if command and command in self.COMMAND_HINTS:
-            system += f"\n\n[ACTIVE COMMAND: /{command}]\n{self.COMMAND_HINTS[command]}"
+        if command and command in COMMAND_HINTS:
+            system += f"\n\n[ACTIVE COMMAND: /{command}]\n{COMMAND_HINTS[command]}"
 
         messages: List[Dict] = [
             {"role": "system", "content": system},
@@ -992,19 +147,53 @@ class BusinessAgent:
             {"role": "user", "content": user_message},
         ]
 
-        pending_charts: List[dict] = []
+        pending_charts: List[str] = []
         all_reasoning: List[str] = []
 
+        _PROPOSE_FLOW_CMDS = ("ppt", "ppt_revise", "export", "excel_revise",
+                              "report", "report_revise")
+
+        _force_propose = False
         for _ in range(self.MAX_ITERATIONS):
+            if _force_propose:
+                if command in ("ppt", "ppt_revise"):
+                    nudge = (
+                        "All data has been gathered in the tool results above. "
+                        "Call propose_ppt_outline with a COMPLETE slides array (8–15 slides). "
+                        "CRITICAL: use ONLY real numbers, labels, and values extracted from "
+                        "the tool results in this conversation — do NOT fabricate or invent data. "
+                        "Include: cover, toc, section_divider slides, at least 2 chart slides "
+                        "(grouped_bar / donut / stacked_bar / timeline using the actual queried values), "
+                        "and a closing slide. "
+                        "Colors must be one of: NAVY, ACCENT_BLUE, ACCENT_GREEN, ACCENT_ORANGE, ACCENT_RED. "
+                        "Output ONLY the tool call — no surrounding text."
+                    )
+                elif command in ("export", "excel_revise"):
+                    nudge = (
+                        "Call propose_excel_export now with the tables list and an optional filename. "
+                        "Output ONLY the tool call — no surrounding text."
+                    )
+                else:
+                    nudge = (
+                        "Compose the report outline from the conversation above and call "
+                        "propose_report_outline with title and sections. "
+                        "Output ONLY the tool call — no surrounding text."
+                    )
+                messages.append({"role": "user", "content": nudge})
+                _force_propose = False
+                _max_tokens = 16384
+            else:
+                _max_tokens = 8192 if command in _PROPOSE_FLOW_CMDS else 2048
+
             call_kwargs: Dict[str, Any] = dict(
                 model=self.model,
                 messages=messages,
                 tools=AGENT_TOOLS,
                 tool_choice="auto",
                 temperature=0.1,
-                max_tokens=2048,
+                max_tokens=_max_tokens,
             )
-            # Extended thinking (Claude): disable streaming — response format differs
+
             use_stream = True
             if self.enable_thinking and self.model.startswith("claude"):
                 use_stream = False
@@ -1013,18 +202,20 @@ class BusinessAgent:
                     "thinking": {"type": "enabled", "budget_tokens": 8000}
                 }
 
-            # ── Streaming path ─────────────────────────────────────────────
+            # ── Streaming path ────────────────────────────────────────────────
             if use_stream:
                 call_kwargs["stream"] = True
                 call_kwargs["stream_options"] = {"include_usage": True}
+                _t0 = time.monotonic()
                 try:
                     stream = self.client.chat.completions.create(**call_kwargs)
                 except Exception as exc:
+                    log.error("[llm] API call failed: %s", exc)
                     yield {"type": "error", "message": f"LLM 调用失败: {exc}"}
                     yield {"type": "done"}
                     return
 
-                tc_acc: Dict[int, Dict[str, str]] = {}  # idx → {id, name, args}
+                tc_acc: Dict[int, Dict[str, str]] = {}
                 content_parts: List[str] = []
                 reasoning_parts: List[str] = []
                 usage_data = None
@@ -1042,9 +233,11 @@ class BusinessAgent:
 
                     if delta.content:
                         content_parts.append(delta.content)
-                        yield {"type": "text_delta", "content": delta.content}
+                        _PROPOSE_CMDS = ("ppt", "ppt_revise", "export", "excel_revise",
+                                         "report", "report_revise")
+                        if command not in _PROPOSE_CMDS:
+                            yield {"type": "text_delta", "content": delta.content}
 
-                    # DeepSeek thinking mode surfaces reasoning_content in deltas
                     rc = getattr(delta, "reasoning_content", None)
                     if rc:
                         reasoning_parts.append(rc)
@@ -1067,6 +260,14 @@ class BusinessAgent:
                 reasoning_content = "".join(reasoning_parts) or None
 
                 if usage_data:
+                    _elapsed = time.monotonic() - _t0
+                    log.info(
+                        "[llm] stream done  finish=%s  in=%.0f out=%.0f  %.2fs",
+                        finish_reason,
+                        usage_data.prompt_tokens,
+                        usage_data.completion_tokens,
+                        _elapsed,
+                    )
                     yield {
                         "type": "usage",
                         "prompt_tokens": usage_data.prompt_tokens,
@@ -1074,7 +275,6 @@ class BusinessAgent:
                         "total_tokens": usage_data.total_tokens,
                     }
 
-                # Build lightweight TC objects matching the non-streaming interface
                 class _F:
                     def __init__(self, name, arguments):
                         self.name = name
@@ -1090,16 +290,25 @@ class BusinessAgent:
                     for _, v in sorted(tc_acc.items())
                 ]
 
-            # ── Non-streaming path (thinking mode) ─────────────────────────
+            # ── Non-streaming path (thinking mode) ────────────────────────────
             else:
+                _t0 = time.monotonic()
                 try:
                     resp = self.client.chat.completions.create(**call_kwargs)
                 except Exception as exc:
+                    log.error("[llm] API call failed (non-stream): %s", exc)
                     yield {"type": "error", "message": f"LLM 调用失败: {exc}"}
                     yield {"type": "done"}
                     return
 
                 if resp.usage:
+                    _elapsed = time.monotonic() - _t0
+                    log.info(
+                        "[llm] done (thinking)  in=%.0f out=%.0f  %.2fs",
+                        resp.usage.prompt_tokens,
+                        resp.usage.completion_tokens,
+                        _elapsed,
+                    )
                     yield {
                         "type": "usage",
                         "prompt_tokens": resp.usage.prompt_tokens,
@@ -1114,7 +323,7 @@ class BusinessAgent:
                 has_tool_calls = bool(tc_objects) and choice.finish_reason == "tool_calls"
                 reasoning_content = getattr(msg, "reasoning_content", None)
 
-            # ── Common: dispatch tool calls ────────────────────────────────
+            # ── Dispatch tool calls ───────────────────────────────────────────
             if has_tool_calls:
                 asst_entry: Dict[str, Any] = {
                     "role": "assistant",
@@ -1136,13 +345,15 @@ class BusinessAgent:
                     all_reasoning.append(reasoning_content)
                 messages.append(asst_entry)
 
+                _outline_proposed = False
+
+                _parsed_tools = []
                 for tc in tc_objects:
                     name = tc.function.name
                     try:
                         args: Dict[str, Any] = json.loads(tc.function.arguments or "{}")
                     except json.JSONDecodeError:
                         args = {}
-
                     display_map = {
                         "get_schema":            "读取数据结构...",
                         "create_analysis_table": f"提取字段 → {args.get('table_name', 'analysis_data')}...",
@@ -1153,12 +364,23 @@ class BusinessAgent:
                         "clean_data":            f"数据清洗 [{args.get('operation', '?')}]: {args.get('table_name', '自动检测')}...",
                         "export_excel":          f"导出 Excel → {', '.join(args.get('tables', []))[:50]}...",
                         "export_report":         f"生成 Word 报告: {args.get('title', '?')[:40]}...",
+                        "propose_excel_export":  f"预览 Excel 导出：{', '.join(args.get('tables', ['*']))[:40]}...",
+                        "propose_report_outline": f"生成报告大纲：{args.get('title', '?')[:40]}（{len(args.get('sections', []))} 章节）...",
+                        "propose_ppt_outline":   f"生成 PPT 大纲：{args.get('title', '?')[:40]} ({len(args.get('slides', []))} 张)...",
+                        "generate_ppt":          f"生成 PPT: {args.get('title', '?')[:40]} ({len(args.get('slides', []))} 张)...",
+                        "set_ppt_color_scheme":  f"切换配色方案 → {args.get('scheme', '?')}...",
                     }
                     yield {
                         "type": "tool_start",
                         "tool": name,
                         "display": display_map.get(name, name),
                     }
+                    _parsed_tools.append((tc, name, args))
+
+                for tc, name, args in _parsed_tools:
+                    _args_preview = {k: str(v)[:80] for k, v in args.items() if k != "slides"}
+                    log.info("[tool] %s  args=%s", name, _args_preview)
+                    _tool_t0 = time.monotonic()
 
                     try:
                         if name == "get_schema":
@@ -1232,32 +454,113 @@ class BusinessAgent:
                                 title=args.get("title", "分析报告"),
                                 sections=args.get("sections", []),
                             )
+                        elif name == "propose_excel_export":
+                            result = self._tool_propose_excel_export(
+                                tables=args.get("tables", ["*"]),
+                                filename=args.get("filename", ""),
+                                summary=args.get("summary", ""),
+                            )
+                            yield {
+                                "type": "excel_outline",
+                                "tables": result["tables"],
+                                "filename": result["filename"],
+                                "markdown": result["markdown"],
+                            }
+                            tool_result = "导出计划已展示给用户，等待其通过按钮确认或修改。请不要输出任何文字。"
+                            _outline_proposed = True
+                        elif name == "propose_report_outline":
+                            result = self._tool_propose_report_outline(
+                                title=args.get("title", "分析报告"),
+                                sections=args.get("sections", []),
+                            )
+                            yield {
+                                "type": "report_outline",
+                                "title": result["title"],
+                                "sections": result["sections"],
+                                "markdown": result["markdown"],
+                            }
+                            tool_result = "报告大纲已展示给用户，等待其通过按钮确认或修改。请不要输出任何文字。"
+                            _outline_proposed = True
+                        elif name == "set_ppt_color_scheme":
+                            tool_result = self._tool_set_ppt_color_scheme(
+                                scheme=args.get("scheme", "mckinsey"),
+                            )
+                            yield {
+                                "type": "ppt_scheme",
+                                "scheme": self.ppt_color_scheme,
+                            }
+                        elif name == "propose_ppt_outline":
+                            _ppt_slides = args.get("slides", [])
+                            if not _ppt_slides:
+                                tool_result = (
+                                    "ERROR: slides array is empty. You MUST provide a "
+                                    "slides array with 8-15 slide objects. Re-read the "
+                                    "query results above and call propose_ppt_outline "
+                                    "again with a complete slides list."
+                                )
+                            else:
+                                result = self._tool_propose_ppt_outline(
+                                    title=args.get("title", "演示文稿"),
+                                    slides=_ppt_slides,
+                                )
+                                yield {
+                                    "type": "ppt_outline",
+                                    "title": result["title"],
+                                    "slides": result["slides"],
+                                    "markdown": result["markdown"],
+                                }
+                                tool_result = "大纲已展示给用户，等待其通过按钮确认或修改。"
+                                _outline_proposed = True
+                        elif name == "generate_ppt":
+                            tool_result = self._tool_generate_ppt(
+                                title=args.get("title", "Presentation"),
+                                slides=args.get("slides", []),
+                                filename=args.get("filename", ""),
+                            )
                         else:
                             tool_result = f"Unknown tool: {name}"
+
                     except Exception as exc:
                         tool_result = f"工具执行错误 [{name}]: {exc}"
+                        log.error("[tool] %s FAILED (%.2fs): %s", name, time.monotonic() - _tool_t0, exc)
+                    else:
+                        _result_preview = str(tool_result)[:120].replace("\n", " ")
+                        log.info("[tool] %s OK  %.2fs  result=%r", name, time.monotonic() - _tool_t0, _result_preview)
 
                     messages.append(
                         {"role": "tool", "tool_call_id": tc.id, "content": str(tool_result)}
                     )
+                    yield {"type": "tool_end", "tool": name}
 
-            # ── Common: final text response ────────────────────────────────
+                if _outline_proposed:
+                    for html in pending_charts:
+                        yield {"type": "chart_html", "html": html}
+                    pending_charts.clear()
+                    yield {"type": "done"}
+                    return
+
+            # ── Final text response ───────────────────────────────────────────
             else:
                 if reasoning_content:
                     all_reasoning.append(reasoning_content)
+
+                if command in _PROPOSE_FLOW_CMDS:
+                    messages.append({"role": "assistant", "content": full_content})
+                    _force_propose = True
+                    continue
+
                 if all_reasoning:
                     yield {"type": "reasoning", "content": "\n\n---\n\n".join(all_reasoning)}
 
                 for html in pending_charts:
                     yield {"type": "chart_html", "html": html}
 
-                # Always emit the full text event — triggers markdown re-render.
-                # For streaming responses, text_delta events were already emitted
-                # incrementally; this final event re-renders the bubble as markdown.
                 yield {"type": "text", "content": full_content}
+                log.info("[run] finished normally  model=%s", self.model)
                 yield {"type": "done"}
                 return
 
+        log.warning("[run] max iterations reached  model=%s", self.model)
         yield {
             "type": "text",
             "content": "分析完成（已达到最大工具调用次数）。Analysis complete (max iterations reached).",

@@ -5,11 +5,15 @@ Business Analyst Agent — entry point.
 Run:  python app.py
 Then: http://localhost:5001
 """
+import logging
 import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+
+from log_setup import setup_logging
+setup_logging(level=logging.INFO)
 
 from api import create_app
 

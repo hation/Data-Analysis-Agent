@@ -153,6 +153,9 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Sego
 .msg-bubble th, .msg-bubble td { border: 1px solid #e2e8f0; padding: 5px 9px; }
 .msg-bubble th { background: #f8fafc; font-weight: 600; }
 .msg-bubble tr:nth-child(even) td { background: #f8fafc; }
+.msg-bubble ul, .msg-bubble ol { padding-left: 1.4em; margin: 4px 0; }
+.msg-bubble li { margin: 2px 0; }
+.msg-bubble hr { border: none; border-top: 1px solid #e2e8f0; margin: 8px 0; }
 
 /* welcome */
 .welcome { flex: 1; display: flex; flex-direction: column; align-items: center;
@@ -222,6 +225,39 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Sego
 .stop-note { display: inline-flex; align-items: center; gap: 5px;
   font-size: 12px; color: #94a3b8; padding: 3px 0 6px;
   user-select: none; }
+/* ── PPT outline card ─────────────────────────────────────────── */
+.ppt-outline-card { background: #f8fafc; border: 1px solid #e2e8f0;
+  border-radius: 12px; overflow: hidden; margin-top: 4px; }
+.ppt-outline-header { display: flex; align-items: center; gap: 8px;
+  background: #1e3a5f; color: #fff; padding: 10px 16px; font-weight: 600;
+  font-size: 14px; }
+.ppt-outline-icon { font-size: 16px; }
+.ppt-outline-content { padding: 12px 16px; font-size: 13px; line-height: 1.6;
+  max-height: 400px; overflow-y: auto; }
+.ppt-outline-content table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.ppt-outline-content th { background: #1e3a5f; color: #fff; padding: 6px 10px; text-align: left; }
+.ppt-outline-content td { padding: 5px 10px; border-bottom: 1px solid #e2e8f0; }
+.ppt-outline-content tr:hover td { background: #eff6ff; }
+.ppt-outline-edit-wrap { padding: 0 16px 8px; }
+.ppt-outline-edit-hint { font-size: 12px; color: #64748b; margin-bottom: 6px; }
+.ppt-outline-edit { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1;
+  border-radius: 8px; padding: 8px 10px; font-size: 13px; resize: vertical;
+  font-family: inherit; }
+.ppt-outline-edit:focus { outline: none; border-color: #1e3a5f; }
+.ppt-outline-btns { display: flex; gap: 8px; padding: 10px 16px 14px;
+  flex-wrap: wrap; }
+.ppt-btn { border: none; border-radius: 20px; padding: 7px 18px; font-size: 13px;
+  font-weight: 600; cursor: pointer; transition: opacity .15s, background .15s; }
+.ppt-btn:disabled { cursor: default; }
+.ppt-btn-confirm { background: #1e3a5f; color: #fff; }
+.ppt-btn-confirm:hover:not(:disabled) { background: #162d4a; }
+.ppt-btn-revise { background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; }
+.ppt-btn-revise:hover:not(:disabled) { background: #e2e8f0; }
+.ppt-btn-cancel { background: #fff; color: #94a3b8; border: 1px solid #e2e8f0; }
+.ppt-btn-cancel:hover:not(:disabled) { background: #f8fafc; }
+.ppt-cancelled-note { font-size: 12px; color: #94a3b8; padding: 4px 16px 12px;
+  font-style: italic; }
+
 .cmd-badge { background: #dbeafe; border: 1px solid #93c5fd; color: #1d4ed8;
   border-radius: 5px; font-size: 12px; padding: 2px 8px; font-weight: 600;
   display: none; align-items: center; gap: 4px; cursor: pointer; }

@@ -24,6 +24,7 @@ def _build_agent(sess) -> BusinessAgent:
         enable_thinking=cfg.enable_thinking,
         chart_store=chart_store,
         session_chart_ids=list(getattr(sess, "chart_ids", [])),
+        color_scheme=getattr(sess, "ppt_color_scheme", "mckinsey"),
     )
 
 
@@ -96,8 +97,20 @@ def chat_stream(sid: str):
         completed_normally = False
 
         # ── Agent loop ─────────────────────────────────────────────────────
+        ppt_title      = d.get("ppt_title", "")
+        ppt_slides     = d.get("ppt_slides") or []
+        excel_tables   = d.get("excel_tables") or []
+        excel_filename = d.get("excel_filename", "")
+        report_title   = d.get("report_title", "")
+        report_sections = d.get("report_sections") or []
+
         try:
-            for event in agent.run(message, list(sess.history), command=command):
+            for event in agent.run(
+                message, list(sess.history), command=command,
+                ppt_title=ppt_title, ppt_slides=ppt_slides,
+                excel_tables=excel_tables, excel_filename=excel_filename,
+                report_title=report_title, report_sections=report_sections,
+            ):
 
                 # Check stop flag between every yielded event ────────────
                 if sess.cancel_requested:
@@ -116,6 +129,9 @@ def chat_stream(sid: str):
                     yield _sse({"type": "chart_ref", "chart_id": cid})
                 elif etype == "chart_placeholder":
                     pass   # internal signal, not forwarded
+                elif etype == "ppt_scheme":
+                    sess.ppt_color_scheme = event.get("scheme", "mckinsey")
+                    # Not forwarded to frontend — purely a session state update
                 elif etype == "usage":
                     sess.record_usage(
                         event.get("prompt_tokens", 0),

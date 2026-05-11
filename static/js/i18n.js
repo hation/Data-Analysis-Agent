@@ -168,6 +168,7 @@
       'cmd.trimming.desc': '保留指定最大值和最小值范围内的行',
       'cmd.export.desc': '将数据表导出为 Excel（需说「导出」）',
       'cmd.report.desc': '生成 Word 分析报告（需说「导出」）',
+      'cmd.ppt.desc':    '生成麦肯锡风格 PowerPoint（两阶段：大纲确认 → 生成）',
       'cmd.status.desc': '查看模型、数据源与 Token 用量',
       // ── Lang toggle ──────────────────────────────────────────────
       'lang.toggle': 'EN',
@@ -330,6 +331,7 @@
       'cmd.trimming.desc': 'Keep rows within specified min / max range',
       'cmd.export.desc': 'Export data tables to Excel (say "export")',
       'cmd.report.desc': 'Generate Word analysis report (say "export")',
+      'cmd.ppt.desc':    'Generate McKinsey-style PowerPoint (outline → confirm → generate)',
       'cmd.status.desc': 'View model, data source, and token usage',
       // ── Lang toggle ──────────────────────────────────────────────
       'lang.toggle': '中文',

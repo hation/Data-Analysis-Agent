@@ -15,6 +15,7 @@ const COMMANDS = [
   // Export
   { cmd: "export",    icon: "📥", descKey: "cmd.export.desc",     groupKey: "group.export",   available: true  },
   { cmd: "report",    icon: "📄", descKey: "cmd.report.desc",     groupKey: "group.export",   available: true  },
+  { cmd: "ppt",       icon: "🎯", descKey: "cmd.ppt.desc",        groupKey: "group.export",   available: true  },
   // Tools
   { cmd: "status",    icon: "📡", descKey: "cmd.status.desc",     groupKey: "group.tools",    available: true  },
 ];
@@ -181,12 +182,25 @@ function onInput(e) {
     return;
   }
 
+  // "/cmd " (no args) — select command, clear input
   const mFull = v.match(/^\/(\w+)\s$/);
   if (mFull) {
     const found = COMMANDS.find(c => c.cmd === mFull[1] && c.available);
     if (found) {
       selectCommand(found.cmd);
       e.target.value = "";
+      autoResize(e.target);
+      return;
+    }
+  }
+
+  // "/cmd args..." — select command, keep args as input text
+  const mFullCmd = v.match(/^\/(\w+)\s+(.+)/);
+  if (mFullCmd) {
+    const found = COMMANDS.find(c => c.cmd === mFullCmd[1] && c.available);
+    if (found) {
+      selectCommand(found.cmd);
+      e.target.value = mFullCmd[2];
       autoResize(e.target);
       return;
     }
@@ -711,20 +725,37 @@ async function sendMessage() {
   }
 }
 
+function _tickFinishedSteps(stepsEl) {
+  stepsEl.querySelectorAll('.tool-step[data-finished]:not(.done)').forEach(s => {
+    s.className = "tool-step done";
+    const spinEl = s.querySelector(".spin");
+    if (spinEl) { spinEl.classList.remove("spin"); spinEl.textContent = "✓"; }
+  });
+}
+function _tickAllSteps(stepsEl) {
+  stepsEl.querySelectorAll(".tool-step:not(.done)").forEach(s => {
+    s.className = "tool-step done";
+    const spinEl = s.querySelector(".spin");
+    if (spinEl) { spinEl.classList.remove("spin"); spinEl.textContent = "✓"; }
+  });
+}
+
 function handleEvent(ev, stepsEl, bubbleEl, typing) {
   if (ev.type === "tool_start") {
+    _tickFinishedSteps(stepsEl);
     const s = document.createElement("div");
     s.className = "tool-step";
     s.innerHTML = `<span class="spin">⟳</span> ${esc(ev.display)}`;
     stepsEl.appendChild(s);
     scrollBottom();
   }
+  else if (ev.type === "tool_end") {
+    const step = stepsEl.querySelector(".tool-step:not(.done):not([data-finished])");
+    if (step) step.dataset.finished = "1";
+  }
   else if (ev.type === "chart_ref") {
-    stepsEl.querySelectorAll(".tool-step:not(.done)").forEach(s => {
-      s.className = "tool-step done";
-      const spinEl = s.querySelector(".spin");
-      spinEl.classList.remove("spin"); spinEl.textContent = "✓";
-    });
+    // chart_ref arrives after tool_end already ticked the generate_chart step;
+    // _tickAllSteps here is just a safety fallback for any stragglers.
     const wrap = document.createElement("div");
     wrap.className = "chart-frame";
     wrap.innerHTML = `
@@ -759,11 +790,7 @@ function handleEvent(ev, stepsEl, bubbleEl, typing) {
   }
   else if (ev.type === "text") {
     if (typing.parentNode) typing.remove();
-    stepsEl.querySelectorAll(".tool-step:not(.done)").forEach(s => {
-      s.className = "tool-step done";
-      const spinEl = s.querySelector(".spin");
-      spinEl.classList.remove("spin"); spinEl.textContent = "✓";
-    });
+    _tickAllSteps(stepsEl);   // safety: tick any step tool_end may have missed
     bubbleEl.innerHTML = renderMd(ev.content || "");
     scrollBottom();
   }
@@ -780,16 +807,93 @@ function handleEvent(ev, stepsEl, bubbleEl, typing) {
   }
   else if (ev.type === "stopped") {
     if (typing.parentNode) typing.remove();
-    stepsEl.querySelectorAll(".tool-step:not(.done)").forEach(s => {
-      s.className = "tool-step done";
-      const spinEl = s.querySelector(".spin");
-      if (spinEl) { spinEl.classList.remove("spin"); spinEl.textContent = "✓"; }
-    });
+    _tickAllSteps(stepsEl);   // safety: tick any in-flight step that was stopped mid-way
     const stopNote = document.createElement("div");
     stopNote.className = "stop-note";
     stopNote.textContent = t('stop_note');
     bubbleEl.before(stopNote);
     if (!bubbleEl.textContent.trim()) bubbleEl.remove();
+  }
+  else if (ev.type === "ppt_outline" || ev.type === "excel_outline" || ev.type === "report_outline") {
+    if (typing.parentNode) typing.remove();
+    _tickAllSteps(stepsEl);   // safety fallback (tool_end fires before outline event)
+
+    // Determine outline type
+    let icon, confirmCmd, reviseCmd, confirmPayload, headerTitle;
+    if (ev.type === "ppt_outline") {
+      icon = "🎯"; confirmCmd = "ppt_confirm"; reviseCmd = "ppt_revise";
+      headerTitle = esc(ev.title || "PPT 大纲");
+      confirmPayload = { ppt_title: ev.title, ppt_slides: ev.slides };
+    } else if (ev.type === "excel_outline") {
+      icon = "📥"; confirmCmd = "excel_confirm"; reviseCmd = "excel_revise";
+      headerTitle = esc(ev.filename || "Excel 导出");
+      confirmPayload = { excel_tables: ev.tables, excel_filename: ev.filename };
+    } else {
+      icon = "📄"; confirmCmd = "report_confirm"; reviseCmd = "report_revise";
+      headerTitle = esc(ev.title || "分析报告");
+      confirmPayload = { report_title: ev.title, report_sections: ev.sections };
+    }
+
+    const card = document.createElement("div");
+    card.className = "ppt-outline-card";
+    card.innerHTML = `
+      <div class="ppt-outline-header">
+        <span class="ppt-outline-icon">${icon}</span>
+        <span>${headerTitle}</span>
+      </div>
+      <div class="ppt-outline-content">${renderMd(ev.markdown || "")}</div>
+      <div class="ppt-outline-edit-wrap" style="display:none">
+        <div class="ppt-outline-edit-hint">请说明希望如何修改：</div>
+        <textarea class="ppt-outline-edit" rows="3" placeholder="例如：把第3张换成双栏文字，增加一张市场份额环形图…"></textarea>
+      </div>
+      <div class="ppt-outline-btns">
+        <button class="ppt-btn ppt-btn-confirm">✅ 确认生成</button>
+        <button class="ppt-btn ppt-btn-revise">✏️ 修改大纲</button>
+        <button class="ppt-btn ppt-btn-cancel">✕ 取消</button>
+      </div>`;
+    bubbleEl.appendChild(card);
+    scrollBottom();
+
+    const editWrap   = card.querySelector(".ppt-outline-edit-wrap");
+    const btnConfirm = card.querySelector(".ppt-btn-confirm");
+    const btnRevise  = card.querySelector(".ppt-btn-revise");
+    const btnCancel  = card.querySelector(".ppt-btn-cancel");
+    const editTA     = card.querySelector(".ppt-outline-edit");
+
+    function _lockCard() {
+      [btnConfirm, btnRevise, btnCancel].forEach(b => b.disabled = true);
+      editTA.disabled = true;
+    }
+
+    btnConfirm.onclick = () => {
+      _lockCard();
+      _sendConfirmStream({ command: confirmCmd, message: "确认", ...confirmPayload });
+    };
+
+    btnRevise.onclick = () => {
+      const open = editWrap.style.display !== "none";
+      editWrap.style.display = open ? "none" : "";
+      if (!open) { editTA.focus(); }
+    };
+
+    btnCancel.onclick = () => {
+      _lockCard();
+      card.querySelector(".ppt-outline-btns").remove();
+      const note = document.createElement("div");
+      note.className = "ppt-cancelled-note";
+      note.textContent = "已取消。";
+      card.appendChild(note);
+    };
+
+    editTA.addEventListener("keydown", e => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const txt = editTA.value.trim();
+        if (!txt) return;
+        _lockCard();
+        _sendConfirmStream({ command: reviseCmd, message: txt });
+      }
+    });
   }
 }
 
@@ -1046,13 +1150,30 @@ function esc(s) {
 function renderMd(text) {
   if (!text) return "";
   let s = esc(text);
+  const codeBlocks = [];
+  s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, _l, c) => {
+    codeBlocks.push(`<pre><code>${c}</code></pre>`);
+    return `\x00CB${codeBlocks.length - 1}\x00`;
+  });
   s = s.replace(/\[([^\]]+)\]\((\/[^)]+)\)/g, '<a href="$2">$1</a>');
   s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_,_l,c) => `<pre><code>${c}</code></pre>`);
   s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
   s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  s = s.replace(/^### (.+)$/gm, "<strong>$1</strong>");
-  s = s.replace(/^## (.+)$/gm, "<strong style='font-size:15px'>$1</strong>");
+  s = s.replace(/^(#{1,6}) (.+)$/gm, (_, h, c) => {
+    const sz = [18, 16, 15, 14, 13, 13][h.length - 1] || 14;
+    return `<strong style="font-size:${sz}px">${c}</strong>`;
+  });
+  s = s.replace(/^---+$/gm, '<hr style="border:none;border-top:1px solid #e2e8f0;margin:8px 0">');
+  s = s.replace(/((?:^[\-\*] .+\n?)+)/gm, match => {
+    const items = match.trim().split("\n")
+      .map(li => `<li>${li.replace(/^[\-\*] /, '')}</li>`).join("");
+    return `<ul style="margin:4px 0;padding-left:20px">${items}</ul>`;
+  });
+  s = s.replace(/((?:^\d+[\.\)] .+\n?)+)/gm, match => {
+    const items = match.trim().split("\n")
+      .map(li => `<li>${li.replace(/^\d+[\.\)] /, '')}</li>`).join("");
+    return `<ol style="margin:4px 0;padding-left:20px">${items}</ol>`;
+  });
   s = s.replace(/((?:\|.+\|\n?)+)/g, match => {
     const rows = match.trim().split("\n").filter(r => r.includes("|"));
     if (rows.length < 2) return match;
@@ -1063,5 +1184,58 @@ function renderMd(text) {
     return `<table><thead>${row(hd,"th")}</thead><tbody>${body.map(r=>row(r,"td")).join("")}</tbody></table>`;
   });
   s = s.replace(/\n/g, "<br>");
+  s = s.replace(/\x00CB(\d+)\x00/g, (_, i) => codeBlocks[parseInt(i)]);
   return s;
+}
+
+// ── Outline confirm stream ─────────────────────────────────────────
+// Used by ppt_outline / excel_outline / report_outline confirm & revise buttons.
+// Sends payload directly to /chat, streams response into a new assistant bubble.
+async function _sendConfirmStream(payload) {
+  if (isStreaming) return;
+  hideWelcome();
+
+  appendMsg("user", payload.message || "确认");
+  const aEl    = appendMsg("assistant", null);
+  const stepsEl  = aEl.querySelector(".tool-steps");
+  const bubbleEl = aEl.querySelector(".msg-bubble");
+
+  const typing = document.createElement("div");
+  typing.className = "typing-dots";
+  typing.innerHTML = "<span></span><span></span><span></span>";
+  bubbleEl.appendChild(typing);
+
+  isStreaming = true;
+  _setSendBtnStopping(true);
+
+  const resp = await fetch(`/api/session/${SID}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const reader = resp.body.getReader();
+  _streamReader = reader;
+  const dec = new TextDecoder();
+  let buf = "";
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n"); buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try { handleEvent(JSON.parse(line.slice(6)), stepsEl, bubbleEl, typing); } catch (_) {}
+      }
+    }
+  } catch (_) {
+    // reader.cancel() throws — expected when stopStreaming() is called
+  } finally {
+    _streamReader = null;
+    isStreaming = false;
+    _setSendBtnStopping(false);
+    scrollBottom();
+  }
 }
