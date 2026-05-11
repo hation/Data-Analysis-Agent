@@ -760,7 +760,7 @@ function handleEvent(ev, stepsEl, bubbleEl, typing) {
     wrap.className = "chart-frame";
     wrap.innerHTML = `
       <button class="chart-expand-btn" onclick="window.open('/api/chart/${ev.chart_id}','_blank')" title="⛶">⛶</button>
-      <iframe src="/api/chart/${ev.chart_id}" loading="lazy"></iframe>`;
+      <iframe src="/api/chart/${ev.chart_id}" loading="lazy" onload="this.style.height=(this.contentDocument.body.scrollHeight+20)+'px'"></iframe>`;
     bubbleEl.before(wrap);
     scrollBottom();
   }
