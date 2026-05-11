@@ -49,6 +49,7 @@ Business Analyst Agent 是一个对话式商业数据分析系统，目标是让
 
 ---
 
+
 # 🧠 核心能力
 
 ## 1️⃣ 自然语言数据分析
@@ -402,9 +403,25 @@ Model
 
 ---
 
-# 🗺️ Roadmap
+# 🗺️ 项目里程碑
 
-## Version Development Log
+## 版本更新日志
+**当前版本 V2.1**
+```
+本次升级主要围绕 更强的分析能力、更一致的展示体验、更好的导出能力展开。
+1. 日志系统升级
+2. 配色方案统一
+3. Agent 架构重构
+4. 国际化支持
+5. 斜杠命令优化
+6. 导出功能增强
+7. 数据清洗功能增强
+8. 数据预览升级
+9. Token 用量追踪
+10. 思考模式展示
+11. 前端体验优化
+```
+
 - [Version_Update_Log](Version_Update_Log.md)
 - [Version_Update_Log_EN](Version_Update_Log_EN.md)
 
