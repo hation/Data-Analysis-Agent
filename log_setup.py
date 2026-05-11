@@ -14,10 +14,8 @@ import logging.handlers
 import os
 from pathlib import Path
 
-
 class _DailyFileHandler(logging.handlers.TimedRotatingFileHandler):
-    """TimedRotatingFileHandler variant where the *active* file is already
-    named baa_YYYY-MM-DD.log instead of the base name baa.log."""
+    """TimedRotatingFileHandler variant with daily file named baa_YYYY-MM-DD.log"""
 
     def __init__(self, log_dir: Path, backup_count: int = 30, encoding: str = "utf-8"):
         self._log_dir = log_dir
@@ -35,47 +33,39 @@ class _DailyFileHandler(logging.handlers.TimedRotatingFileHandler):
         self.namer = self._namer
 
     def _namer(self, default_name: str) -> str:
-        # default_name = "<dir>/baa_OLD-DATE.log.YYYY-MM-DD"
-        # We strip the trailing ".YYYY-MM-DD" and rename based on the date suffix
-        # so the rotated file becomes baa_YYYY-MM-DD.log (the *new* day).
-        # Actually TimedRotatingFileHandler calls namer with the rotation target,
-        # so we just use the date part from the suffix.
-        parts = default_name.rsplit(".", 1)
-        # parts[-1] is the YYYY-MM-DD from the suffix
-        date_str = parts[-1] if len(parts) == 2 else datetime.date.today().strftime("%Y-%m-%d")
+        date_str = default_name.rsplit(".", 1)[-1] if "." in default_name else datetime.date.today().strftime("%Y-%m-%d")
         return str(self._log_dir / f"baa_{date_str}.log")
 
     def doRollover(self):
-        # Update baseFilename to tomorrow's date before rotating
         tomorrow = datetime.date.today().strftime("%Y-%m-%d")
         self.baseFilename = str(self._log_dir / f"baa_{tomorrow}.log")
         super().doRollover()
 
-
 def setup_logging(level: int = logging.INFO) -> None:
-    log_dir = Path(__file__).parent / "outputs" / "Log"
-    log_dir.mkdir(parents=True, exist_ok=True)
+    log_dir_path = os.environ.get("LOG_DIR")
+    log_dir = Path(log_dir_path) if log_dir_path else Path(__file__).parent / "outputs" / "Log"
+
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        print(f"[WARNING] Cannot create log directory {log_dir}, logs will go to stdout only.")
+        log_dir = None
 
     fmt = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    file_handler = _DailyFileHandler(log_dir)
-    file_handler.setFormatter(fmt)
-
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(fmt)
-
     root = logging.getLogger()
     root.setLevel(level)
 
-    # Avoid adding duplicate handlers on reload (Flask debug mode re-imports)
-    if not any(isinstance(h, _DailyFileHandler) for h in root.handlers):
-        root.addHandler(file_handler)
+    if log_dir is not None:
+        file_handler = _DailyFileHandler(log_dir)
+        file_handler.setFormatter(fmt)
+        if not any(isinstance(h, _DailyFileHandler) for h in root.handlers):
+            root.addHandler(file_handler)
 
-    # Replace any existing StreamHandlers with ours so format is consistent
-    root.handlers = [h for h in root.handlers
-                     if not isinstance(h, logging.StreamHandler)
-                     or isinstance(h, _DailyFileHandler)]
+    # 控制台日志始终有
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(fmt)
     root.addHandler(console_handler)
