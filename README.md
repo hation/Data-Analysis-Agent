@@ -182,10 +182,12 @@ start.bat
 **Mac 用户**
 
 ① 需要使用脚本 `start.command`
+
 ② 在终端里赋予执行权限：
    ```bash
    chmod +x start.command
    ```
+
 ③ 双击 `start.command` 即可运行
 > 注：首次运行可能会被 macOS 安全策略阻止，解决方法： 右键点击 start.command → 选择“打开” → 再次确认“打开” 或在终端执行：xattr -d com.apple.quarantine start.command
 
