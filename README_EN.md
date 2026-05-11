@@ -209,7 +209,8 @@ Note: This is a local address and will not leak any information. Please use it w
 
 ![Update](Images/Update.png)
 
-Note: Please refresh the page before updating.
+Note: Please restart the system before updating.
+
 
 ---
 
