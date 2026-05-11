@@ -171,11 +171,25 @@ Business Analyst Agent 是一个对话式商业数据分析系统，目标是让
 ![Download installation package](Images/package.png)
 
 #### 2) 解压缩，在项目目录下双击直接运行：
+**Windows 用户**
 
 ```bat
 start.bat
 ```
-注：首次启动start.bat会自动配置运行环境，时间可能较长，后续再次运行就无需等待
+
+> 注：首次启动 `start.bat` 会自动配置运行环境，时间可能较长，后续再次运行就无需等待。
+
+**Mac 用户**
+
+① 需要使用脚本 `start.command`
+② 在终端里赋予执行权限：
+   ```bash
+   chmod +x start.command
+   ```
+③ 双击 `start.command` 即可运行
+> 注：首次运行可能会被 macOS 安全策略阻止，解决方法： 右键点击 start.command → 选择“打开” → 再次确认“打开” 或在终端执行：xattr -d com.apple.quarantine start.command
+---
+
 
 #### 3) 浏览器打开`http://localhost:5001`
 

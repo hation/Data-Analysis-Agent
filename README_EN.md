@@ -129,12 +129,37 @@ Also supports any **OpenAI SDK compatible API** via custom:
 #### 1) Download and install the package
 ![Download installation package](Images/package.png)
 
-#### 2) Unzip and run directly in the project directory:
+### Method 1: Installation Package Download (Recommended)
+
+#### 1) Download the installation package
+
+![Download installation package](Images/package.png)
+
+#### 2) Unzip the package, then double-click to run directly in the project directory:
+
+**Windows Users**
 
 ```bat
 start.bat
 ```
-Note: The first startup of start.bat will automatically configure the running environment, which may take a long time. Subsequent runs will not require waiting.
+
+> Note: The first time you run `start.bat`, it will automatically configure the runtime environment, which may take a while. On subsequent runs, there will be no waiting.
+
+**Mac Users**
+
+① Use the script `start.command`  
+② Grant execution permissions in the terminal:  
+   ```bash
+   chmod +x start.command
+   ```  
+③ Double-click `start.command` to run.  
+
+> Note: The first time you run it, it may be blocked by macOS security policies. To resolve this:  
+> - Right-click `start.command` → Select "Open" → Confirm "Open" again, or  
+> - Run the following command in the terminal:  
+>   ```bash
+>   xattr -d com.apple.quarantine start.command
+>   ```
 
 #### 3) Open `http://localhost:5001` in your browser
 
