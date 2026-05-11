@@ -13,8 +13,8 @@
   const T = {
     zh: {
       // ── App ──────────────────────────────────────────────────────
-      'app.title': '商业分析助手',
-      'app.subtitle': 'Business Analyst Agent',
+      'app.title': '智析Agent',
+      'app.subtitle': 'Intelligent Analysis Agent',
       // ── Sidebar ──────────────────────────────────────────────────
       'sidebar.datasource': '数据源',
       'sidebar.disconnected': '未连接',
@@ -176,8 +176,8 @@
 
     en: {
       // ── App ──────────────────────────────────────────────────────
-      'app.title': 'Business Analyst',
-      'app.subtitle': 'Business Analyst Agent',
+      'app.title': 'SageAgent',
+      'app.subtitle': 'Intelligent Analysis Agent',
       // ── Sidebar ──────────────────────────────────────────────────
       'sidebar.datasource': 'Data Source',
       'sidebar.disconnected': 'Not connected',
