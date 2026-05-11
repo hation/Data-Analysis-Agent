@@ -9,7 +9,9 @@
 
 ---
 
-## v2.0 Coming Soon
+## v2.0
+**May/11/2026**
+
 This update focuses on **stronger analytical capabilities, more consistent presentation, and better export features**.
 
 ### 1. Logging System Upgrade
