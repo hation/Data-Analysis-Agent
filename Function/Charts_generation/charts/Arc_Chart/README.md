@@ -1,6 +1,6 @@
-# Arc Chart
+# 弧图 Arc Chart
 
-图表分类: 关系图表  
+图表分类: 关系类 RELATIONSHIP 
 感知排名: ⭐⭐⭐☆☆
 
 ## 简介

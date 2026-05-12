@@ -1,6 +1,6 @@
 # 对比条形图 Diverging Bar Chart
 
-图表分类: 比较 Comparison
+图表分类: 对比类 COMPARING
 感知排名: ⭐⭐⭐⭐☆
 
 ## 简介

@@ -14,11 +14,18 @@ import time
 from typing import Iterator, List, Dict, Any, Optional
 
 from .prompts      import SYSTEM_PROMPT, COMMAND_HINTS
-from .tools_schema import AGENT_TOOLS
+from .tools_schema import AGENT_TOOLS, get_tools_with_mcp
 from .tools_data   import DataToolsMixin
 from .tools_export import ExportToolsMixin
+from .mcp_manager  import get_mcp_manager
 
 log = logging.getLogger(__name__)
+
+
+_PROPOSE_CMDS = (
+    "ppt", "ppt_revise", "export", "excel_revise",
+    "report", "report_revise", "dashboard", "dashboard_revise",
+)
 
 
 class BusinessAgent(DataToolsMixin, ExportToolsMixin):
@@ -33,6 +40,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         chart_store: Optional[dict] = None,
         session_chart_ids: Optional[List[str]] = None,
         color_scheme: str = "mckinsey",
+        session_id: str = "",
     ):
         self.client = client
         self.model = model
@@ -42,6 +50,8 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         self._chart_store: dict = chart_store if chart_store is not None else {}
         self._session_chart_ids: List[str] = session_chart_ids if session_chart_ids is not None else []
         self.ppt_color_scheme: str = color_scheme
+        self._session_id: str = session_id
+        self._mcp_manager = get_mcp_manager()
 
     def set_data_source(self, source):
         self.data_source = source
@@ -60,6 +70,8 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         excel_filename: str = "",
         report_title: str = "",
         report_sections: Optional[List] = None,
+        dashboard_name: str = "",
+        dashboard_widgets: Optional[List] = None,
     ) -> Iterator[Dict]:
         """
         Yields event dicts consumed by the Flask SSE stream:
@@ -70,6 +82,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
           {"type": "ppt_outline",   "title": str, "slides": list, "markdown": str}
           {"type": "excel_outline", "tables": list, "filename": str, "markdown": str}
           {"type": "report_outline","title": str, "sections": list, "markdown": str}
+          {"type": "dashboard_outline","name": str, "widgets": list, "markdown": str}
           {"type": "usage",         ...}
           {"type": "reasoning",     "content": str}
           {"type": "done"}
@@ -121,21 +134,22 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
             yield {"type": "done"}
             return
 
-        _NO_DATASOURCE_OK = (
-            "ppt", "ppt_confirm", "ppt_revise",
-            "excel_confirm", "excel_revise",
-            "report_confirm", "report_revise",
-        )
-        if not self.data_source and command not in _NO_DATASOURCE_OK:
-            yield {
-                "type": "text",
-                "content": (
-                    "请先连接数据源（上传 Excel 文件或连接 SQL 数据库），然后再开始分析。\n\n"
-                    "Please connect a data source (upload Excel or connect to a SQL database) first."
-                ),
-            }
+        if command == "dashboard_confirm":
+            widgets = dashboard_widgets or []
+            yield {"type": "tool_start", "tool": "generate_dashboard",
+                   "display": f"生成看板：{dashboard_name}（{len(widgets)} 个组件）..."}
+            try:
+                result = self._tool_generate_dashboard(
+                    name=dashboard_name, widgets=widgets
+                )
+            except Exception as exc:
+                yield {"type": "error", "message": f"看板生成失败: {exc}"}
+                yield {"type": "done"}
+                return
+            yield {"type": "text", "content": result}
             yield {"type": "done"}
             return
+
 
         system = SYSTEM_PROMPT
         if command and command in COMMAND_HINTS:
@@ -151,7 +165,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         all_reasoning: List[str] = []
 
         _PROPOSE_FLOW_CMDS = ("ppt", "ppt_revise", "export", "excel_revise",
-                              "report", "report_revise")
+                              "report", "report_revise", "dashboard", "dashboard_revise")
 
         _force_propose = False
         for _ in range(self.MAX_ITERATIONS):
@@ -173,6 +187,15 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                         "Call propose_excel_export now with the tables list and an optional filename. "
                         "Output ONLY the tool call — no surrounding text."
                     )
+                elif command in ("dashboard", "dashboard_revise"):
+                    nudge = (
+                        "All data schema information has been gathered. "
+                        "Call propose_dashboard_outline with a complete widgets array (2-6 widgets). "
+                        "CRITICAL: use ONLY real table/column names from the schema — do NOT fabricate. "
+                        "Each widget must have: title, chart_type, sql (valid SQL against the real tables), "
+                        "field_mapping, and grid ({x,y,w,h}). "
+                        "Output ONLY the tool call — no surrounding text."
+                    )
                 else:
                     nudge = (
                         "Compose the report outline from the conversation above and call "
@@ -188,7 +211,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
             call_kwargs: Dict[str, Any] = dict(
                 model=self.model,
                 messages=messages,
-                tools=AGENT_TOOLS,
+                tools=get_tools_with_mcp(self._mcp_manager),
                 tool_choice="auto",
                 temperature=0.1,
                 max_tokens=_max_tokens,
@@ -233,8 +256,6 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
 
                     if delta.content:
                         content_parts.append(delta.content)
-                        _PROPOSE_CMDS = ("ppt", "ppt_revise", "export", "excel_revise",
-                                         "report", "report_revise")
                         if command not in _PROPOSE_CMDS:
                             yield {"type": "text_delta", "content": delta.content}
 
@@ -369,6 +390,8 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                         "propose_ppt_outline":   f"生成 PPT 大纲：{args.get('title', '?')[:40]} ({len(args.get('slides', []))} 张)...",
                         "generate_ppt":          f"生成 PPT: {args.get('title', '?')[:40]} ({len(args.get('slides', []))} 张)...",
                         "set_ppt_color_scheme":  f"切换配色方案 → {args.get('scheme', '?')}...",
+                        "propose_dashboard_outline": f"生成看板大纲：{args.get('name', '?')[:40]} ({len(args.get('widgets', []))} 个)...",
+                        "generate_dashboard":    f"生成看板：{args.get('name', '?')[:40]} ({len(args.get('widgets', []))} 个组件)...",
                     }
                     yield {
                         "type": "tool_start",
@@ -517,6 +540,82 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                 slides=args.get("slides", []),
                                 filename=args.get("filename", ""),
                             )
+                        elif name == "propose_dashboard_outline":
+                            _dash_widgets = args.get("widgets", [])
+                            if not _dash_widgets:
+                                tool_result = (
+                                    "ERROR: widgets array is empty. You MUST provide a "
+                                    "widgets array with at least 1 widget object. Re-read "
+                                    "the data schema and call propose_dashboard_outline "
+                                    "again with a complete widgets list."
+                                )
+                            elif self.data_source is None:
+                                result = self._tool_propose_dashboard_outline(
+                                    name=args.get("name", "数据看板"),
+                                    widgets=_dash_widgets,
+                                )
+                                yield {
+                                    "type": "dashboard_outline",
+                                    "name": result["name"],
+                                    "widgets": result["widgets"],
+                                    "markdown": result["markdown"],
+                                }
+                                tool_result = "看板大纲已展示给用户，等待其通过按钮确认或修改。请不要输出任何文字。"
+                                _outline_proposed = True
+                            else:
+                                # Validate every widget SQL before showing outline
+                                _sql_errors = []
+                                for _w in _dash_widgets:
+                                    _wsql = _w.get("sql", "").strip()
+                                    if not _wsql:
+                                        _sql_errors.append(
+                                            f"Widget '{_w.get('title', '?')}' has empty SQL."
+                                        )
+                                        continue
+                                    # Wrap in a subquery with LIMIT 1 to keep validation cheap
+                                    _test_sql = (
+                                        f"SELECT * FROM ({_wsql}) AS __val__ LIMIT 1"
+                                    )
+                                    try:
+                                        _df, _err = self.data_source.execute_query(_test_sql)
+                                    except Exception as _exc:
+                                        _err = str(_exc)
+                                    if _err:
+                                        _sql_errors.append(
+                                            f"Widget '{_w.get('title', '?')}': {_err}"
+                                        )
+                                if _sql_errors:
+                                    _real_schema = self._tool_get_schema() if hasattr(self, "_tool_get_schema") else ""
+                                    tool_result = (
+                                        "ERROR: The following widget SQL queries are invalid — "
+                                        "they reference tables or columns that do NOT exist in "
+                                        "the actual data source. You MUST fix them and call "
+                                        "propose_dashboard_outline again.\n\n"
+                                        "FAILED QUERIES:\n"
+                                        + "\n".join(f"  - {e}" for e in _sql_errors)
+                                        + (f"\n\nREAL SCHEMA:\n{_real_schema}" if _real_schema else "")
+                                    )
+                                else:
+                                    result = self._tool_propose_dashboard_outline(
+                                        name=args.get("name", "数据看板"),
+                                        widgets=_dash_widgets,
+                                    )
+                                    yield {
+                                        "type": "dashboard_outline",
+                                        "name": result["name"],
+                                        "widgets": result["widgets"],
+                                        "markdown": result["markdown"],
+                                    }
+                                    tool_result = "看板大纲已展示给用户，等待其通过按钮确认或修改。请不要输出任何文字。"
+                                    _outline_proposed = True
+                        elif name == "generate_dashboard":
+                            tool_result = self._tool_generate_dashboard(
+                                name=args.get("name", "数据看板"),
+                                widgets=args.get("widgets", []),
+                                color_scheme=args.get("color_scheme", ""),
+                            )
+                        elif name.startswith("mcp__"):
+                            tool_result = self._mcp_manager.call_tool(name, args)
                         else:
                             tool_result = f"Unknown tool: {name}"
 

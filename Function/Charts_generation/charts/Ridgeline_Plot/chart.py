@@ -36,9 +36,6 @@ def _auto_col(df: pd.DataFrame, *hints: str) -> Optional[str]:
     nums = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
     col_lower = {c.lower(): c for c in df.columns}
     
-    # 过滤掉 None 值
-    hints = [h for h in hints if h is not None]
-    
     # 1. 精确匹配 hints
     for h in hints:
         h_lower = h.lower()

@@ -21,6 +21,8 @@ class ChatSession:
     cancel_requested: bool = False
     # IDs of every chart generated in this session (appended by api/chat.py)
     chart_ids: List[str] = field(default_factory=list)
+    # PPT color scheme — persisted so it survives multiple PPT requests
+    ppt_color_scheme: str = "mckinsey"
     # TTL tracking — updated on every access
     last_accessed: datetime = field(default_factory=datetime.now)
 

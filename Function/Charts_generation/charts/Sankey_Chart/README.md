@@ -1,7 +1,7 @@
 # 桑基图 Sankey Diagram
 
-图表分类: 流向 Flow
-感知排名: ⭐⭐⭐⭐
+图表分类: 对比类 COMPARING
+感知排名: ⭐⭐⭐⭐☆
 
 ## 简介
 

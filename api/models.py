@@ -76,6 +76,23 @@ def _to_int(v) -> int | None:
         return None
 
 
+@bp.post("/api/models/update")
+def update_model():
+    d = request.json or {}
+    ok, msg = config_manager.update_custom_model(
+        provider=d.get("provider", "").strip(),
+        base_url=d.get("base_url", ""),
+        model_name=d.get("model_name", ""),
+        api_key=d.get("api_key", ""),
+        context_window=_to_int(d.get("context_window")),
+        max_output_tokens=_to_int(d.get("max_output_tokens")),
+        enable_thinking=bool(d.get("enable_thinking", False)),
+    )
+    if ok:
+        return jsonify({"ok": True, "message": msg})
+    return jsonify({"error": msg}), 400
+
+
 @bp.post("/api/models/delete")
 def delete_model():
     d = request.json or {}

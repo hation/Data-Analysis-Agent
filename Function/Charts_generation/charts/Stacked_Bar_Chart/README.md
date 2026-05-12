@@ -1,6 +1,6 @@
-# Stacked Bar
+# 堆叠柱状图 Stacked Bar Chart
 
-图表分类: 比较图表  
+图表分类: 对比类 COMPARING
 感知排名: ⭐⭐⭐⭐☆
 
 ## 简介

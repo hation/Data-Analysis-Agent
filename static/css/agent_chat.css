@@ -79,7 +79,7 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Sego
 .msg { display: flex; gap: 9px; max-width: 90%; animation: fadeIn .18s ease; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; } }
 .msg.user { align-self: flex-end; flex-direction: row-reverse; }
-.msg.assistant { align-self: flex-start; }
+.msg.assistant { align-self: flex-start; width: 90%; }
 
 .msg-avatar {
   width: 30px;
@@ -104,7 +104,7 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Sego
   display: block;
 }
 
-.msg-body { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.msg-body { display: flex; flex-direction: column; gap: 5px; min-width: 0; flex: 1; }
 
 .msg-bubble { padding: 10px 14px; border-radius: 14px; font-size: 14px;
   line-height: 1.65; word-break: break-word; }
@@ -445,6 +445,63 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Sego
   padding-top: 16px; border-top: 1px solid #f1f5f9; }
 .msg-err { color: #ef4444; font-size: 13px; min-height: 18px; }
 .msg-ok  { color: #22c55e; font-size: 13px; min-height: 18px; }
+
+/* upload progress bar */
+.upload-progress {
+  margin: 10px 0 4px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #e2e8f0;
+  height: 8px;
+  position: relative;
+}
+.upload-progress-bar {
+  height: 100%;
+  background: #3b82f6;
+  width: 0%;
+  transition: width .2s ease;
+  border-radius: 6px;
+}
+.upload-progress-bar.indeterminate {
+  width: 40% !important;
+  animation: progress-slide 1.2s ease-in-out infinite;
+}
+@keyframes progress-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+.upload-progress-label {
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 5px;
+  text-align: center;
+}
+
+/* datasource connect spinner */
+.ds-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin: 8px 0 4px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #0369a1;
+}
+.ds-spinner {
+  width: 18px;
+  height: 18px;
+  border: 3px solid #bae6fd;
+  border-top-color: #0ea5e9;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: ds-spin 0.8s linear infinite;
+}
+@keyframes ds-spin {
+  to { transform: rotate(360deg); }
+}
 
 /* form fields (shared) */
 .f-row { margin-bottom: 14px; }

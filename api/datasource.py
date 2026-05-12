@@ -8,8 +8,8 @@ from pathlib import Path
 from flask import Blueprint, request, jsonify
 from werkzeug.utils import secure_filename
 
-from .state import session_manager
-from data.connector import ExcelDataSource, CSVDataSource, SQLDataSource
+from .state import session_manager, datasource_config_manager
+from data.connector import ExcelDataSource, CSVDataSource, SQLDataSource, GoogleSheetsDataSource, HTTPAPIDataSource
 
 log = logging.getLogger(__name__)
 
@@ -71,12 +71,19 @@ def connect_db(sid: str):
     d = request.json or {}
     conn_str     = (d.get("connection_string") or "").strip()
     display_name = (d.get("name") or "").strip()
+    # Use saved config if field left blank
+    if not conn_str:
+        saved = datasource_config_manager.get("sql")
+        conn_str = (saved or {}).get("connection_string", "")
     if not conn_str:
         return jsonify({"error": "连接字符串不能为空"}), 400
     try:
         source = SQLDataSource(conn_str, display_name)
         sess = session_manager.get_or_create(sid)
         sess.data_source = source
+        datasource_config_manager.save("sql", {
+            "connection_string": conn_str, "name": display_name
+        })
         return jsonify({"ok": True, "source_name": source.name,
                         "schema_preview": source.get_schema()})
     except Exception as exc:
@@ -97,3 +104,92 @@ def disconnect_source(sid: str):
     sess = session_manager.get_or_create(sid)
     sess.data_source = None
     return jsonify({"ok": True})
+
+
+@bp.post("/api/session/<sid>/connect-gsheets")
+def connect_gsheets(sid: str):
+    import json as _json
+    d = request.json or {}
+    creds_raw = d.get("creds_json", "")
+    spreadsheet = (d.get("spreadsheet") or "").strip()
+    display_name = (d.get("name") or "").strip()
+
+    # Use saved creds if field left blank
+    if not creds_raw:
+        saved = datasource_config_manager.get("gsheets")
+        creds_raw = (saved or {}).get("creds_json", "")
+    if not spreadsheet:
+        saved = datasource_config_manager.get("gsheets")
+        spreadsheet = (saved or {}).get("spreadsheet", "")
+
+    if not creds_raw:
+        return jsonify({"error": "服务账号 JSON 不能为空"}), 400
+    if not spreadsheet:
+        return jsonify({"error": "电子表格 URL 或 ID 不能为空"}), 400
+
+    try:
+        creds_dict = _json.loads(creds_raw) if isinstance(creds_raw, str) else creds_raw
+    except Exception:
+        return jsonify({"error": "服务账号 JSON 格式无效"}), 400
+
+    try:
+        source = GoogleSheetsDataSource(creds_dict, spreadsheet, display_name)
+        sess = session_manager.get_or_create(sid)
+        sess.data_source = source
+        datasource_config_manager.save("gsheets", {
+            "creds_json": creds_raw if isinstance(creds_raw, str) else _json.dumps(creds_raw),
+            "spreadsheet": spreadsheet, "name": display_name
+        })
+        return jsonify({"ok": True, "source_name": source.name,
+                        "schema_preview": source.get_schema()})
+    except Exception as exc:
+        log.error("[connect-gsheets] FAILED: %s\n%s", exc, traceback.format_exc())
+        return jsonify({"error": f"Google Sheets 连接失败: {exc}"}), 400
+
+
+@bp.post("/api/session/<sid>/connect-api")
+def connect_api(sid: str):
+    d = request.json or {}
+    url = (d.get("url") or "").strip()
+    auth_type = (d.get("auth_type") or "none").strip()
+    auth_value = (d.get("auth_value") or "").strip()
+    display_name = (d.get("name") or "").strip()
+
+    # Fall back to saved config for blank fields
+    saved = datasource_config_manager.get("api") or {}
+    if not url:
+        url = saved.get("url", "")
+    if not url:
+        return jsonify({"error": "API URL 不能为空"}), 400
+    if not auth_type or auth_type == "none":
+        auth_type = saved.get("auth_type", "none")
+    if not auth_value:
+        auth_value = saved.get("auth_value", "")
+    if auth_type not in ("none", "bearer", "api_key"):
+        return jsonify({"error": "认证方式无效，支持: none / bearer / api_key"}), 400
+
+    try:
+        source = HTTPAPIDataSource(url, auth_type, auth_value, display_name)
+        sess = session_manager.get_or_create(sid)
+        sess.data_source = source
+        datasource_config_manager.save("api", {
+            "url": url, "auth_type": auth_type,
+            "auth_value": auth_value, "name": display_name
+        })
+        return jsonify({"ok": True, "source_name": source.name,
+                        "schema_preview": source.get_schema()})
+    except Exception as exc:
+        log.error("[connect-api] FAILED: %s\n%s", exc, traceback.format_exc())
+        return jsonify({"error": f"API 连接失败: {exc}"}), 400
+
+
+@bp.get("/api/datasource-configs")
+def list_datasource_configs():
+    return jsonify(datasource_config_manager.list_public())
+
+
+@bp.delete("/api/datasource-configs/<ds_type>")
+def delete_datasource_config(ds_type: str):
+    datasource_config_manager.delete(ds_type)
+    return jsonify({"ok": True})
+

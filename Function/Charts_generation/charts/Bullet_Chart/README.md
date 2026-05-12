@@ -1,6 +1,6 @@
 # 靶心图 Bullet Chart
 
-图表分类: 比较 Comparison
+图表分类: 对比 COMPARING
 感知排名: ⭐⭐⭐⭐☆
 
 ## 简介

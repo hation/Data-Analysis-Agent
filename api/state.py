@@ -6,6 +6,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from data.session import SessionManager
 from LLM.llm_config_manager import get_config_manager
+from LLM.mcp_config_manager import get_mcp_config_manager
+from data.datasource_config_manager import get_datasource_config_manager
 
 
 class _ChartStore:
@@ -36,4 +38,6 @@ _CHARTS_DIR = Path(__file__).parent.parent / "outputs" / "charts"
 
 session_manager: SessionManager = SessionManager()
 config_manager = get_config_manager()
+mcp_config_manager = get_mcp_config_manager()
+datasource_config_manager = get_datasource_config_manager()
 chart_store: _ChartStore = _ChartStore(_CHARTS_DIR)

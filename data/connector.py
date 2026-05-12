@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Data source connectors: Excel (via SQLite in-memory) and SQL databases."""
+import io
+import json
 import logging
 import re
 import sqlite3
 import pandas as pd
+import requests
 from typing import Tuple, List, Optional
 
 log = logging.getLogger(__name__)
@@ -190,6 +193,180 @@ class CSVDataSource(DataSource):
         df.columns = _dedup_columns([_clean_identifier(c) for c in df.columns])
         df = df.dropna(how="all")
         df.to_sql(table, self._conn, if_exists="replace", index=False)
+
+    def get_schema(self) -> str:
+        cursor = self._conn.cursor()
+        cursor.execute(f'SELECT COUNT(*) FROM "{self._table}"')
+        rows = cursor.fetchone()[0]
+        return _table_schema_str(self._conn, self._table, rows)
+
+    def execute_query(self, sql: str) -> Tuple[pd.DataFrame, str]:
+        try:
+            return pd.read_sql_query(sql, self._conn), ""
+        except Exception as exc:
+            return pd.DataFrame(), str(exc)
+
+    def create_analysis_table(self, sql: str, table_name: str = "analysis_data", _df=None) -> str:
+        if _df is not None:
+            df = _df
+        else:
+            df, err = self.execute_query(sql)
+            if err:
+                return f"Error building analysis table: {err}"
+        df.to_sql(table_name, self._conn, if_exists="replace", index=False)
+        return _table_schema_str(self._conn, table_name, len(df))
+
+    def get_preview(self, max_rows: int = 500) -> List[dict]:
+        try:
+            total = self._conn.execute(f'SELECT COUNT(*) FROM "{self._table}"').fetchone()[0]
+            df = pd.read_sql_query(f'SELECT * FROM "{self._table}" LIMIT {max_rows}', self._conn)
+            return [{"name": self._table, "columns": list(df.columns),
+                     "rows": df.fillna("").astype(str).values.tolist(),
+                     "total_rows": total}]
+        except Exception:
+            return []
+
+
+# ── Google Sheets source ───────────────────────────────────────────────────
+
+class GoogleSheetsDataSource(DataSource):
+    """Load worksheets from a Google Spreadsheet via a service-account JSON dict."""
+
+    def __init__(self, creds_dict: dict, spreadsheet_url_or_id: str, display_name: str = ""):
+        import gspread
+        from google.oauth2.service_account import Credentials
+
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/drive.readonly",
+        ]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        gc = gspread.authorize(creds)
+        if spreadsheet_url_or_id.startswith("http"):
+            spreadsheet = gc.open_by_url(spreadsheet_url_or_id)
+        else:
+            spreadsheet = gc.open_by_key(spreadsheet_url_or_id)
+
+        self.name = display_name or spreadsheet.title
+        self._conn = sqlite3.connect(":memory:", check_same_thread=False)
+        self._tables: List[str] = []
+        self._load(spreadsheet)
+
+    def _load(self, spreadsheet):
+        for ws in spreadsheet.worksheets():
+            try:
+                records = ws.get_all_records(default_blank="")
+            except Exception:
+                continue
+            if not records:
+                continue
+            df = pd.DataFrame(records)
+            df.columns = _dedup_columns([_clean_identifier(c) for c in df.columns])
+            df = df.dropna(how="all")
+            if df.empty or len(df.columns) == 0:
+                continue
+            table = _clean_identifier(ws.title) or f"sheet{len(self._tables) + 1}"
+            df.to_sql(table, self._conn, if_exists="replace", index=False)
+            self._tables.append(table)
+        if not self._tables:
+            raise ValueError("Google Spreadsheet 中未发现有效工作表。")
+
+    def get_schema(self) -> str:
+        cursor = self._conn.cursor()
+        parts: List[str] = []
+        for table in self._tables:
+            cursor.execute(f'SELECT COUNT(*) FROM "{table}"')
+            rows = cursor.fetchone()[0]
+            parts.append(_table_schema_str(self._conn, table, rows))
+        return "\n\n".join(parts)
+
+    def execute_query(self, sql: str) -> Tuple[pd.DataFrame, str]:
+        try:
+            return pd.read_sql_query(sql, self._conn), ""
+        except Exception as exc:
+            return pd.DataFrame(), str(exc)
+
+    def create_analysis_table(self, sql: str, table_name: str = "analysis_data", _df=None) -> str:
+        if _df is not None:
+            df = _df
+        else:
+            df, err = self.execute_query(sql)
+            if err:
+                return f"Error building analysis table: {err}"
+        df.to_sql(table_name, self._conn, if_exists="replace", index=False)
+        return _table_schema_str(self._conn, table_name, len(df))
+
+    def get_preview(self, max_rows: int = 500) -> List[dict]:
+        cur = self._conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY rowid")
+        all_tables = [r[0] for r in cur.fetchall()]
+        result = []
+        for t in all_tables:
+            try:
+                total = self._conn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+                df = pd.read_sql_query(f'SELECT * FROM "{t}" LIMIT {max_rows}', self._conn)
+                result.append({
+                    "name": t, "columns": list(df.columns),
+                    "rows": df.fillna("").astype(str).values.tolist(),
+                    "total_rows": total,
+                })
+            except Exception:
+                continue
+        return result
+
+
+# ── HTTP REST API source ───────────────────────────────────────────────────
+
+def _flatten_json(data) -> pd.DataFrame:
+    """Best-effort conversion of a JSON API response to a DataFrame."""
+    if isinstance(data, list):
+        return pd.json_normalize(data)
+    if isinstance(data, dict):
+        for v in data.values():
+            if isinstance(v, list) and v:
+                return pd.json_normalize(v)
+        return pd.json_normalize([data])
+    raise ValueError(f"Cannot convert JSON type {type(data).__name__} to DataFrame.")
+
+
+class HTTPAPIDataSource(DataSource):
+    """Fetch data from an HTTP REST endpoint and load into SQLite in-memory."""
+
+    def __init__(self, url: str, auth_type: str = "none", auth_value: str = "",
+                 display_name: str = ""):
+        self._url = url
+        self._auth_type = auth_type
+        self._auth_value = auth_value
+        self.name = display_name or url
+        self._conn = sqlite3.connect(":memory:", check_same_thread=False)
+        self._table = "api_data"
+        self._load()
+
+    def _build_headers(self) -> dict:
+        headers: dict = {"Accept": "application/json, text/csv"}
+        if self._auth_type == "bearer":
+            headers["Authorization"] = f"Bearer {self._auth_value}"
+        elif self._auth_type == "api_key":
+            headers["X-API-Key"] = self._auth_value
+        return headers
+
+    def _load(self):
+        resp = requests.get(self._url, headers=self._build_headers(), timeout=30)
+        resp.raise_for_status()
+        content_type = resp.headers.get("Content-Type", "")
+        text = resp.text.strip()
+        if "csv" in content_type or (not text.startswith(("{", "["))):
+            try:
+                df = pd.read_csv(io.StringIO(resp.text))
+            except Exception:
+                df = _flatten_json(resp.json())
+        else:
+            df = _flatten_json(resp.json())
+        if df.empty:
+            raise ValueError("API 响应解析后为空，无法加载数据。")
+        df.columns = _dedup_columns([_clean_identifier(c) for c in df.columns])
+        df = df.dropna(how="all")
+        df.to_sql(self._table, self._conn, if_exists="replace", index=False)
 
     def get_schema(self) -> str:
         cursor = self._conn.cursor()

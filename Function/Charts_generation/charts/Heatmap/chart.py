@@ -12,8 +12,6 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 import pandas as pd
-import numpy as np
-from scipy.stats import rankdata
 import plotly.graph_objects as go
 import plotly.io as pio
 
@@ -125,21 +123,6 @@ def _convert_wide_to_matrix(df: pd.DataFrame, id_col: str) -> tuple:
     return df_matrix.values, df_matrix.index.tolist(), df_matrix.columns.tolist()
 
 
-def _rank_by_row(z_data):
-    """按行排名，返回排名值（用于着色）
-    
-    例如：
-    第一行 [10, 20, 15] → 排名 [1, 3, 2]
-    第二行 [5, 8, 6]   → 排名 [1, 3, 2]
-    
-    排名相同的点会是同一颜色
-    """
-    z_ranked = np.zeros_like(z_data, dtype=float)
-    for i, row in enumerate(z_data):
-        z_ranked[i] = rankdata(row)
-    return z_ranked
-
-
 def _build_html(title: str, chart_name: str, library: str,
                 data_fmt: str, desc: str, embed: str) -> str:
     return f"""<!DOCTYPE html>
@@ -199,21 +182,16 @@ def generate(
         
         warnings.append(f"自动转换宽格式数据为矩阵：{id_col} (行) × 周期 (列)")
         
-        # 创建热力图（按行排名着色）
-        z_ranked = _rank_by_row(z_data)
-        # 排名范围：1 到 列数
-        rank_max = z_data.shape[1]
+        # 创建热力图
         fig = go.Figure(data=go.Heatmap(
-            z=z_ranked,
+            z=z_data,
             y=y_labels,
             x=x_labels,
             colorscale="Blues",
             text=z_data,
             texttemplate="%{text:.2f}",
             textfont={"size": 10},
-            hovertemplate="行: %{y}<br>列: %{x}<br>值: %{text:.2f}<extra></extra>",
-            zmin=1,
-            zmax=rank_max
+            hovertemplate="行: %{y}<br>列: %{x}<br>值: %{z:.2f}<extra></extra>"
         ))
         
         fig.update_layout(
@@ -238,21 +216,15 @@ def generate(
         # 转换为透视表（矩阵）
         pivot_df = df.pivot_table(values=_val, index=_row, columns=_col, aggfunc='first')
         
-        # 按行排名
-        z_ranked = _rank_by_row(pivot_df.values)
-        rank_max = pivot_df.values.shape[1]
-        
         fig = go.Figure(data=go.Heatmap(
-            z=z_ranked,
+            z=pivot_df.values,
             y=pivot_df.index.tolist(),
             x=pivot_df.columns.tolist(),
             colorscale="Blues",
             text=pivot_df.values,
             texttemplate="%{text:.2f}",
             textfont={"size": 10},
-            hovertemplate="行: %{y}<br>列: %{x}<br>值: %{text:.2f}<extra></extra>",
-            zmin=1,
-            zmax=rank_max
+            hovertemplate="行: %{y}<br>列: %{x}<br>值: %{z:.2f}<extra></extra>"
         ))
         
         fig.update_layout(

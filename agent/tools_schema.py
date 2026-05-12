@@ -506,4 +506,112 @@ AGENT_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_dashboard_outline",
+            "description": (
+                "Show the user a dashboard outline for review BEFORE generating the dashboard.\n"
+                "Call this (not generate_dashboard) when the /dashboard command is active.\n"
+                "The frontend renders a confirmation card with Confirm / Edit / Cancel buttons.\n"
+                "Do NOT call generate_dashboard in the same turn."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Dashboard name."},
+                    "widgets": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "chart_type": {
+                                    "type": "string",
+                                    "enum": [
+                                        "Bar_Chart", "Line_Chart", "Pie_Chart",
+                                        "Scatter_Plot", "Area_Chart", "Grouped_Bar_Chart",
+                                        "Heatmap", "Stacked_Bar_Chart",
+                                    ],
+                                },
+                                "sql": {"type": "string", "description": "Valid SQL against real tables."},
+                                "field_mapping": {
+                                    "type": "object",
+                                    "description": "Maps chart axes/roles to column names.",
+                                },
+                                "options": {"type": "object"},
+                                "grid": {
+                                    "type": "object",
+                                    "description": "{x, y, w, h} grid position (w/h in grid units).",
+                                },
+                            },
+                            "required": ["title", "chart_type", "sql", "field_mapping"],
+                        },
+                        "description": "List of widget specs (2–6 widgets recommended).",
+                    },
+                },
+                "required": ["name", "widgets"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_dashboard",
+            "description": (
+                "Generate and save an interactive dashboard with multiple chart widgets.\n"
+                "Only call this after the user confirms a proposed outline via the UI button,\n"
+                "or when the dashboard_confirm command is active.\n"
+                "Each widget executes SQL against the connected data source and renders a chart."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Dashboard name."},
+                    "widgets": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "chart_type": {
+                                    "type": "string",
+                                    "enum": [
+                                        "Bar_Chart", "Line_Chart", "Pie_Chart",
+                                        "Scatter_Plot", "Area_Chart", "Grouped_Bar_Chart",
+                                        "Heatmap", "Stacked_Bar_Chart",
+                                    ],
+                                },
+                                "sql": {"type": "string"},
+                                "field_mapping": {"type": "object"},
+                                "options": {"type": "object"},
+                                "grid": {
+                                    "type": "object",
+                                    "description": "{x, y, w, h} grid position.",
+                                },
+                            },
+                            "required": ["title", "chart_type", "sql", "field_mapping"],
+                        },
+                    },
+                    "color_scheme": {
+                        "type": "string",
+                        "enum": ["mckinsey", "bcg", "bain", "ey"],
+                        "description": "Color scheme (defaults to current session scheme).",
+                    },
+                },
+                "required": ["name", "widgets"],
+            },
+        },
+    },
 ]
+
+
+def get_tools_with_mcp(mcp_manager=None) -> list:
+    if mcp_manager is None:
+        return AGENT_TOOLS
+    try:
+        mcp_schemas = mcp_manager.get_all_openai_schemas()
+    except Exception:
+        mcp_schemas = []
+    return AGENT_TOOLS + mcp_schemas
+

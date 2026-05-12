@@ -93,7 +93,10 @@ def generate_chart(
                     "meta": result.meta
                 }
             else:
-                return {"error": "Generated chart is invalid"}
+                html_len = len(result.html.strip())
+                logger.error(f"Chart invalid: html length={html_len}, warnings={result.warnings}")
+                msg = result.warnings[0] if result.warnings else f"Generated chart is invalid (html={html_len} chars)"
+                return {"error": msg}
         elif isinstance(result, dict):
             if result.get("html"):
                 return {

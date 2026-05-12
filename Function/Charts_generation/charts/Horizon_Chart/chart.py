@@ -1,5 +1,5 @@
 """
-地平线图 Horizon Chart - 趋势
+地平线图 Horizon Chart - 趋势（标准平移折叠版）
 图表分类: 趋势 Trend
 感知排名: ★★★☆☆
 
@@ -115,7 +115,7 @@ def generate(
     excel_path: str = None,
     x: str = "x",
     y: str = "y",
-    title: str = "地平线图",
+    title: str = "地平线图（标准平移折叠）",
     bands: int = 3,
     **kwargs
 ) -> ChartResult:

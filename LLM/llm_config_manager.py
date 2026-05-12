@@ -212,6 +212,40 @@ class LLMConfigManager:
     def get_config(self, provider: str) -> Optional[LLMConfig]:
         return self.configs.get(provider)
 
+    def update_custom_model(
+        self, provider: str, base_url: str, model_name: str, api_key: str,
+        context_window: Optional[int] = None, max_output_tokens: Optional[int] = None,
+        enable_thinking: bool = False,
+    ) -> tuple[bool, str]:
+        """更新已有自定义模型配置"""
+        if provider not in self.configs:
+            return False, f"配置 '{provider}' 不存在"
+        cfg = self.configs[provider]
+        if not cfg.is_custom:
+            return False, "只能编辑自定义模型"
+        if not base_url or not base_url.strip():
+            return False, "API Base URL 不能为空"
+        if not model_name or not model_name.strip():
+            return False, "Model ID 不能为空"
+        # api_key 留空则保留旧值
+        new_key = api_key.strip() if api_key and api_key.strip() else cfg.api_key
+        old = self.configs[provider]
+        self.configs[provider] = LLMConfig(
+            provider=provider,
+            api_key=new_key,
+            base_url=base_url.strip(),
+            model=model_name.strip(),
+            enabled=cfg.enabled,
+            is_custom=True,
+            context_window=context_window,
+            max_output_tokens=max_output_tokens,
+            enable_thinking=enable_thinking,
+        )
+        if self.save_configs():
+            return True, f"配置已更新"
+        self.configs[provider] = old
+        return False, "保存失败"
+
     def delete_config(self, provider: str) -> tuple[bool, str]:
         """删除配置（仅自定义）"""
         if provider not in self.configs:

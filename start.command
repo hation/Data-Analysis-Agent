@@ -8,7 +8,6 @@ cd "$(dirname "$0")"
 APP_FILE="app.py"
 REQUIREMENTS_FILE="requirements.txt"
 VENV_DIR=".venv"
-READY_FLAG=".venv/.deps_installed"
 
 echo "[INFO] Checking Python..."
 
@@ -29,7 +28,7 @@ fi
 echo "[INFO] Python command: $PY_CMD"
 $PY_CMD --version
 
-# 创建虚拟环境
+# 创建虚拟环境（如果不存在）
 if [ ! -x "$VENV_DIR/bin/python" ]; then
     echo "[INFO] Creating virtual environment..."
     $PY_CMD -m venv "$VENV_DIR"
@@ -41,18 +40,20 @@ source "$VENV_DIR/bin/activate"
 # 确保 pip 可用
 python -m pip --version >/dev/null 2>&1 || python -m ensurepip --upgrade
 
-# 首次安装依赖，后续跳过
-if [ -f "$READY_FLAG" ]; then
-    echo "[INFO] Dependencies already installed. Skipping install."
+# 每次运行都检查并安装缺失依赖
+if [ -f "$REQUIREMENTS_FILE" ]; then
+    echo "[INFO] Installing missing dependencies..."
+    python -m pip install --upgrade pip || echo "[WARN] pip upgrade failed, continuing..."
+    python -m pip install -r "$REQUIREMENTS_FILE" || {
+        echo "[WARN] Retry installing dependencies with PyPI mirror..."
+        python -m pip install -r "$REQUIREMENTS_FILE" -i https://pypi.tuna.tsinghua.edu.cn/simple || {
+            echo "[ERROR] Failed to install dependencies from requirements.txt."
+            read -p "Press Enter to exit..."
+            exit 1
+        }
+    }
 else
-    if [ -f "$REQUIREMENTS_FILE" ]; then
-        echo "[INFO] Installing dependencies..."
-        python -m pip install --upgrade pip
-        python -m pip install -r "$REQUIREMENTS_FILE"
-        touch "$READY_FLAG"
-    else
-        echo "[WARN] requirements.txt not found, skipping dependency install."
-    fi
+    echo "[WARN] requirements.txt not found, skipping dependency install."
 fi
 
 # 检查入口文件

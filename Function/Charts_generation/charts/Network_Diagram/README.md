@@ -1,6 +1,6 @@
 # 网络图 Network Diagram
 
-图表分类: 关系 Relationship | 书章节: Ch8  
+图表分类: 关系类 RELATIONSHIP
 感知排名: ⭐⭐⭐⭐☆
 
 ## 简介

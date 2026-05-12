@@ -17,7 +17,6 @@ rem =========================================================
 set "APP_FILE=app.py"
 set "REQUIREMENTS_FILE=requirements.txt"
 set "VENV_DIR=.venv"
-set "READY_FLAG=.venv\.deps_installed"
 set "PORT=5001"
 set "PIP_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple"
 set "PY_CMD="
@@ -101,36 +100,29 @@ if errorlevel 1 (
 )
 
 rem =========================================================
-rem  Install dependencies only once
-rem  If READY_FLAG exists, skip installation.
-rem  If missing, install again.
+rem  Install dependencies every run (check and install missing)
 rem =========================================================
-if exist "%READY_FLAG%" (
-    echo [INFO] Dependencies already installed. Skipping install.
-) else (
-    echo [INFO] Installing dependencies...
+echo [INFO] Checking and installing dependencies...
 
-    if exist "%REQUIREMENTS_FILE%" (
-        %PY_CMD% -m pip install --upgrade pip
-        if errorlevel 1 (
-            echo [WARN] pip upgrade failed, continue anyway...
-        )
-
-        %PY_CMD% -m pip install -r "%REQUIREMENTS_FILE%"
-        if errorlevel 1 (
-            echo [WARN] Retry installing dependencies with mirror...
-            %PY_CMD% -m pip install -r "%REQUIREMENTS_FILE%" -i %PIP_MIRROR%
-            if errorlevel 1 (
-                echo [ERROR] Failed to install dependencies from requirements.txt.
-                pause
-                exit /b 1
-            )
-        )
-    ) else (
-        echo [WARN] requirements.txt not found. No dependency install performed.
+if exist "%REQUIREMENTS_FILE%" (
+    %PY_CMD% -m pip install --upgrade pip
+    if errorlevel 1 (
+        echo [WARN] pip upgrade failed, continue anyway...
     )
 
-    >"%READY_FLAG%" echo installed
+    rem 安装缺失或未满足版本的模块
+    %PY_CMD% -m pip install -r "%REQUIREMENTS_FILE%"
+    if errorlevel 1 (
+        echo [WARN] Retry installing dependencies with mirror...
+        %PY_CMD% -m pip install -r "%REQUIREMENTS_FILE%" -i %PIP_MIRROR%
+        if errorlevel 1 (
+            echo [ERROR] Failed to install dependencies from requirements.txt.
+            pause
+            exit /b 1
+        )
+    )
+) else (
+    echo [WARN] requirements.txt not found. No dependency install performed.
 )
 
 rem =========================================================

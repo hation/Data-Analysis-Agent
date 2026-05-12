@@ -16,6 +16,7 @@ const COMMANDS = [
   { cmd: "export",    icon: "📥", descKey: "cmd.export.desc",     groupKey: "group.export",   available: true  },
   { cmd: "report",    icon: "📄", descKey: "cmd.report.desc",     groupKey: "group.export",   available: true  },
   { cmd: "ppt",       icon: "🎯", descKey: "cmd.ppt.desc",        groupKey: "group.export",   available: true  },
+  { cmd: "dashboard", icon: "📊", descKey: "cmd.dashboard.desc",   groupKey: "group.export",   available: true  },
   // Tools
   { cmd: "status",    icon: "📡", descKey: "cmd.status.desc",     groupKey: "group.tools",    available: true  },
 ];
@@ -38,9 +39,11 @@ let _streamReader = null;   // current SSE ReadableStreamDefaultReader
   buildSlashPopup();
   const r = await fetch("/api/session/new", { method: "POST" });
   SID = (await r.json()).session_id;
+  sessionStorage.setItem("baa_session_id", SID);
   await loadModels();
   await loadBuiltinProviders();
   await loadSavedList();
+  await loadDatasourceConfigs();
 })();
 
 // ── Language change handler ────────────────────────────────────────
@@ -369,8 +372,106 @@ function renderCustomList(configs) {
     <div class="custom-item">
       <span class="ci-name">${cfg.model || key}</span>
       <span class="ci-model">${cfg.base_url || ""}</span>
+      <button class="btn-sm btn-sm-ghost" onclick="editCustomModel('${key}')">${t('settings.edit_custom') || '编辑'}</button>
       <button class="btn-sm btn-sm-danger" onclick="deleteCustom('${key}')">${t('settings.del_custom')}</button>
     </div>`).join("");
+}
+
+let _editingCustomProvider = null;
+
+function editCustomModel(provider) {
+  _editingCustomProvider = provider;
+  // Open the add-custom-form in edit mode
+  const f = document.getElementById("add-custom-form");
+  if (!f.classList.contains("show")) f.classList.add("show");
+
+  fetch("/api/models")
+    .then(r => r.json())
+    .then(configs => {
+      const cfg = configs[provider];
+      if (!cfg) return;
+      document.getElementById("ac-name").value   = (cfg.model || "");
+      document.getElementById("ac-url").value    = (cfg.base_url || "");
+      document.getElementById("ac-model").value  = (cfg.model || "");
+      document.getElementById("ac-key").value    = "";
+      document.getElementById("ac-ctx").value    = cfg.context_window != null ? cfg.context_window : "";
+      document.getElementById("ac-output").value = cfg.max_output_tokens != null ? cfg.max_output_tokens : "";
+      document.getElementById("ac-think").checked = !!cfg.enable_thinking;
+      document.getElementById("ac-err").textContent = "";
+      document.getElementById("ac-ok").textContent  = t('settings.editing_hint') || `编辑中：${provider}`;
+      f.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+}
+
+async function addCustomModel() {
+  const ctxRaw = document.getElementById("ac-ctx").value.trim();
+  const outRaw = document.getElementById("ac-output").value.trim();
+  const data = {
+    name:            document.getElementById("ac-name").value.trim(),
+    base_url:        document.getElementById("ac-url").value.trim(),
+    model_name:      document.getElementById("ac-model").value.trim(),
+    api_key:         document.getElementById("ac-key").value.trim(),
+    enable_thinking: document.getElementById("ac-think").checked,
+    ...(ctxRaw ? { context_window:    parseInt(ctxRaw) } : {}),
+    ...(outRaw ? { max_output_tokens: parseInt(outRaw) } : {}),
+  };
+  document.getElementById("ac-err").textContent = "";
+  document.getElementById("ac-ok").textContent = "";
+
+  if (_editingCustomProvider) {
+    // Update existing
+    const body = {
+      provider:        _editingCustomProvider,
+      base_url:        data.base_url,
+      model_name:      data.model_name,
+      api_key:         data.api_key,
+      enable_thinking: data.enable_thinking,
+      ...(ctxRaw ? { context_window:    parseInt(ctxRaw) } : {}),
+      ...(outRaw ? { max_output_tokens: parseInt(outRaw) } : {}),
+    };
+    const r = await fetch("/api/models/update", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    if (d.error) {
+      document.getElementById("ac-err").textContent = d.error;
+    } else {
+      document.getElementById("ac-ok").textContent = d.message || t('settings.save_ok');
+      _editingCustomProvider = null;
+      ["ac-name","ac-url","ac-model","ac-key","ac-ctx","ac-output"].forEach(
+        id => document.getElementById(id).value = ""
+      );
+      document.getElementById("ac-think").checked = false;
+      await Promise.all([loadModels(), loadBuiltinProviders()]);
+      setTimeout(toggleAddCustom, 1200);
+    }
+    return;
+  }
+
+  const r = await fetch("/api/models/add", {
+    method: "POST", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify(data)
+  });
+  const d = await r.json();
+  if (d.error) {
+    document.getElementById("ac-err").textContent = d.error;
+  } else {
+    document.getElementById("ac-ok").textContent = d.message;
+    ["ac-name","ac-url","ac-model","ac-key","ac-ctx","ac-output"].forEach(
+      id => document.getElementById(id).value = ""
+    );
+    document.getElementById("ac-think").checked = false;
+    await Promise.all([loadModels(), loadBuiltinProviders()]);
+    setTimeout(toggleAddCustom, 1200);
+  }
+}
+
+function toggleAddCustom() {
+  _editingCustomProvider = null;
+  const f = document.getElementById("add-custom-form");
+  f.classList.toggle("show");
+  if (f.classList.contains("show")) document.getElementById("ac-name").focus();
 }
 
 async function saveBuiltin(key) {
@@ -420,12 +521,6 @@ async function clearBuiltin(key) {
   }
 }
 
-function toggleAddCustom() {
-  const f = document.getElementById("add-custom-form");
-  f.classList.toggle("show");
-  if (f.classList.contains("show")) document.getElementById("ac-name").focus();
-}
-
 async function addCustomModel() {
   const ctxRaw = document.getElementById("ac-ctx").value.trim();
   const outRaw = document.getElementById("ac-output").value.trim();
@@ -440,6 +535,37 @@ async function addCustomModel() {
   };
   document.getElementById("ac-err").textContent = "";
   document.getElementById("ac-ok").textContent = "";
+
+  if (_editingCustomProvider) {
+    const body = {
+      provider:        _editingCustomProvider,
+      base_url:        data.base_url,
+      model_name:      data.model_name,
+      api_key:         data.api_key,
+      enable_thinking: data.enable_thinking,
+      ...(ctxRaw ? { context_window:    parseInt(ctxRaw) } : {}),
+      ...(outRaw ? { max_output_tokens: parseInt(outRaw) } : {}),
+    };
+    const r = await fetch("/api/models/update", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    if (d.error) {
+      document.getElementById("ac-err").textContent = d.error;
+    } else {
+      document.getElementById("ac-ok").textContent = d.message || t('settings.save_ok');
+      _editingCustomProvider = null;
+      ["ac-name","ac-url","ac-model","ac-key","ac-ctx","ac-output"].forEach(
+        id => document.getElementById(id).value = ""
+      );
+      document.getElementById("ac-think").checked = false;
+      await Promise.all([loadModels(), loadBuiltinProviders()]);
+      setTimeout(toggleAddCustom, 1200);
+    }
+    return;
+  }
+
   const r = await fetch("/api/models/add", {
     method: "POST", headers: {"Content-Type":"application/json"},
     body: JSON.stringify(data)
@@ -468,6 +594,52 @@ async function deleteCustom(provider) {
 }
 
 // ── Data source ────────────────────────────────────────────────────
+async function loadDatasourceConfigs() {
+  let cfgs;
+  try {
+    const r = await fetch("/api/datasource-configs");
+    cfgs = await r.json();
+  } catch { return; }
+
+  const sql = cfgs.sql || {};
+  if (sql.has_connection_string) {
+    document.getElementById("db-conn").placeholder = t('ds.conn_saved_ph');
+    document.getElementById("db-conn").dataset.hasSaved = "1";
+    if (sql.name) document.getElementById("db-name").value = sql.name;
+    _showDsStatus("db-status", sql.name || "SQL DB");
+  }
+
+  const gs = cfgs.gsheets || {};
+  if (gs.has_creds_json) {
+    document.getElementById("gsheets-creds").placeholder = t('ds.conn_saved_ph');
+    document.getElementById("gsheets-creds").dataset.hasSaved = "1";
+    if (gs.spreadsheet) document.getElementById("gsheets-sheet").value = gs.spreadsheet;
+    if (gs.name) document.getElementById("gsheets-name").value = gs.name;
+    _showDsStatus("gsheets-status", gs.name || "Google Sheets");
+  }
+
+  const api = cfgs.api || {};
+  if (api.url) {
+    document.getElementById("api-url").value = api.url;
+    if (api.auth_type) document.getElementById("api-auth-type").value = api.auth_type;
+    if (api.auth_type && api.auth_type !== "none") {
+      document.getElementById("api-auth-row").style.display = "";
+    }
+    if (api.has_auth_value) {
+      document.getElementById("api-auth-value").placeholder = t('ds.conn_saved_ph');
+      document.getElementById("api-auth-value").dataset.hasSaved = "1";
+    }
+    if (api.name) document.getElementById("api-name").value = api.name;
+    _showDsStatus("api-status", api.name || api.url);
+  }
+}
+
+function _showDsStatus(elId, name) {
+  const el = document.getElementById(elId);
+  if (el) { el.textContent = t('ds.configured', { name }); el.style.display = ""; }
+}
+
+
 function setSrc(name, hintKey, connected) {
   srcConnected = connected;
   srcName      = connected ? (name || "") : "";
@@ -500,13 +672,58 @@ function onXlFile() {
 async function uploadXl() {
   const f = document.getElementById("xl-file").files[0];
   if (!f) return;
-  const btn = document.getElementById("xl-btn");
-  btn.disabled = true; btn.textContent = t('btn.uploading');
-  const form = new FormData(); form.append("file", f);
-  const r = await fetch(`/api/session/${SID}/upload`, { method: "POST", body: form });
-  const d = await r.json();
-  btn.disabled = false; btn.textContent = t('modal.upload');
-  if (d.error) { document.getElementById("xl-err").textContent = d.error; return; }
+  const btn       = document.getElementById("xl-btn");
+  const cancelBtn = document.getElementById("xl-cancel-btn");
+  const progressWrap  = document.getElementById("xl-progress");
+  const progressBar   = document.getElementById("xl-progress-bar");
+  const progressLabel = document.getElementById("xl-progress-label");
+  const errEl     = document.getElementById("xl-err");
+
+  btn.disabled = true;
+  cancelBtn.disabled = true;
+  errEl.textContent = "";
+  progressWrap.style.display = "";
+  progressBar.style.width = "0%";
+
+  const form = new FormData();
+  form.append("file", f);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", `/api/session/${SID}/upload`);
+
+  xhr.upload.onprogress = (e) => {
+    if (e.lengthComputable) {
+      const pct = Math.round(e.loaded / e.total * 100);
+      progressBar.style.width = pct + "%";
+      progressBar.classList.remove("indeterminate");
+      progressLabel.textContent = `${t('btn.uploading')} ${pct}%`;
+    } else {
+      progressBar.classList.add("indeterminate");
+    }
+  };
+
+  xhr.upload.onloadend = () => {
+    progressWrap.style.display = "none";
+    progressBar.classList.remove("indeterminate");
+    document.getElementById("xl-parsing").style.display = "";
+  };
+
+  const d = await new Promise((resolve, reject) => {
+    xhr.onload = () => {
+      try { resolve(JSON.parse(xhr.responseText)); }
+      catch { reject(new Error("服务器响应异常")); }
+    };
+    xhr.onerror = () => reject(new Error("网络错误"));
+    xhr.send(form);
+  }).catch(err => ({ error: err.message }));
+
+  progressWrap.style.display = "none";
+  progressBar.classList.remove("indeterminate");
+  document.getElementById("xl-parsing").style.display = "none";
+  btn.disabled = false;
+  cancelBtn.disabled = false;
+
+  if (d.error) { errEl.textContent = d.error; return; }
   schemaText = d.schema_preview || "";
   document.getElementById("xl-schema").textContent = schemaText;
   document.getElementById("xl-schema").style.display = "block";
@@ -519,13 +736,23 @@ async function uploadXl() {
 async function connectDB() {
   const conn = document.getElementById("db-conn").value.trim();
   const name = document.getElementById("db-name").value.trim();
-  if (!conn) { document.getElementById("db-err").textContent = t('conn_err'); return; }
+  const hasSaved = document.getElementById("db-conn").dataset.hasSaved === "1";
+  if (!conn && !hasSaved) { document.getElementById("db-err").textContent = t('conn_err'); return; }
   document.getElementById("db-err").textContent = "";
+  const loadingEl  = document.getElementById("db-loading");
+  const btn        = document.getElementById("db-btn");
+  const cancelBtn  = document.getElementById("db-cancel-btn");
+  loadingEl.style.display = "";
+  btn.disabled = true;
+  cancelBtn.disabled = true;
   const r = await fetch(`/api/session/${SID}/connect-db`, {
     method: "POST", headers: {"Content-Type":"application/json"},
     body: JSON.stringify({ connection_string: conn, name })
   });
   const d = await r.json();
+  loadingEl.style.display = "none";
+  btn.disabled = false;
+  cancelBtn.disabled = false;
   if (d.error) { document.getElementById("db-err").textContent = d.error; return; }
   schemaText = d.schema_preview || "";
   document.getElementById("db-schema").textContent = schemaText;
@@ -533,6 +760,77 @@ async function connectDB() {
   setSrc(d.source_name, 'src.hint.db', true);
   closeOverlay("ov-db");
   toast(t('toast.db_ok'), "ok");
+  sysMsg(t('sys.connected', { name: d.source_name }));
+}
+
+async function connectGSheets() {
+  const creds = document.getElementById("gsheets-creds").value.trim();
+  const sheet = document.getElementById("gsheets-sheet").value.trim();
+  const name  = document.getElementById("gsheets-name").value.trim();
+  const errEl = document.getElementById("gsheets-err");
+  const hasSavedCreds = document.getElementById("gsheets-creds").dataset.hasSaved === "1";
+  if (!creds && !hasSavedCreds) { errEl.textContent = t('gsheets_err.no_creds'); return; }
+  if (!sheet) { errEl.textContent = t('gsheets_err.no_sheet'); return; }
+  errEl.textContent = "";
+  const loadingEl = document.getElementById("gsheets-loading");
+  const btn       = document.getElementById("gsheets-btn");
+  const cancelBtn = document.getElementById("gsheets-cancel-btn");
+  loadingEl.style.display = "";
+  btn.disabled = true;
+  cancelBtn.disabled = true;
+  const r = await fetch(`/api/session/${SID}/connect-gsheets`, {
+    method: "POST", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ creds_json: creds, spreadsheet: sheet, name })
+  });
+  const d = await r.json();
+  loadingEl.style.display = "none";
+  btn.disabled = false;
+  cancelBtn.disabled = false;
+  if (d.error) { errEl.textContent = d.error; return; }
+  schemaText = d.schema_preview || "";
+  document.getElementById("gsheets-schema").textContent = schemaText;
+  document.getElementById("gsheets-schema").style.display = "block";
+  setSrc(d.source_name, 'src.hint.gsheets', true);
+  closeOverlay("ov-gsheets");
+  toast(t('toast.gsheets_ok'), "ok");
+  sysMsg(t('sys.connected', { name: d.source_name }));
+}
+
+function toggleApiAuthValue() {
+  const type = document.getElementById("api-auth-type").value;
+  document.getElementById("api-auth-row").style.display = type === "none" ? "none" : "";
+}
+
+async function connectAPI() {
+  const url       = document.getElementById("api-url").value.trim();
+  const authType  = document.getElementById("api-auth-type").value;
+  const authValue = document.getElementById("api-auth-value").value.trim();
+  const name      = document.getElementById("api-name").value.trim();
+  const errEl     = document.getElementById("api-err");
+  const hasSavedAuth = document.getElementById("api-auth-value").dataset.hasSaved === "1";
+  if (!url) { errEl.textContent = t('api_err.no_url'); return; }
+  errEl.textContent = "";
+  const loadingEl = document.getElementById("api-loading");
+  const btn       = document.getElementById("api-btn");
+  const cancelBtn = document.getElementById("api-cancel-btn");
+  loadingEl.style.display = "";
+  btn.disabled = true;
+  cancelBtn.disabled = true;
+  const r = await fetch(`/api/session/${SID}/connect-api`, {
+    method: "POST", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ url, auth_type: authType, auth_value: authValue, name })
+  });
+  const d = await r.json();
+  loadingEl.style.display = "none";
+  btn.disabled = false;
+  cancelBtn.disabled = false;
+  if (d.error) { errEl.textContent = d.error; return; }
+  schemaText = d.schema_preview || "";
+  document.getElementById("api-schema").textContent = schemaText;
+  document.getElementById("api-schema").style.display = "block";
+  setSrc(d.source_name, 'src.hint.api', true);
+  closeOverlay("ov-api");
+  toast(t('toast.api_ok'), "ok");
   sysMsg(t('sys.connected', { name: d.source_name }));
 }
 
@@ -814,7 +1112,7 @@ function handleEvent(ev, stepsEl, bubbleEl, typing) {
     bubbleEl.before(stopNote);
     if (!bubbleEl.textContent.trim()) bubbleEl.remove();
   }
-  else if (ev.type === "ppt_outline" || ev.type === "excel_outline" || ev.type === "report_outline") {
+  else if (ev.type === "ppt_outline" || ev.type === "excel_outline" || ev.type === "report_outline" || ev.type === "dashboard_outline") {
     if (typing.parentNode) typing.remove();
     _tickAllSteps(stepsEl);   // safety fallback (tool_end fires before outline event)
 
@@ -828,6 +1126,10 @@ function handleEvent(ev, stepsEl, bubbleEl, typing) {
       icon = "📥"; confirmCmd = "excel_confirm"; reviseCmd = "excel_revise";
       headerTitle = esc(ev.filename || "Excel 导出");
       confirmPayload = { excel_tables: ev.tables, excel_filename: ev.filename };
+    } else if (ev.type === "dashboard_outline") {
+      icon = "📊"; confirmCmd = "dashboard_confirm"; reviseCmd = "dashboard_revise";
+      headerTitle = esc(ev.name || "数据看板");
+      confirmPayload = { dashboard_name: ev.name, dashboard_widgets: ev.widgets };
     } else {
       icon = "📄"; confirmCmd = "report_confirm"; reviseCmd = "report_revise";
       headerTitle = esc(ev.title || "分析报告");
@@ -891,7 +1193,15 @@ function handleEvent(ev, stepsEl, bubbleEl, typing) {
         const txt = editTA.value.trim();
         if (!txt) return;
         _lockCard();
-        _sendConfirmStream({ command: reviseCmd, message: txt });
+        let revisePayload = { command: reviseCmd, message: txt };
+        if (reviseCmd === "ppt_revise" && confirmPayload.ppt_slides)
+          revisePayload.message = `${txt}\n\n[CURRENT_SLIDES_JSON]\n${JSON.stringify(confirmPayload.ppt_slides)}`;
+        else if (reviseCmd === "report_revise" && confirmPayload.report_sections)
+          revisePayload.message = `${txt}\n\n[CURRENT_REPORT_JSON]\n${JSON.stringify({title: confirmPayload.report_title, sections: confirmPayload.report_sections})}`;
+        else if (reviseCmd === "dashboard_revise" && confirmPayload.dashboard_widgets) {
+          revisePayload.message = `${txt}\n\n[CURRENT_DASHBOARD_JSON]\n${JSON.stringify({name: confirmPayload.dashboard_name, widgets: confirmPayload.dashboard_widgets})}`;
+        }
+        _sendConfirmStream(revisePayload);
       }
     });
   }
@@ -987,6 +1297,7 @@ function scrollBottom() { const m = document.getElementById("messages"); m.scrol
 function openOverlay(id) {
   document.getElementById(id).classList.add("open");
   if (id === "ov-settings") loadBuiltinProviders();
+  if (id === "ov-db" || id === "ov-gsheets" || id === "ov-api") loadDatasourceConfigs();
 }
 function closeOverlay(id) { document.getElementById(id).classList.remove("open"); }
 function closeOutside(e, id) { if (e.target.id === id) closeOverlay(id); }
@@ -1155,7 +1466,10 @@ function renderMd(text) {
     codeBlocks.push(`<pre><code>${c}</code></pre>`);
     return `\x00CB${codeBlocks.length - 1}\x00`;
   });
-  s = s.replace(/\[([^\]]+)\]\((\/[^)]+)\)/g, '<a href="$2">$1</a>');
+  s = s.replace(/\[([^\]]+)\]\((\/[^)]+)\)/g, (_, label, href) => {
+    const newTab = href.startsWith('/dashboard/') ? ' target="_blank" rel="noopener"' : '';
+    return `<a href="${href}"${newTab}>${label}</a>`;
+  });
   s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
   s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
   s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");

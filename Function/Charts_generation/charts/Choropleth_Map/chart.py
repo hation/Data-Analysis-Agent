@@ -1,18 +1,18 @@
 """
-弦图 Chord Diagram - 关系图表
-图表分类: 关系 Relationship | 书章节: Ch8
+面量图 Choropleth Map - 地理
+图表分类: 地理 Geographic
+感知排名: ★★★★☆
 
 统一接口:
     generate(df, mapping, options) -> ChartResult
-    
-支持两种数据格式：
-1. 邻接矩阵：n×n DataFrame，行列名为节点标签，单元格值为关系强度
-2. 边列表：source/target/value 三列 DataFrame
+
+面量图用区域填充颜色的深浅表示数值大小。
+白色底图，给定地区数据则改变该地区的颜色，颜色深浅代表数据大小。
 """
-import os, sys, json, io
+import sys
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
-import numpy as np
+from typing import Dict, Any, Optional
+
 import pandas as pd
 
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -23,435 +23,132 @@ from charts.base import ChartResult
 
 __all__ = ["generate"]
 
-# 麦肯锡配色方案
-MCKINSEY_COLORS = [
-    "#003D7A",  # 深蓝 - 主色
-    "#0084D1",  # 中蓝 - 次色
-    "#00A4EF",  # 浅蓝 - 辅色
-    "#7FBA00",  # 绿色 - 正向/增长
-    "#FFB81C",  # 金色 - 中性/警示
-    "#F7630C",  # 橙色 - 警示
-    "#DA3B01",  # 红色 - 负向/下降
-    "#A4373A",  # 深红 - 强调/危险
-    "#6B2C91",  # 紫色 - 特殊/创新
-    "#00B4EF",  # 青色 - 补充
-]
-
-_DATA_FMT = "邻接矩阵（n×n）或边列表（source/target/value）"
-_DESC = "节点环状排列，弧线粗细表示关系强度。支持高亮特定节点或关系。"
+_DATA_FMT = "label列(地区名) + value列(数值)"
+_DESC = "白色底图，按地区数据改变颜色，颜色深浅代表数值大小。"
 
 
-def _auto_col(df: pd.DataFrame, *hints: str, exclude: set = None) -> Optional[str]:
-    """根据提示自动查找匹配的列名。"""
-    exclude = exclude or set()
-    strs = [c for c in df.columns if df[c].dtype == object and c not in exclude]
-    nums = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c not in exclude]
-    col_lower = {c.lower(): c for c in df.columns if c not in exclude}
-    
-    # 1. 精确匹配 hints
-    for h in hints:
-        h_lower = h.lower()
-        if h_lower in col_lower:
-            return col_lower[h_lower]
-    
-    # 2. 模糊匹配（包含关系）
-    for h in hints:
-        h_lower = h.lower()
-        for col in df.columns:
-            if col in exclude:
-                continue
-            col_lower_name = col.lower()
-            if h_lower in col_lower_name or col_lower_name in h_lower:
-                return col
-    
-    # 3. 类型匹配
-    if hints:
-        hint = hints[0].lower()
-        if any(kw in hint for kw in ["source", "target", "label", "name", "group"]):
-            if strs:
-                return strs[0]
-            if nums:
-                return nums[0]
-        elif any(kw in hint for kw in ["value", "size", "amount", "count"]):
-            if nums:
-                return nums[0]
-            if strs:
-                return strs[0]
-    
-    # 4. 无 hints 时自动推断
-    if not hints:
-        if strs:
-            return strs[0]
-        if nums:
-            return nums[0]
-    
+def _fuzzy_match_region(name: str) -> str:
+    """模糊匹配地区名。如果用户输入 "北京"，自动扩展为 "北京市"。"""
+    abbr_map = {
+        '北京': '北京市',
+        '上海': '上海市',
+        '天津': '天津市',
+        '重庆': '重庆市',
+        '广州': '广州市',
+        '深圳': '深圳市',
+        '杭州': '杭州市',
+        '南京': '南京市',
+        '武汉': '武汉市',
+        '成都': '成都市',
+        '西安': '西安市',
+        '苏州': '苏州市',
+        '郑州': '郑州市',
+        '长沙': '长沙市',
+        '沈阳': '沈阳市',
+        '青岛': '青岛市',
+        '大连': '大连市',
+        '宁波': '宁波市',
+        '厦门': '厦门市',
+        '福州': '福州市',
+        '济南': '济南市',
+        '哈尔滨': '哈尔滨市',
+        '长春': '长春市',
+        '太原': '太原市',
+        '石家庄': '石家庄市',
+        '贵阳': '贵阳市',
+        '昆明': '昆明市',
+        '南昌': '南昌市',
+        '合肥': '合肥市',
+        '兰州': '兰州市',
+        '银川': '银川市',
+        '西宁': '西宁市',
+        '乌鲁木齐': '乌鲁木齐市',
+        '浙江': '浙江省',
+        '江苏': '江苏省',
+        '山东': '山东省',
+        '四川': '四川省',
+        '湖北': '湖北省',
+        '湖南': '湖南省',
+        '河南': '河南省',
+        '河北': '河北省',
+        '山西': '山西省',
+        '陕西': '陕西省',
+        '安徽': '安徽省',
+        '江西': '江西省',
+        '福建': '福建省',
+        '云南': '云南省',
+        '贵州': '贵州省',
+        '青海': '青海省',
+        '甘肃': '甘肃省',
+        '黑龙江': '黑龙江省',
+        '吉林': '吉林省',
+        '辽宁': '辽宁省',
+        '内蒙古': '内蒙古自治区',
+        '广西': '广西壮族自治区',
+        '西藏': '西藏自治区',
+        '新疆': '新疆维吾尔自治区',
+        '宁夏': '宁夏回族自治区',
+        '香港': '香港特别行政区',
+        '澳门': '澳门特别行政区',
+        '台湾': '台湾省',
+    }
+    return abbr_map.get(name, name)
+
+
+def _is_string_col(s: pd.Series) -> bool:
+    """判断列是否为字符串类型（兼容 object/string/str dtype）。"""
+    if pd.api.types.is_numeric_dtype(s):
+        return False
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return False
+    return True
+
+
+def _detect_label_col(df: pd.DataFrame, exclude: set) -> Optional[str]:
+    """自动识别地区名列（首个字符串列）。"""
+    for c in df.columns:
+        if c not in exclude and _is_string_col(df[c]):
+            return c
     return None
 
 
-def _detect_format(df: pd.DataFrame) -> Tuple[str, Optional[str], Optional[str], Optional[str]]:
-    """检测数据格式：邻接矩阵 或 边列表。
-    
-    返回: (format_type, source_col, target_col, value_col)
-    """
-    # 策略1：检查是否为邻接矩阵（行列名相同）
-    if df.index.name or (hasattr(df.index, 'names') and df.index.names[0]):
-        # 有行标签
-        if set(df.index) == set(df.columns):
-            # 行列标签相同 → 邻接矩阵
-            return ("adjacency", None, None, None)
-    
-    # 策略2：检查第一列是否为节点标签（字符串），其余列为数值
-    # 这是常见的邻接矩阵格式：第一列是行标签，其余列是数据
-    if len(df.columns) > 1:
-        first_col = df.columns[0]
-        # 检查第一列是否全为字符串
-        if df[first_col].dtype == object:
-            # 检查其余列是否全为数值
-            remaining_cols = df.columns[1:]
-            all_numeric = all(pd.api.types.is_numeric_dtype(df[col]) for col in remaining_cols)
-            if all_numeric:
-                # 检查第一列的值是否与其余列名有重叠（邻接矩阵特征）
-                first_col_values = set(df[first_col].astype(str).unique())
-                remaining_col_names = set(str(c) for c in remaining_cols)
-                # 如果有重叠或第一列值数量接近列数，可能是邻接矩阵
-                if len(first_col_values) >= len(remaining_cols) * 0.5:
-                    return ("adjacency_with_label_col", first_col, None, None)
-    
-    # 策略3：检查是否为边列表（source/target/value 三列）
-    exclude = set()
-    src = _auto_col(df, "source", "from", "起点", exclude=exclude)
-    if src:
-        exclude.add(src)
-        tgt = _auto_col(df, "target", "to", "终点", exclude=exclude)
-        if tgt:
-            exclude.add(tgt)
-            val = _auto_col(df, "value", "amount", "流量", exclude=exclude)
-            if val:
-                return ("edge_list", src, tgt, val)
-    
-    # 默认假设为邻接矩阵
-    return ("adjacency", None, None, None)
-
-
-def _edge_list_to_adjacency(df: pd.DataFrame, src_col: str, tgt_col: str, val_col: str) -> pd.DataFrame:
-    """将边列表转换为邻接矩阵。"""
-    d = df[[src_col, tgt_col, val_col]].copy()
-    d[val_col] = pd.to_numeric(d[val_col], errors="coerce").fillna(0)
-    d = d[d[val_col] > 0].dropna()
-    
-    nodes = sorted(set(d[src_col].astype(str).values) | set(d[tgt_col].astype(str).values))
-    n = len(nodes)
-    matrix = pd.DataFrame(0.0, index=nodes, columns=nodes)
-    
-    for _, row in d.iterrows():
-        src_val = str(row[src_col])
-        tgt_val = str(row[tgt_col])
-        val = float(row[val_col])
-        if src_val in matrix.index and tgt_val in matrix.columns:
-            matrix.loc[src_val, tgt_val] = val
-    
-    return matrix
-
-
-def _build_chord_html(
-    matrix: pd.DataFrame,
-    title: str,
-    highlight_node: Optional[str] = None,
-    highlight_color: str = "#003D7A"
-) -> str:
-    """使用 D3.js 构建交互式弦图 HTML。"""
-    
-    nodes = list(matrix.index)
-    n = len(nodes)
-    
-    # 构建 D3 格式的数据
-    links = []
-    for i, src in enumerate(nodes):
-        for j, tgt in enumerate(nodes):
-            val = float(matrix.iloc[i, j])
-            if val > 0:
-                links.append({
-                    "source": i,
-                    "target": j,
-                    "value": val
-                })
-    
-    # 节点颜色：高亮节点用特殊颜色，其他循环使用麦肯锡配色
-    node_colors = []
-    for node in nodes:
-        if highlight_node and node == highlight_node:
-            node_colors.append(highlight_color)
-        else:
-            idx = nodes.index(node) % len(MCKINSEY_COLORS)
-            node_colors.append(MCKINSEY_COLORS[idx])
-    
-    # 转换为 JSON
-    data = {
-        "nodes": [{"id": node, "color": color} for node, color in zip(nodes, node_colors)],
-        "links": links
-    }
-    
-    data_json = json.dumps(data)
-    
-    html = f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <title>{title}</title>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{
-            font-family: "Heiti SC", "Microsoft YaHei", sans-serif;
-            background: #fafafa;
-            padding: 40px;
-        }}
-        .container {{
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-            padding: 24px;
-            max-width: 1200px;
-            margin: 0 auto;
-        }}
-        h1 {{
-            color: #222;
-            font-size: 22px;
-            margin-bottom: 6px;
-        }}
-        .subtitle {{
-            color: #888;
-            font-size: 13px;
-            margin-bottom: 24px;
-        }}
-        #chord-container {{
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 600px;
-            background: white;
-            border-radius: 8px;
-            margin: 20px 0;
-        }}
-        svg {{
-            max-width: 100%;
-            height: auto;
-        }}
-        .chord {{
-            fill-opacity: 0.67;
-            stroke: none;
-        }}
-        .chord:hover {{
-            fill-opacity: 0.8;
-        }}
-        .node-label {{
-            font-size: 12px;
-            font-weight: 500;
-            text-anchor: middle;
-            pointer-events: none;
-        }}
-        .tooltip {{
-            position: absolute;
-            background: rgba(0,0,0,0.8);
-            color: white;
-            padding: 8px 12px;
-            border-radius: 4px;
-            font-size: 12px;
-            pointer-events: none;
-            display: none;
-            z-index: 1000;
-        }}
-        .legend {{
-            margin-top: 24px;
-            padding: 16px;
-            background: #f5f5f5;
-            border-radius: 8px;
-        }}
-        .legend-title {{
-            font-weight: 600;
-            margin-bottom: 12px;
-            color: #333;
-        }}
-        .legend-item {{
-            display: inline-block;
-            margin-right: 20px;
-            margin-bottom: 8px;
-            font-size: 12px;
-        }}
-        .legend-color {{
-            display: inline-block;
-            width: 12px;
-            height: 12px;
-            border-radius: 2px;
-            margin-right: 6px;
-            vertical-align: middle;
-        }}
-        .info {{
-            margin-top: 20px;
-            padding: 16px;
-            background: #f9f9f9;
-            border-left: 4px solid #0084D1;
-            border-radius: 4px;
-            font-size: 13px;
-            color: #555;
-            line-height: 1.6;
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>{title}</h1>
-        <div class="subtitle">弦图 Chord Diagram | D3.js</div>
-        
-        <div id="chord-container"></div>
-        
-        <div class="legend">
-            <div class="legend-title">节点颜色</div>
-            <div id="legend-content"></div>
-        </div>
-        
-        <div class="info">
-            <strong>说明：</strong>节点沿圆周排列，弧线粗细表示关系强度。
-            将鼠标悬停在弧线上查看详细信息。
-        </div>
-    </div>
-    
-    <div class="tooltip" id="tooltip"></div>
-    
-    <script>
-        const data = {data_json};
-        const width = 800;
-        const height = 800;
-        const innerRadius = Math.min(width, height) * 0.3;
-        const outerRadius = innerRadius + 30;
-        
-        const svg = d3.select("#chord-container")
-            .append("svg")
-            .attr("width", width)
-            .attr("height", height)
-            .attr("viewBox", [-width / 2, -height / 2, width, height]);
-        
-        const g = svg.append("g");
-        
-        // 计算弦图布局
-        const chord = d3.chord()
-            .padAngle(0.05)
-            .sortSubgroups(d3.descending);
-        
-        // 构建邻接矩阵
-        const matrix = Array(data.nodes.length).fill(0).map(() => Array(data.nodes.length).fill(0));
-        data.links.forEach(link => {{
-            matrix[link.source][link.target] = link.value;
-        }});
-        
-        const chords = chord(matrix);
-        
-        // 绘制弧线
-        const arc = d3.arc()
-            .innerRadius(innerRadius)
-            .outerRadius(outerRadius);
-        
-        const ribbon = d3.ribbon()
-            .source(d => d.source)
-            .target(d => d.target);
-        
-        // 绘制节点弧
-        g.selectAll("g")
-            .data(chords.groups)
-            .join("g")
-            .append("path")
-            .attr("fill", (d, i) => data.nodes[i].color)
-            .attr("stroke", (d, i) => d3.rgb(data.nodes[i].color).darker())
-            .attr("d", arc);
-        
-        // 绘制弦
-        g.selectAll(".chord")
-            .data(chords)
-            .join("path")
-            .attr("class", "chord")
-            .attr("d", ribbon)
-            .attr("fill", (d, i) => {{
-                const sourceColor = data.nodes[d.source.index].color;
-                return d3.rgb(sourceColor).copy({{opacity: 0.6}});
-            }})
-            .attr("stroke", (d, i) => {{
-                const sourceColor = data.nodes[d.source.index].color;
-                return d3.rgb(sourceColor).darker();
-            }})
-            .on("mouseover", function(event, d) {{
-                const tooltip = document.getElementById("tooltip");
-                const sourceName = data.nodes[d.source.index].id;
-                const targetName = data.nodes[d.target.index].id;
-                const value = matrix[d.source.index][d.target.index];
-                tooltip.innerHTML = `<strong>${{sourceName}} → ${{targetName}}</strong><br>强度: ${{value.toFixed(2)}}`;
-                tooltip.style.display = "block";
-                tooltip.style.left = (event.pageX + 10) + "px";
-                tooltip.style.top = (event.pageY + 10) + "px";
-                d3.select(this).attr("fill-opacity", 0.9);
-            }})
-            .on("mousemove", function(event) {{
-                const tooltip = document.getElementById("tooltip");
-                tooltip.style.left = (event.pageX + 10) + "px";
-                tooltip.style.top = (event.pageY + 10) + "px";
-            }})
-            .on("mouseout", function() {{
-                document.getElementById("tooltip").style.display = "none";
-                d3.select(this).attr("fill-opacity", 0.67);
-            }});
-        
-        // 绘制节点标签
-        g.selectAll(".node-label")
-            .data(chords.groups)
-            .join("text")
-            .attr("class", "node-label")
-            .attr("dy", "0.35em")
-            .attr("transform", (d, i) => {{
-                const angle = (d.startAngle + d.endAngle) / 2;
-                const x = Math.cos(angle - Math.PI / 2) * (outerRadius + 40);
-                const y = Math.sin(angle - Math.PI / 2) * (outerRadius + 40);
-                return `translate(${{x}},${{y}})rotate(${{angle * 180 / Math.PI - 90}})`;
-            }})
-            .text((d, i) => data.nodes[i].id)
-            .attr("fill", "#333")
-            .attr("font-weight", "500");
-        
-        // 生成图例
-        const legendContent = document.getElementById("legend-content");
-        data.nodes.forEach(node => {{
-            const item = document.createElement("div");
-            item.className = "legend-item";
-            item.innerHTML = `<span class="legend-color" style="background-color: ${{node.color}}"></span>${{node.id}}`;
-            legendContent.appendChild(item);
-        }});
-    </script>
-</body>
-</html>"""
-    
-    return html
+def _detect_value_col(df: pd.DataFrame, exclude: set, hint: str = None) -> Optional[str]:
+    """识别数值列。"""
+    if hint:
+        for c in df.columns:
+            if c not in exclude and c.lower() == hint.lower():
+                return c
+    for c in df.columns:
+        if c not in exclude and pd.api.types.is_numeric_dtype(df[c]):
+            return c
+    return None
 
 
 def generate(
     df: pd.DataFrame = None,
     mapping: Dict[str, str] = None,
     options: Dict[str, Any] = None,
-    # ── 向后兼容 ──────────────────────────────
     excel_path: str = None,
-    source: str = "source",
-    target: str = "target",
+    label: str = None,
     value: str = "value",
-    title: str = "弦图",
-    **kwargs
+    title: str = "面量图",
+    maptype: str = "china",
+    **kwargs,
 ) -> ChartResult:
-    """生成弦图。
-    
-    支持两种数据格式：
-    1. 邻接矩阵：n×n DataFrame，行列名为节点标签
-    2. 边列表：source/target/value 三列 DataFrame
     """
-    warnings: list = []
+    参数说明：
+        label      : 地区名列名
+        value      : 数值列名
+        maptype    : 'china' | 省名 | 市名
+    """
+    from pyecharts.charts import Map
+    from pyecharts import options as opts
+
+    warnings_: list = []
     options = options or {}
     mapping = mapping or {}
 
+    # ── 读取数据 ──────────────────────────────────────────
     if df is None:
         if excel_path:
             try:
@@ -461,68 +158,153 @@ def generate(
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
 
+    # ── 参数解析 ──────────────────────────────────────────
+    lbl_hint = mapping.get("label") or label
+    val_hint = mapping.get("value") or value
     title = options.get("title", title)
-    highlight_node = options.get("highlight_node")
-    highlight_color = options.get("highlight_color", "#003D7A")
+    maptype = options.get("maptype", maptype)
 
-    # 检测数据格式
-    fmt, src_col, tgt_col, val_col = _detect_format(df)
+    # ── 列识别 ────────────────────────────────────────────
+    used: set = set()
+    
+    # 先检测省市列（用于 maptype）
+    _city = None
+    for c in df.columns:
+        c_lower = c.lower()
+        if _is_string_col(df[c]) and c_lower in ['省市', '城市', '市', 'city', 'province']:
+            _city = c
+            used.add(_city)
+            break
+    
+    # 再检测地区名列（label）
+    _label = lbl_hint if (lbl_hint and lbl_hint in df.columns) else _detect_label_col(df, used)
+    if _label:
+        used.add(_label)
 
-    if fmt == "adjacency_with_label_col":
-        # 邻接矩阵格式：第一列是节点标签，其余列是数据
-        label_col = src_col  # 重用 src_col 存储标签列名
-        # 将第一列设置为索引
-        matrix = df.set_index(label_col).copy()
-        # 确保行列名相同
-        if not (set(matrix.index) == set(matrix.columns)):
-            warnings.append("邻接矩阵的行列标签不匹配")
-            return ChartResult(warnings=warnings)
-    elif fmt == "edge_list":
-        # 边列表格式
-        src_col = mapping.get("source") or src_col or source
-        tgt_col = mapping.get("target") or tgt_col or target
-        val_col = mapping.get("value") or val_col or value
+    # 自动提取市名作为 maptype
+    if _city:
+        city_val = str(df[_city].iloc[0]).strip()
+        city_val = _fuzzy_match_region(city_val)
+        # 移除"市"后缀用于 maptype
+        if city_val.endswith('市'):
+            maptype = city_val[:-1]
+        else:
+            maptype = city_val
 
-        _src = _auto_col(df, src_col, "source", "起点", "from")
-        _tgt = _auto_col(df, tgt_col, "target", "终点", "to")
-        _val = _auto_col(df, val_col, "value", "流量", "amount")
+    _value = _detect_value_col(df, used, val_hint)
+    if _value:
+        used.add(_value)
 
-        if _src is None or _src not in df.columns:
-            warnings.append(f"找不到必填字段 [source]")
-            return ChartResult(warnings=warnings)
-        if _tgt is None or _tgt not in df.columns:
-            warnings.append(f"找不到必填字段 [target]")
-            return ChartResult(warnings=warnings)
-        if _val is None or _val not in df.columns:
-            warnings.append(f"找不到必填字段 [value]")
-            return ChartResult(warnings=warnings)
+    # ── 验证必要字段 ──────────────────────────────────────
+    if _label is None:
+        warnings_.append("找不到地区名列 [label]")
+        return ChartResult(warnings=warnings_)
+    if _value is None:
+        warnings_.append("找不到数值列 [value]")
+        return ChartResult(warnings=warnings_)
 
-        # 转换为邻接矩阵
-        matrix = _edge_list_to_adjacency(df, _src, _tgt, _val)
-    else:
-        # 邻接矩阵格式
-        matrix = df.copy()
-        # 确保行列名相同
-        if not (set(matrix.index) == set(matrix.columns)):
-            warnings.append("邻接矩阵的行列标签不匹配")
-            return ChartResult(warnings=warnings)
+    # ── 构建数据 ──────────────────────────────────────────
+    pairs: list = []  # (地名, 数值)
 
-    if matrix.empty:
-        return ChartResult(warnings=["无有效数据"])
+    for _, row in df.iterrows():
+        try:
+            name = str(row[_label]).strip()
+            # 模糊匹配：缩写 -> 完整名
+            name = _fuzzy_match_region(name)
+            val = float(row[_value])
+            # 四舍五入到两位小数
+            val = round(val, 2)
+        except Exception as e:
+            warnings_.append(f"行数据解析失败: {e}")
+            continue
 
-    # 验证数据
-    try:
-        matrix = matrix.astype(float)
-    except Exception as e:
-        return ChartResult(warnings=[f"数据类型转换失败: {e}"])
+        pairs.append((name, val))
 
-    # 生成 HTML
-    html = _build_chord_html(matrix, title, highlight_node, highlight_color)
+    if not pairs:
+        warnings_.append("没有有效数据点")
+        return ChartResult(warnings=warnings_)
+
+    # ── 值域 ──────────────────────────────────────────────
+    vals_only = [v for _, v in pairs]
+    vmin, vmax = min(vals_only), max(vals_only)
+
+    # ── 构建 Map（面量图）────────────────────────────────
+    map_chart = Map()
+    map_chart.add(
+        series_name=_value,
+        data_pair=pairs,
+        is_map_symbol_show=False,
+        maptype=maptype,
+    )
+
+    map_chart.set_global_opts(
+        title_opts=opts.TitleOpts(
+            title=title,
+            title_textstyle_opts=opts.TextStyleOpts(
+                color="#003D7A", font_size=18,
+                font_family="Heiti SC, Microsoft YaHei, sans-serif",
+                font_weight="bold",
+            ),
+        ),
+        visualmap_opts=opts.VisualMapOpts(
+            min_=vmin,
+            max_=vmax,
+            is_piecewise=False,
+            range_color=["#B9D6E8", "#7FB5D5", "#0084D1", "#003D7A", "#001F3F"],
+            textstyle_opts=opts.TextStyleOpts(color="#333"),
+            pos_left="left",
+            pos_bottom="20",
+        ),
+        tooltip_opts=opts.TooltipOpts(
+            trigger="item",
+            formatter=f"{{b}}<br/>{_value}: {{c}}",
+        ),
+    )
+
+    # ── 导出 HTML ─────────────────────────────────────────
+    raw_html = map_chart.render_embed()
+
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title}</title>
+<style>
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+html, body {{ width: 100%; height: 100%;
+  font-family: "Heiti SC", "Microsoft YaHei", sans-serif;
+  background: #fff; }}
+#header {{
+  padding: 14px 24px; background: #fff;
+  border-bottom: 1px solid #e8ecf0;
+  box-shadow: 0 1px 4px rgba(0,0,0,.05);
+}}
+#header h1 {{ font-size: 18px; color: #003D7A; font-weight: 700; }}
+#header .sub {{ font-size: 12px; color: #999; margin-top: 3px; }}
+#chart {{ width: 100%; height: calc(100vh - 60px); }}
+</style>
+</head>
+<body>
+<div id="header">
+  <h1>{title}</h1>
+  <div class="sub">共 {len(pairs)} 个地区 · 字段: {_value} · 范围: {vmin:.2f} ~ {vmax:.2f}</div>
+</div>
+<div id="chart">
+{raw_html}
+</div>
+</body>
+</html>"""
 
     meta = {
-        "chart_id": "chord_diagram",
-        "n_nodes": len(matrix),
-        "n_edges": (matrix > 0).sum().sum(),
-        "format": fmt,
+        "chart_id": "choropleth_map",
+        "n_rows": len(df),
+        "n_regions": len(pairs),
+        "label_col": _label,
+        "value_col": _value,
+        "maptype": maptype,
+        "value_min": vmin,
+        "value_max": vmax,
     }
-    return ChartResult(html=html, spec={}, warnings=warnings, meta=meta)
+
+    return ChartResult(html=html, spec={}, warnings=warnings_, meta=meta)

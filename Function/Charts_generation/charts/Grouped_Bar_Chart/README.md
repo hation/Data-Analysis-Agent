@@ -1,6 +1,6 @@
-# Grouped Bar
+# 分类柱状图 Grouped Bar Chart
 
-图表分类: 对比 COMPARING 
+图表分类: 对比类 COMPARING
 感知排名: ⭐⭐⭐⭐⭐
 
 ## 简介

@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Mixin: export-oriented tools (Excel, Word report, PPT)."""
+"""Mixin: export-oriented tools (Excel, Word report, PPT, Dashboard)."""
 import datetime
 import os
+import re
+import uuid
 
 
 class ExportToolsMixin:
@@ -344,4 +346,54 @@ class ExportToolsMixin:
         return (
             f"✅ PowerPoint 演示文稿已生成，共 **{total}** 张幻灯片。\n\n"
             f"[📥 点击下载 {safe_name}](/api/export/{safe_name})"
+        )
+
+    # ── Dashboard ─────────────────────────────────────────────────────────────
+
+    def _tool_propose_dashboard_outline(self, name: str, widgets: list) -> dict:
+        rows = ["| # | 标题 | 图表类型 | 核心字段 |", "|---|------|---------|---------|"]
+        for i, w in enumerate(widgets, 1):
+            title = w.get("title", f"图表 {i}")
+            chart_type = w.get("chart_type", "Bar_Chart")
+            fm = w.get("field_mapping", {})
+            fields = ", ".join(f"{k}={v}" for k, v in fm.items()) if fm else "—"
+            rows.append(f"| {i} | {title} | {chart_type} | {fields} |")
+        markdown = f"**{name}**（共 {len(widgets)} 个组件）\n\n" + "\n".join(rows)
+        return {"name": name, "widgets": widgets, "markdown": markdown}
+
+    def _tool_generate_dashboard(
+        self,
+        name: str,
+        widgets: list,
+        color_scheme: str = "",
+    ) -> str:
+        import requests as _req
+        color_scheme = color_scheme or getattr(self, "ppt_color_scheme", "mckinsey")
+        payload = {
+            "session_id": self._session_id,
+            "name": name,
+            "widgets": widgets,
+            "color_scheme": color_scheme,
+        }
+        try:
+            import os as _os
+            port = int(_os.environ.get("PORT") or _os.environ.get("AGENT_PORT", 5001))
+            resp = _req.post(
+                f"http://127.0.0.1:{port}/api/dashboard/generate",
+                json=payload,
+                timeout=120,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            return f"❌ 看板生成失败：{exc}"
+
+        dashboard_id = data.get("dashboard_id", "")
+        url = data.get("url", f"/dashboard/{dashboard_id}")
+        sid = self._session_id
+        if sid:
+            url = f"{url}?sid={sid}"
+        return (
+            f"✅ 看板「{name}」已生成，包含 **{len(widgets)}** 个图表组件。\n\n"
+            f"[📊 打开看板]({url})"
         )

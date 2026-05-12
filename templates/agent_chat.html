@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>私人分析助手</title>
+<title>智析Agent</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/agent_chat.css') }}">
 </head>
 <body>
@@ -32,6 +32,8 @@
       <div class="btn-group" style="margin-top:9px;">
         <button class="btn btn-ghost" onclick="openOverlay('ov-excel')" data-i18n="sidebar.upload">📂 上传 Excel / CSV</button>
         <button class="btn btn-ghost" onclick="openOverlay('ov-db')" data-i18n="sidebar.connect_db">🗄️ 连接 SQL 数据库</button>
+        <button class="btn btn-ghost" onclick="openOverlay('ov-gsheets')" data-i18n="sidebar.connect_gsheets">📊 连接 Google Sheets</button>
+        <button class="btn btn-ghost" onclick="openOverlay('ov-api')" data-i18n="sidebar.connect_api">🔗 连接自定义 API</button>
         <button class="btn btn-danger-sm" id="btn-disc" style="display:none" onclick="disconnectSrc()" data-i18n="sidebar.disconnect">断开连接</button>
       </div>
     </div>
@@ -44,6 +46,18 @@
           <option value="" data-i18n="sidebar.model_placeholder">— 选择模型 —</option>
         </select>
         <button class="btn-icon" data-i18n-title="modal.settings.title" title="模型设置" onclick="openOverlay('ov-settings')">⚙</button>
+      </div>
+    </div>
+
+    <!-- MCP servers section -->
+    <div>
+      <div class="sec-label">MCP 工具服务器</div>
+      <div class="source-card" id="mcp-sidebar-card" style="cursor:pointer" onclick="openMcpSettings()">
+        <div class="source-dot" id="mcp-dot"></div>
+        <div>
+          <div class="source-name" id="mcp-status-text">未连接</div>
+          <div class="source-hint" id="mcp-status-hint">点击管理 MCP 工具服务器</div>
+        </div>
       </div>
     </div>
 
@@ -101,6 +115,7 @@
           <div class="hint-chip" onclick="fillHint(this)">/kmeans 对客户做聚类分析，K=3</div>
           <div class="hint-chip" onclick="fillHint(this)">/data 查看数据概况和分布</div>
           <div class="hint-chip" onclick="fillHint(this)">/ppt 生成销售业绩分析演示文稿</div>
+          <div class="hint-chip" onclick="fillHint(this)">/dashboard 生成可交互销售分析看板</div>
         </div>
       </div>
     </div>
@@ -152,10 +167,18 @@
       <input type="file" id="xl-file" accept=".xlsx,.xls,.csv" onchange="onXlFile()">
       <div class="f-hint" data-i18n="modal.excel.hint">支持 .xlsx / .xls / .csv</div>
     </div>
+    <div class="upload-progress" id="xl-progress" style="display:none">
+      <div class="upload-progress-bar" id="xl-progress-bar"></div>
+      <div class="upload-progress-label" id="xl-progress-label" data-i18n="btn.uploading">上传中…</div>
+    </div>
+    <div class="ds-loading" id="xl-parsing" style="display:none">
+      <div class="ds-spinner"></div>
+      <span data-i18n="ds.parsing">正在解析数据，请稍候…</span>
+    </div>
     <pre class="schema-box" id="xl-schema" style="display:none"></pre>
     <div class="msg-err" id="xl-err"></div>
     <div class="modal-footer">
-      <button class="btn-sm btn-sm-ghost" onclick="closeOverlay('ov-excel')" data-i18n="modal.cancel">取消</button>
+      <button class="btn-sm btn-sm-ghost" id="xl-cancel-btn" onclick="closeOverlay('ov-excel')" data-i18n="modal.cancel">取消</button>
       <button class="btn-sm btn-sm-primary" id="xl-btn" onclick="uploadXl()" disabled data-i18n="modal.upload">上传</button>
     </div>
   </div>
@@ -165,6 +188,7 @@
 <div class="overlay" id="ov-db" onclick="closeOutside(event,'ov-db')">
   <div class="modal">
     <div class="modal-title" data-i18n="modal.db.title">🗄️ 连接 SQL 数据库</div>
+    <div class="msg-ok" id="db-status" style="display:none"></div>
     <div class="f-row">
       <label data-i18n="modal.db.name_label">显示名称（可选）</label>
       <input type="text" id="db-name" data-i18n-ph="modal.db.name_ph" placeholder="例如：生产数据库">
@@ -177,11 +201,93 @@
       <textarea id="db-conn" placeholder="示例：&#10;mysql+pymysql://user:pass@host:3306/dbname&#10;postgresql://user:pass@host:5432/dbname&#10;sqlite:///./data.db"></textarea>
       <div class="f-hint" data-i18n="modal.db.hint">支持 MySQL、PostgreSQL、SQLite、SQL Server 等 SQLAlchemy 数据库</div>
     </div>
+    <div class="ds-loading" id="db-loading" style="display:none">
+      <div class="ds-spinner"></div>
+      <span data-i18n="ds.connecting">正在连接并解析数据…</span>
+    </div>
     <pre class="schema-box" id="db-schema" style="display:none"></pre>
     <div class="msg-err" id="db-err"></div>
     <div class="modal-footer">
-      <button class="btn-sm btn-sm-ghost" onclick="closeOverlay('ov-db')" data-i18n="modal.cancel">取消</button>
-      <button class="btn-sm btn-sm-primary" onclick="connectDB()" data-i18n="modal.connect">连接</button>
+      <button class="btn-sm btn-sm-ghost" id="db-cancel-btn" onclick="closeOverlay('ov-db')" data-i18n="modal.cancel">取消</button>
+      <button class="btn-sm btn-sm-primary" id="db-btn" onclick="connectDB()" data-i18n="modal.connect">连接</button>
+    </div>
+  </div>
+</div>
+
+<!-- Google Sheets connect -->
+<div class="overlay" id="ov-gsheets" onclick="closeOutside(event,'ov-gsheets')">
+  <div class="modal">
+    <div class="modal-title" data-i18n="modal.gsheets.title">📊 连接 Google Sheets</div>
+    <div class="msg-ok" id="gsheets-status" style="display:none"></div>
+    <div class="f-row">
+      <label data-i18n="modal.gsheets.name_label">显示名称（可选）</label>
+      <input type="text" id="gsheets-name" data-i18n-ph="modal.gsheets.name_ph" placeholder="例如：销售数据表">
+    </div>
+    <div class="f-row">
+      <label>
+        <span data-i18n="modal.gsheets.sheet_label">电子表格 URL 或 ID</span>
+        <span style="color:#ef4444"> *</span>
+      </label>
+      <input type="text" id="gsheets-sheet" data-i18n-ph="modal.gsheets.sheet_ph" placeholder="https://docs.google.com/spreadsheets/d/... 或 spreadsheet ID">
+    </div>
+    <div class="f-row">
+      <label>
+        <span data-i18n="modal.gsheets.creds_label">服务账号 JSON</span>
+        <span style="color:#ef4444"> *</span>
+      </label>
+      <textarea id="gsheets-creds" rows="6" data-i18n-ph="modal.gsheets.creds_ph" placeholder='粘贴服务账号 JSON 内容，例如：&#10;{"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}'></textarea>
+      <div class="f-hint" data-i18n="modal.gsheets.hint">需要 Google Service Account 凭证，并已将服务账号邮件加为表格协作者</div>
+    </div>
+    <div class="ds-loading" id="gsheets-loading" style="display:none">
+      <div class="ds-spinner"></div>
+      <span data-i18n="ds.connecting">正在连接并解析数据…</span>
+    </div>
+    <pre class="schema-box" id="gsheets-schema" style="display:none"></pre>
+    <div class="msg-err" id="gsheets-err"></div>
+    <div class="modal-footer">
+      <button class="btn-sm btn-sm-ghost" id="gsheets-cancel-btn" onclick="closeOverlay('ov-gsheets')" data-i18n="modal.cancel">取消</button>
+      <button class="btn-sm btn-sm-primary" id="gsheets-btn" onclick="connectGSheets()" data-i18n="modal.connect">连接</button>
+    </div>
+  </div>
+</div>
+
+<!-- Custom REST API connect -->
+<div class="overlay" id="ov-api" onclick="closeOutside(event,'ov-api')">
+  <div class="modal">
+    <div class="modal-title" data-i18n="modal.api.title">🔗 连接自定义 API</div>
+    <div class="msg-ok" id="api-status" style="display:none"></div>
+    <div class="f-row">
+      <label data-i18n="modal.api.name_label">显示名称（可选）</label>
+      <input type="text" id="api-name" data-i18n-ph="modal.api.name_ph" placeholder="例如：产品数据 API">
+    </div>
+    <div class="f-row">
+      <label>
+        <span data-i18n="modal.api.url_label">API URL</span>
+        <span style="color:#ef4444"> *</span>
+      </label>
+      <input type="text" id="api-url" data-i18n-ph="modal.api.url_ph" placeholder="https://api.example.com/data">
+    </div>
+    <div class="f-row">
+      <label data-i18n="modal.api.auth_label">认证方式</label>
+      <select id="api-auth-type" onchange="toggleApiAuthValue()">
+        <option value="none" data-i18n="modal.api.auth_none">无认证</option>
+        <option value="bearer" data-i18n="modal.api.auth_bearer">Bearer Token</option>
+        <option value="api_key" data-i18n="modal.api.auth_apikey">API Key (X-API-Key)</option>
+      </select>
+    </div>
+    <div class="f-row" id="api-auth-row" style="display:none">
+      <label data-i18n="modal.api.token_label">认证值</label>
+      <input type="password" id="api-auth-value" placeholder="Token / Key">
+    </div>
+    <div class="ds-loading" id="api-loading" style="display:none">
+      <div class="ds-spinner"></div>
+      <span data-i18n="ds.connecting">正在连接并解析数据…</span>
+    </div>
+    <pre class="schema-box" id="api-schema" style="display:none"></pre>
+    <div class="msg-err" id="api-err"></div>
+    <div class="modal-footer">
+      <button class="btn-sm btn-sm-ghost" id="api-cancel-btn" onclick="closeOverlay('ov-api')" data-i18n="modal.cancel">取消</button>
+      <button class="btn-sm btn-sm-primary" id="api-btn" onclick="connectAPI()" data-i18n="modal.connect">连接</button>
     </div>
   </div>
 </div>
@@ -264,6 +370,75 @@
   </div>
 </div>
 
+<!-- MCP Settings modal -->
+<div class="overlay" id="ov-mcp" onclick="closeOutside(event,'ov-mcp')">
+  <div class="modal" style="width:620px">
+    <div class="modal-title">🔌 MCP 工具服务器</div>
+
+    <!-- Server list -->
+    <div class="settings-sec">
+      <div class="settings-sec-title" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>已配置的服务器</span>
+        <span style="cursor:pointer;font-size:11px;color:#475569" onclick="loadMcpServers()">↻ 刷新</span>
+      </div>
+      <div id="mcp-server-list" style="display:flex;flex-direction:column;gap:6px;min-height:36px;">
+        <div style="font-size:12px;color:#64748b;padding:4px 0">加载中…</div>
+      </div>
+    </div>
+
+    <!-- Add server form -->
+    <div class="settings-sec">
+      <div class="add-custom-toggle" onclick="toggleMcpAddForm()" id="mcp-add-toggle">＋ 添加 MCP 服务器</div>
+      <div class="add-custom-form" id="mcp-add-form" style="display:none">
+        <div style="font-size:13px;font-weight:600;color:#1e293b;margin-bottom:4px" id="mcp-form-title">添加服务器</div>
+
+        <input type="text" id="mcp-label"   placeholder="服务器名称（显示用）">
+        <div id="mcp-id-row">
+          <input type="text" id="mcp-id"    placeholder="服务器 ID（字母/数字/下划线，唯一）" style="width:100%">
+        </div>
+        <input type="text" id="mcp-desc"    placeholder="描述（可选）">
+
+        <!-- Transport selector -->
+        <div style="display:flex;gap:16px;align-items:center;font-size:13px;color:#475569;padding:4px 0">
+          <label style="display:flex;align-items:center;gap:5px;cursor:pointer">
+            <input type="radio" name="mcp-transport" value="stdio" checked onchange="onMcpTransportChange()"> stdio（本地命令）
+          </label>
+          <label style="display:flex;align-items:center;gap:5px;cursor:pointer">
+            <input type="radio" name="mcp-transport" value="sse" onchange="onMcpTransportChange()"> SSE（远程 HTTP）
+          </label>
+        </div>
+
+        <!-- stdio fields -->
+        <div id="mcp-stdio-fields">
+          <div style="font-size:11px;color:#f59e0b;background:#fef3c7;border-radius:6px;padding:6px 10px;margin-bottom:6px">
+            ⚠️ 安全提示：仅允许运行 uvx / uv / npx / node / python / python3 / deno 命令。args 和 env 中不得含有 Shell 元字符或危险环境变量。
+          </div>
+          <input type="text" id="mcp-command" placeholder="命令，例如 npx 或 uvx">
+          <input type="text" id="mcp-args"    placeholder="参数（空格分隔），例如 -y @modelcontextprotocol/server-filesystem /tmp">
+          <input type="text" id="mcp-env"     placeholder="环境变量（KEY=VALUE，逗号分隔，可选）">
+        </div>
+
+        <!-- SSE fields -->
+        <div id="mcp-sse-fields" style="display:none">
+          <input type="text" id="mcp-url"     placeholder="SSE 端点 URL，例如 http://localhost:8000/sse">
+          <input type="text" id="mcp-headers" placeholder="HTTP 头（KEY:VALUE，逗号分隔，可选）">
+        </div>
+
+        <div class="msg-err" id="mcp-add-err"></div>
+        <div class="msg-ok"  id="mcp-add-ok"></div>
+        <div style="display:flex;gap:7px;justify-content:flex-end;">
+          <button class="btn-sm btn-sm-ghost"   onclick="toggleMcpAddForm()">取消</button>
+          <button class="btn-sm btn-sm-primary" onclick="addMcpServer()">保存并连接</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn-sm btn-sm-ghost" onclick="closeOverlay('ov-mcp')">关闭</button>
+    </div>
+  </div>
+</div>
+
 <!-- Update modal -->
 <div class="overlay" id="ov-update" onclick="closeOutside(event,'ov-update')">
   <div class="modal" style="width:540px">
@@ -291,6 +466,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
+<script src="{{ url_for('static', filename='js/mcp_settings.js') }}"></script>
 <script src="{{ url_for('static', filename='js/agent_chat.js') }}"></script>
 </body>
 </html>

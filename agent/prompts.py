@@ -277,4 +277,35 @@ COMMAND_HINTS: Dict[str, str] = {
         "Do NOT call generate_ppt. Do NOT call data tools unless the user asks for new data.\n"
         "Output NOTHING after the tool call."
     ),
+    "dashboard": (
+        "The user issued /dashboard. Goal: call propose_dashboard_outline — NEVER call generate_dashboard this turn.\n\n"
+        "IMPORTANT: This MUST be done in TWO SEPARATE turns. Do NOT call propose_dashboard_outline\n"
+        "in the same turn as data queries — you need the query results first!\n\n"
+        "Turn 1 — Gather data:\n"
+        "  Call get_schema ONCE to understand tables and column names.\n"
+        "  Run 2–5 exploratory queries to understand data shape, key metrics, and distributions.\n"
+        "  STOP after issuing these tool calls. Do NOT call propose_dashboard_outline yet.\n\n"
+        "Turn 2 — After receiving query results, design 2–6 dashboard widgets.\n"
+        "  Each widget MUST have a valid SQL query using ONLY real table/column names from the schema.\n"
+        "  NEVER fabricate column names or table names — only use what get_schema returned.\n"
+        "  Choose appropriate chart types:\n"
+        "    Bar_Chart / Line_Chart: for comparisons or trends (field_mapping: x, y)\n"
+        "    Grouped_Bar_Chart: for multi-series comparisons (field_mapping: x, y=[col1,col2,...])\n"
+        "    Stacked_Bar_Chart: for part-to-whole comparisons (field_mapping: x, y=[col1,col2,...])\n"
+        "    Pie_Chart: for proportions (field_mapping: label, value)\n"
+        "    Scatter_Plot: for correlations (field_mapping: x, y, [color])\n"
+        "    Area_Chart: for cumulative trends (field_mapping: x, y)\n"
+        "    Heatmap: for matrix/correlation data (field_mapping: x, y, value)\n"
+        "  Assign grid positions so widgets tile neatly (total width = 12 units):\n"
+        "    e.g. two widgets side-by-side: {x:0,y:0,w:6,h:4} and {x:6,y:0,w:6,h:4}\n"
+        "  Then call propose_dashboard_outline(name=..., widgets=[...]).\n"
+        "  Output NOTHING after the tool call — the UI handles user confirmation."
+    ),
+    "dashboard_revise": (
+        "The user wants to revise the dashboard outline. "
+        "The current widgets JSON is embedded as [CURRENT_DASHBOARD_JSON] in the user message. "
+        "Apply the requested changes and call propose_dashboard_outline with the updated params. "
+        "Do NOT call generate_dashboard. Do NOT call data tools unless the user asks for new data. "
+        "Output NOTHING after the tool call."
+    ),
 }

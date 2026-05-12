@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard — 智析Agent</title>
+
+<!-- ── CSS ── -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+
+<!-- ── JS ── -->
+<script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
+</head>
+<body>
+
+<!-- ── Top Nav ── -->
+<nav class="db-nav">
+  <button class="btn-back-nav" id="btn-back" title="返回">←</button>
+  <div class="nav-brand">
+    <span class="nav-brand-icon">📊</span>
+    <span>智析Agent</span>
+  </div>
+  <div class="nav-title" id="db-name">Dashboard</div>
+  <div class="nav-meta" id="db-meta"></div>
+  <div class="nav-actions">
+    <button class="btn-nav" id="btn-refresh">
+      <span id="refresh-icon">↻</span> 刷新数据
+    </button>
+    <button class="btn-nav primary" id="btn-save-layout" disabled>
+      💾 保存布局
+    </button>
+  </div>
+</nav>
+
+<!-- ── KPI Strip (可选) ── -->
+<div class="kpi-strip" id="kpi-strip"></div>
+
+<!-- ── Layout Canvas ── -->
+<div class="db-layout">
+  <div class="db-canvas">
+    <!-- Title bar -->
+    <div class="db-title-bar" id="db-title-bar" style="display:none;">
+      <div class="db-title-main" id="db-title-main"></div>
+      <div class="db-title-sub" id="db-title-sub"></div>
+      <div class="db-title-divider"></div>
+    </div>
+    <!-- Chart grid -->
+    <div class="db-grid-wrap" id="db-grid-wrap" style="display:none;">
+      <div class="grid-stack" id="grid"></div>
+    </div>
+    <!-- Empty state -->
+    <div class="db-empty" id="empty-state" style="display:none;">
+      <div class="db-empty-icon">📊</div>
+      <div class="db-empty-title">看板为空</div>
+      <div class="db-empty-desc">该看板没有任何图表组件</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Session-ID Modal ── -->
+<div class="modal-backdrop" id="sid-modal" style="display:none;">
+  <div class="modal-box">
+    <div class="modal-title">🔗 连接数据源</div>
+    <div class="modal-desc">
+      刷新看板需要一个有效的对话 Session ID（在聊天页面地址栏可找到），以便重新查询数据。
+    </div>
+    <input class="modal-input" id="sid-input" type="text" placeholder="输入 Session ID…">
+    <div class="modal-actions">
+      <button class="btn-modal" id="sid-cancel">取消</button>
+      <button class="btn-modal primary" id="sid-ok">确认</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Toast ── -->
+<div class="db-toast" id="db-toast"></div>
+
+<!-- ── Dashboard JS ── -->
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>

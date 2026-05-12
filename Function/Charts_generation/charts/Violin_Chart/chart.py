@@ -37,12 +37,9 @@ def _auto_col(df: pd.DataFrame, *hints: str) -> Optional[str]:
     3. 类型匹配：根据 hint 的语义推断类型
     4. 自动推断：无 hints 时返回第一个合适的列
     """
-    strs = [c for c in df.columns if pd.api.types.is_string_dtype(df[c])]
+    strs = [c for c in df.columns if df[c].dtype == object]
     nums = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
     col_lower = {c.lower(): c for c in df.columns}
-    
-    # 过滤掉 None 值
-    hints = [h for h in hints if h is not None]
     
     # 1. 精确匹配 hints
     for h in hints:

@@ -25,6 +25,7 @@ def _build_agent(sess) -> BusinessAgent:
         chart_store=chart_store,
         session_chart_ids=list(getattr(sess, "chart_ids", [])),
         color_scheme=getattr(sess, "ppt_color_scheme", "mckinsey"),
+        session_id=sess.session_id,
     )
 
 
@@ -103,6 +104,8 @@ def chat_stream(sid: str):
         excel_filename = d.get("excel_filename", "")
         report_title   = d.get("report_title", "")
         report_sections = d.get("report_sections") or []
+        dashboard_name    = d.get("dashboard_name", "")
+        dashboard_widgets = d.get("dashboard_widgets") or []
 
         try:
             for event in agent.run(
@@ -110,6 +113,7 @@ def chat_stream(sid: str):
                 ppt_title=ppt_title, ppt_slides=ppt_slides,
                 excel_tables=excel_tables, excel_filename=excel_filename,
                 report_title=report_title, report_sections=report_sections,
+                dashboard_name=dashboard_name, dashboard_widgets=dashboard_widgets,
             ):
 
                 # Check stop flag between every yielded event ────────────
