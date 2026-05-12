@@ -151,7 +151,18 @@ Business Analyst Agent 是一个对话式商业数据分析系统，目标是让
 | OpenAI | `gpt-4o-mini` |
 | Anthropic | `claude-3-5-haiku-20241022` |
 
-## 6️⃣ 报告生成功能
+## 6️⃣ 数据分析
+目前支持的数据分析功能：
+- 异常值处理（截尾、缩尾处理）
+- 十分位分组分析
+- K-Means聚类分析
+- 决策树建模
+
+![Analyze](Images/Analyze.png)
+
+---
+
+## 7️⃣ 报告生成功能
 支持导出：
 - 整理后的Excel表格
 - docx格式报告
