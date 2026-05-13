@@ -437,8 +437,10 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Sego
   background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin-top: 6px; }
 .add-custom-form.show { display: flex; }
 .add-custom-form input { background: #fff; border: 1px solid #e2e8f0; border-radius: 7px;
-  padding: 8px 11px; font-size: 13px; font-family: inherit; color: #1e293b; }
+  padding: 8px 11px; font-size: 13px; font-family: inherit; color: #1e293b;
+  width: 100%; min-width: 0; }
 .add-custom-form input:focus { outline: none; border-color: #3b82f6; }
+.add-custom-form input::placeholder { font-size: 12px; color: #94a3b8; }
 
 /* modal footer */
 .modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px;
@@ -608,4 +610,46 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Sego
   font-size: 12px; color: #92400e; background: #fffbeb;
   border: 1px solid #fde68a; border-radius: 8px;
   padding: 9px 13px; margin-bottom: 4px;
+}
+
+/* ── MCP settings modal ──────────────────────────────────────── */
+.mcp-modal {
+  width: 780px;
+  max-width: 96vw;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  overflow-y: hidden;
+}
+.mcp-modal .modal-title { flex-shrink: 0; }
+.mcp-modal .modal-footer { flex-shrink: 0; }
+.mcp-modal .mcp-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+.mcp-modal .add-custom-form {
+  padding: 16px;
+}
+.mcp-modal .add-custom-form input {
+  width: 100%;
+  min-width: 0;
+}
+.mcp-modal #mcp-stdio-fields,
+.mcp-modal #mcp-sse-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mcp-modal #mcp-sse-fields input {
+  width: 100%;
+  min-width: 0;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  padding: 8px 11px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #1e293b;
 }

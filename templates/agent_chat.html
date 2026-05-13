@@ -371,10 +371,11 @@
 </div>
 
 <!-- MCP Settings modal -->
-<div class="overlay" id="ov-mcp" onclick="closeOutside(event,'ov-mcp')">
-  <div class="modal" style="width:620px">
+<div class="overlay" id="ov-mcp">
+  <div class="modal mcp-modal">
     <div class="modal-title">🔌 MCP 工具服务器</div>
 
+    <div class="mcp-body">
     <!-- Server list -->
     <div class="settings-sec">
       <div class="settings-sec-title" style="display:flex;align-items:center;justify-content:space-between;">
@@ -409,8 +410,8 @@
         </div>
 
         <!-- stdio fields -->
-        <div id="mcp-stdio-fields">
-          <div style="font-size:11px;color:#f59e0b;background:#fef3c7;border-radius:6px;padding:6px 10px;margin-bottom:6px">
+        <div id="mcp-stdio-fields" style="display:flex;flex-direction:column;gap:8px">
+          <div style="font-size:11px;color:#f59e0b;background:#fef3c7;border-radius:6px;padding:6px 10px">
             ⚠️ 安全提示：仅允许运行 uvx / uv / npx / node / python / python3 / deno 命令。args 和 env 中不得含有 Shell 元字符或危险环境变量。
           </div>
           <input type="text" id="mcp-command" placeholder="命令，例如 npx 或 uvx">
@@ -419,9 +420,12 @@
         </div>
 
         <!-- SSE fields -->
-        <div id="mcp-sse-fields" style="display:none">
+        <div id="mcp-sse-fields" style="display:none;flex-direction:column;gap:8px">
           <input type="text" id="mcp-url"     placeholder="SSE 端点 URL，例如 http://localhost:8000/sse">
           <input type="text" id="mcp-headers" placeholder="HTTP 头（KEY:VALUE，逗号分隔，可选）">
+          <div class="f-hint" style="font-size:11px;color:#64748b;margin-top:-4px">
+            示例：Authorization:Bearer sk-xxx, X-Custom:value
+          </div>
         </div>
 
         <div class="msg-err" id="mcp-add-err"></div>
@@ -431,6 +435,7 @@
           <button class="btn-sm btn-sm-primary" onclick="addMcpServer()">保存并连接</button>
         </div>
       </div>
+    </div>
     </div>
 
     <div class="modal-footer">

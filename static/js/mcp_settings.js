@@ -68,8 +68,19 @@ function openMcpEditForm(server) {
 
 function onMcpTransportChange() {
   const transport = document.querySelector('input[name="mcp-transport"]:checked').value;
-  document.getElementById("mcp-stdio-fields").style.display = transport === "stdio" ? "flex" : "none";
-  document.getElementById("mcp-sse-fields").style.display   = transport === "sse"   ? "flex" : "none";
+  const stdioEl = document.getElementById("mcp-stdio-fields");
+  const sseEl   = document.getElementById("mcp-sse-fields");
+  if (transport === "stdio") {
+    stdioEl.style.display = "flex";
+    stdioEl.style.flexDirection = "column";
+    stdioEl.style.gap = "8px";
+    sseEl.style.display = "none";
+  } else {
+    stdioEl.style.display = "none";
+    sseEl.style.display = "flex";
+    sseEl.style.flexDirection = "column";
+    sseEl.style.gap = "8px";
+  }
 }
 
 /* ── list ─────────────────────────────────────────────────────── */
