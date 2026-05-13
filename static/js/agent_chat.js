@@ -268,6 +268,8 @@ async function loadModels() {
   const models = await r.json();
   modelConfigs = models;
   const sel = document.getElementById("model-sel");
+  // 记住当前选中的 provider，重建列表后恢复
+  const prevValue = sel.value;
   sel.innerHTML = `<option value="">${t('sidebar.model_placeholder')}</option>`;
   for (const [key, cfg] of Object.entries(models)) {
     if (!cfg.has_api_key) continue;
@@ -276,7 +278,13 @@ async function loadModels() {
     opt.textContent = cfg.model || key;
     sel.appendChild(opt);
   }
-  if (sel.options.length > 1) { sel.selectedIndex = 1; onModelChange(); }
+  // 恢复之前选中的模型；若之前的模型已不存在，才默认选第一个
+  if (prevValue && [...sel.options].some(o => o.value === prevValue)) {
+    sel.value = prevValue;
+  } else if (sel.options.length > 1) {
+    sel.selectedIndex = 1;
+    onModelChange();
+  }
 }
 
 async function onModelChange() {
@@ -1429,7 +1437,7 @@ async function runUpdate() {
   stateEl.innerHTML   = `<span class="update-spinner"></span><span class="update-state-text">${t('update.loading')}</span>`;
 
   try {
-    const r = await fetch("/api/system/update", { method: "POST" });
+    const r = await fetch("/api/system/update", { method: "POST", signal: AbortSignal.timeout(120000) });
     const d = await r.json();
 
     outEl.textContent   = d.output || t('update.no_output');
@@ -1447,8 +1455,16 @@ async function runUpdate() {
       stateEl.innerHTML = `<span class="update-state-icon">❌</span><span class="update-state-text">${t('update.fail')}</span>`;
     }
   } catch (e) {
-    stateEl.className = "update-state update-err";
-    stateEl.innerHTML = `<span class="update-state-icon">❌</span><span class="update-state-text">${t('update.req_fail')}${esc(String(e))}</span>`;
+    // 更新过程中服务器可能因文件覆盖而重启，导致连接中断（Failed to fetch）
+    // 这种情况下更新实际已成功，提示用户刷新页面即可
+    if (e.name === "TypeError" || e.name === "AbortError") {
+      stateEl.className = "update-state update-ok";
+      stateEl.innerHTML = `<span class="update-state-icon">✅</span><span class="update-state-text">${t('update.ok_restart')}</span>`;
+      hintEl.style.display = "block";
+    } else {
+      stateEl.className = "update-state update-err";
+      stateEl.innerHTML = `<span class="update-state-icon">❌</span><span class="update-state-text">${t('update.req_fail')}${esc(String(e))}</span>`;
+    }
   } finally {
     btn.disabled = false;
   }

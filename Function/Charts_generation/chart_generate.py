@@ -97,6 +97,22 @@ def generate_chart(
                 logger.error(f"Chart invalid: html length={html_len}, warnings={result.warnings}")
                 msg = result.warnings[0] if result.warnings else f"Generated chart is invalid (html={html_len} chars)"
                 return {"error": msg}
+        elif hasattr(result, "html") and hasattr(result, "warnings"):
+            # 模块自带 ChartResult 类（非 charts.base.ChartResult），duck-typing 兼容
+            html = result.html or ""
+            if html.strip() and len(html) > 500:
+                return {
+                    "success": True,
+                    "html": html,
+                    "chart_type": chart_type,
+                    "warnings": getattr(result, "warnings", []),
+                    "meta": getattr(result, "meta", {})
+                }
+            else:
+                html_len = len(html.strip())
+                ws = getattr(result, "warnings", [])
+                msg = ws[0] if ws else f"Generated chart is invalid (html={html_len} chars)"
+                return {"error": msg}
         elif isinstance(result, dict):
             if result.get("html"):
                 return {
