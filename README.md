@@ -188,7 +188,8 @@ Business Analyst Agent 是一个对话式商业数据分析系统，目标是让
 - 教程：[repository_tutorial](Information/repository_tutorial.md)
 ---
 
-# ⚙️安装方式
+
+# ⚙️ 安装方式
 
 ### 方式 1：安装包下载（推荐）
 
