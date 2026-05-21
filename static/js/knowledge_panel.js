@@ -29,6 +29,14 @@ function kbSwitchTab(tab, btn) {
   else if (tab === "import")  { kbResetImport(); kbLoadFiles(); }
 }
 
+// ── Refresh (manual) ──────────────────────────────────────────────────────────
+
+async function kbRefresh(type) {
+  if      (type === "metrics") await kbLoadMetrics();
+  else if (type === "rules")   await kbLoadRules();
+  else if (type === "notes")   await kbLoadNotes();
+}
+
 // ── Load lists ────────────────────────────────────────────────────────────────
 
 async function kbLoadMetrics() {
@@ -164,20 +172,9 @@ async function kbToggle(type, id) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "切换失败");
 
-    // Update the card in-place without full reload
-    const card = document.getElementById(`kbc-${type}-${id}`);
-    if (card) {
-      card.style.opacity = data.enabled ? "1" : "0.45";
-      const toggleEl = card.querySelector(".kb-toggle");
-      if (toggleEl) {
-        toggleEl.classList.toggle("on", !!data.enabled);
-        toggleEl.title = data.enabled ? "已启用，点击禁用" : "已禁用，点击启用";
-      }
-    }
-    // Refresh the count badge
-    if      (type === "metrics") kbLoadMetrics();
-    else if (type === "rules")   kbLoadRules();
-    else if (type === "notes")   kbLoadNotes();
+    if      (type === "metrics") await kbLoadMetrics();
+    else if (type === "rules")   await kbLoadRules();
+    else if (type === "notes")   await kbLoadNotes();
   } catch (e) {
     showToast(`切换失败: ${e.message}`);
   }
@@ -293,9 +290,9 @@ async function kbSubmitForm() {
     closeOverlay("ov-kb-form");
     showToast(id ? "已更新 ✓" : "已添加 ✓");
 
-    if      (type === "metrics") kbLoadMetrics();
-    else if (type === "rules")   kbLoadRules();
-    else if (type === "notes")   kbLoadNotes();
+    if      (type === "metrics") await kbLoadMetrics();
+    else if (type === "rules")   await kbLoadRules();
+    else if (type === "notes")   await kbLoadNotes();
   } catch (e) {
     errEl.textContent = `请求失败: ${e.message}`;
   }
@@ -306,11 +303,12 @@ async function kbSubmitForm() {
 async function kbDelete(type, id) {
   if (!confirm("确认删除这条记录？")) return;
   try {
-    await fetch(`/api/knowledge/${type}/${id}`, { method: "DELETE" });
+    const delRes = await fetch(`/api/knowledge/${type}/${id}`, { method: "DELETE" });
+    if (!delRes.ok) throw new Error("删除请求失败");
     showToast("已删除");
-    if      (type === "metrics") kbLoadMetrics();
-    else if (type === "rules")   kbLoadRules();
-    else if (type === "notes")   kbLoadNotes();
+    if      (type === "metrics") await kbLoadMetrics();
+    else if (type === "rules")   await kbLoadRules();
+    else if (type === "notes")   await kbLoadNotes();
   } catch (e) {
     showToast(`删除失败: ${e.message}`);
   }

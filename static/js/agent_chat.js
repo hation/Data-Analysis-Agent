@@ -7,6 +7,13 @@ const COMMANDS = [
   { cmd: "decile",    icon: "📉", descKey: "cmd.decile.desc",     groupKey: "group.analysis", available: true  },
   { cmd: "tree",      icon: "🌳", descKey: "cmd.tree.desc",       groupKey: "group.analysis", available: true  },
   { cmd: "kmeans",    icon: "🔵", descKey: "cmd.kmeans.desc",     groupKey: "group.analysis", available: true  },
+  { cmd: "logistic",   icon: "📈", descKey: "cmd.logistic.desc",   groupKey: "group.analysis", available: true  },
+  { cmd: "regression", icon: "📐", descKey: "cmd.regression.desc", groupKey: "group.analysis", available: true  },
+  { cmd: "arima",      icon: "〰️", descKey: "cmd.arima.desc",      groupKey: "group.analysis", available: true  },
+  { cmd: "sarima",     icon: "🌊", descKey: "cmd.sarima.desc",     groupKey: "group.analysis", available: true  },
+  { cmd: "var",        icon: "🔗", descKey: "cmd.var.desc",        groupKey: "group.analysis", available: true  },
+  { cmd: "prophet",    icon: "🔮", descKey: "cmd.prophet.desc",    groupKey: "group.analysis", available: true  },
+  { cmd: "gru",        icon: "🧠", descKey: "cmd.gru.desc",        groupKey: "group.analysis", available: true  },
   // Data cleaning
   { cmd: "data",      icon: "🔍", descKey: "cmd.data.desc",       groupKey: "group.clean",    available: true  },
   { cmd: "inset",     icon: "🩹", descKey: "cmd.inset.desc",      groupKey: "group.clean",    available: true  },
@@ -604,6 +611,9 @@ function setSrc(name, hintKey, connected) {
   srcName      = connected ? (name || "") : "";
   srcHintKey   = connected ? hintKey : 'sidebar.hint.noconn';
 
+  // Invalidate preview cache whenever data source changes
+  _invalidatePreviewCache();
+
   document.getElementById("src-dot").className = "source-dot" + (connected ? " on" : "");
   document.getElementById("src-name").textContent = connected ? name : t('sidebar.disconnected');
   document.getElementById("src-hint").textContent = t(hintKey);
@@ -794,28 +804,62 @@ async function connectAPI() {
 }
 
 let _previewData = null;
+let _previewCache = {};   // table_name → full row data (lazy loaded)
+let _previewSid  = null;  // SID for which cache is valid
 
 function openSchemaView() {
   openOverlay("ov-schema");
+  // If cache already populated for this session, render immediately — no fetch
+  if (_previewData && _previewSid === SID && _previewData.tables?.length) {
+    _renderPreviewTabs(_previewData.tables);
+    const first = _previewData.tables[0];
+    if (_previewCache[first.name]) {
+      _renderPreviewTable(_previewCache[first.name]);
+    } else {
+      _renderPreviewSkeleton(first);
+      _loadAndRenderTable(first);
+    }
+    return;
+  }
   _loadPreview();
+}
+
+function _invalidatePreviewCache() {
+  _previewData  = null;
+  _previewCache = {};
+  _previewSid   = null;
+}
+
+function _renderPreviewTabs(tables) {
+  const tabs  = document.getElementById("preview-tabs");
+  const title = document.getElementById("preview-title");
+  title.textContent = `${t('modal.preview.title')} · ${_previewData.source_name}`;
+  tabs.innerHTML = "";
+  tables.forEach((tb, i) => {
+    const tab = document.createElement("div");
+    tab.className = "preview-tab" + (i === 0 ? " active" : "");
+    const rowHint = tb.total_rows != null ? ` (${tb.total_rows.toLocaleString()} 行)` : "";
+    tab.textContent = tb.name + rowHint;
+    tab.onclick = () => _switchPreviewTab(i);
+    tabs.appendChild(tab);
+  });
 }
 
 async function _loadPreview() {
   const wrap  = document.getElementById("preview-table-wrap");
-  const tabs  = document.getElementById("preview-tabs");
   const foot  = document.getElementById("preview-footer");
-  const title = document.getElementById("preview-title");
   wrap.innerHTML   = `<div class="preview-loading">${t('preview.loading')}</div>`;
-  tabs.innerHTML   = "";
   foot.textContent = "";
+  _invalidatePreviewCache();
 
+  // Step 1: fetch metadata only (fast — no row data)
   const r = await fetch(`/api/session/${SID}/preview`);
   if (!r.ok) {
     wrap.innerHTML = `<div class="preview-loading" style="color:#ef4444">${t('preview.fail')}</div>`;
     return;
   }
   _previewData = await r.json();
-  title.textContent = `${t('modal.preview.title')} · ${_previewData.source_name}`;
+  _previewSid  = SID;  // mark cache as valid for this session
 
   const tables = _previewData.tables || [];
   if (!tables.length) {
@@ -823,34 +867,70 @@ async function _loadPreview() {
     return;
   }
 
-  tables.forEach((tb, i) => {
-    const tab = document.createElement("div");
-    tab.className = "preview-tab" + (i === 0 ? " active" : "");
-    tab.textContent = tb.name;
-    tab.onclick = () => _switchPreviewTab(i);
-    tabs.appendChild(tab);
-  });
+  // Render tabs immediately (no waiting for row data)
+  _renderPreviewTabs(tables);
 
-  _renderPreviewTable(tables[0]);
+  // Step 2: lazy-load the first table's rows
+  await _loadAndRenderTable(tables[0]);
 }
 
-function _switchPreviewTab(idx) {
+async function _switchPreviewTab(idx) {
   document.querySelectorAll(".preview-tab").forEach((tb, i) =>
     tb.classList.toggle("active", i === idx));
-  _renderPreviewTable(_previewData.tables[idx]);
+  const tb = _previewData.tables[idx];
+  await _loadAndRenderTable(tb);
+}
+
+async function _loadAndRenderTable(tableMeta) {
+  const wrap = document.getElementById("preview-table-wrap");
+  const foot = document.getElementById("preview-footer");
+  const name = tableMeta.name;
+
+  // Use cache if already loaded
+  if (_previewCache[name]) {
+    _renderPreviewTable(_previewCache[name]);
+    return;
+  }
+
+  // Show column skeleton while fetching rows
+  _renderPreviewSkeleton(tableMeta);
+
+  // Fetch row data on demand
+  const r = await fetch(`/api/session/${SID}/preview-table?table=${encodeURIComponent(name)}`);
+  if (!r.ok) {
+    wrap.innerHTML = `<div class="preview-loading" style="color:#ef4444">${t('preview.fail')}</div>`;
+    return;
+  }
+  const data = await r.json();
+  _previewCache[name] = data;
+  _renderPreviewTable(data);
+}
+
+function _renderPreviewSkeleton(tableMeta) {
+  const wrap = document.getElementById("preview-table-wrap");
+  const foot = document.getElementById("preview-footer");
+  // Show header columns immediately, loading placeholder for rows
+  let html = '<table class="preview-table"><thead><tr>';
+  html += '<th class="preview-rn">#</th>';
+  html += (tableMeta.columns || []).map(c => `<th title="${esc(c)}">${esc(c)}</th>`).join("");
+  html += '</tr></thead><tbody>';
+  html += `<tr><td colspan="${(tableMeta.columns || []).length + 1}" style="text-align:center;padding:20px;color:#999">${t('preview.loading')}</td></tr>`;
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+  foot.textContent = "";
 }
 
 function _renderPreviewTable(table) {
   const wrap = document.getElementById("preview-table-wrap");
   const foot = document.getElementById("preview-footer");
-  const shown = table.rows.length;
+  const shown = (table.rows || []).length;
   const total = table.total_rows ?? shown;
 
   let html = '<table class="preview-table"><thead><tr>';
   html += '<th class="preview-rn">#</th>';
-  html += table.columns.map(c => `<th title="${esc(c)}">${esc(c)}</th>`).join("");
+  html += (table.columns || []).map(c => `<th title="${esc(c)}">${esc(c)}</th>`).join("");
   html += "</tr></thead><tbody>";
-  table.rows.forEach((row, i) => {
+  (table.rows || []).forEach((row, i) => {
     html += `<tr><td class="preview-rn">${i + 1}</td>`;
     html += row.map(cell => {
       const s = esc(String(cell));
@@ -862,12 +942,22 @@ function _renderPreviewTable(table) {
   wrap.innerHTML = html;
 
   foot.textContent = total > shown
-    ? t('preview.rows_partial', { cols: table.columns.length, total: total.toLocaleString(), shown })
-    : t('preview.rows_all', { cols: table.columns.length, total: total.toLocaleString() });
+    ? t('preview.rows_partial', { cols: (table.columns || []).length, total: total.toLocaleString(), shown })
+    : t('preview.rows_all', { cols: (table.columns || []).length, total: total.toLocaleString() });
 }
 
 // ── Chat ───────────────────────────────────────────────────────────
-function newChat() {
+async function newChat() {
+  // 向后端申请全新 session，彻底隔离历史与数据
+  try {
+    const r = await fetch("/api/session/new", { method: "POST" });
+    const data = await r.json();
+    SID = data.session_id;
+    sessionStorage.setItem("baa_session_id", SID);
+  } catch (_) {
+    // 即使请求失败也继续清空界面，下次发消息时后端会重建
+  }
+  activeCommand = "";
   document.querySelectorAll(".msg, .sys-msg").forEach(el => el.remove());
   tokenState = { promptTokens: 0, totalInput: 0, totalOutput: 0, contextWindow: null };
   updateTokenBar();
@@ -982,30 +1072,35 @@ async function sendMessage() {
   }
 }
 
-function _tickFinishedSteps(stepsEl) {
-  stepsEl.querySelectorAll('.tool-step[data-finished]:not(.done)').forEach(s => {
+function _finishStep(s) {
+  if (s.classList.contains("tool-step-compaction")) {
+    s.classList.add("done-compaction");
+    const iconEl = s.querySelector(".compaction-spin");
+    if (iconEl) { iconEl.classList.remove("compaction-spin"); iconEl.textContent = "✦"; }
+  } else {
     s.classList.add("done");
     const spinEl = s.querySelector(".spin");
     if (spinEl) { spinEl.classList.remove("spin"); spinEl.textContent = "✓"; }
-  });
+  }
+}
+function _tickFinishedSteps(stepsEl) {
+  stepsEl.querySelectorAll('.tool-step[data-finished]:not(.done):not(.done-compaction)').forEach(_finishStep);
 }
 function _tickAllSteps(stepsEl) {
-  stepsEl.querySelectorAll(".tool-step:not(.done)").forEach(s => {
-    s.classList.add("done");
-    const spinEl = s.querySelector(".spin");
-    if (spinEl) { spinEl.classList.remove("spin"); spinEl.textContent = "✓"; }
-  });
+  stepsEl.querySelectorAll(".tool-step:not(.done):not(.done-compaction)").forEach(_finishStep);
 }
 
 function handleEvent(ev, stepsEl, bubbleEl, typing) {
   if (ev.type === "tool_start") {
     _tickFinishedSteps(stepsEl);
     const s = document.createElement("div");
-    s.className = "tool-step";
+    const isCompaction = ev.tool === "compaction";
+    s.className = isCompaction ? "tool-step tool-step-compaction" : "tool-step";
     const shortText = esc(ev.display);
     const fullText  = esc(ev.detail || ev.display);
-    const hasMore   = ev.detail && ev.detail !== ev.display;
-    s.innerHTML = `<span class="spin">⟳</span><span class="tool-step-text">${shortText}</span>${hasMore ? '<span class="tool-step-toggle">⋯</span>' : ''}`;
+    const hasMore   = !isCompaction && ev.detail && ev.detail !== ev.display;
+    const icon      = isCompaction ? `<span class="compaction-spin">⟳</span>` : `<span class="spin">⟳</span>`;
+    s.innerHTML = `${icon}<span class="tool-step-text">${shortText}</span>${hasMore ? '<span class="tool-step-toggle">⋯</span>' : ''}`;
     if (hasMore) {
       s.dataset.short = shortText;
       s.dataset.full  = fullText;
@@ -1020,7 +1115,15 @@ function handleEvent(ev, stepsEl, bubbleEl, typing) {
   }
   else if (ev.type === "tool_end") {
     const step = stepsEl.querySelector(".tool-step:not(.done):not([data-finished])");
-    if (step) step.dataset.finished = "1";
+    if (step) {
+      step.dataset.finished = "1";
+      // compaction step: swap icon to ✦ and use done-compaction style
+      if (step.classList.contains("tool-step-compaction")) {
+        step.classList.add("done-compaction");
+        const iconEl = step.querySelector(".compaction-spin");
+        if (iconEl) { iconEl.classList.remove("compaction-spin"); iconEl.textContent = "✦"; }
+      }
+    }
   }
   else if (ev.type === "chart_ref") {
     // chart_ref arrives after tool_end already ticked the generate_chart step;
@@ -1271,7 +1374,19 @@ function openOverlay(id) {
   if (id === "ov-db" || id === "ov-gsheets" || id === "ov-api") loadDatasourceConfigs();
 }
 function closeOverlay(id) { document.getElementById(id).classList.remove("open"); }
-function closeOutside(e, id) { if (e.target.id === id) closeOverlay(id); }
+
+// Prevent overlay from closing when the user drags a resize handle outside the modal.
+let _modalResizing = false;
+document.addEventListener("mousedown", e => {
+  if (e.target.closest && e.target.closest(".modal")) _modalResizing = true;
+});
+document.addEventListener("mouseup", () => {
+  setTimeout(() => { _modalResizing = false; }, 50);
+});
+function closeOutside(e, id) {
+  if (_modalResizing) return;
+  if (e.target.id === id) closeOverlay(id);
+}
 
 // ── Toast ──────────────────────────────────────────────────────────
 function toast(msg, type = "") {

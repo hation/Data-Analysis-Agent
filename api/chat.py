@@ -112,7 +112,7 @@ def chat_stream(sid: str):
         try:
             for event in agent.run(
                 message, list(sess.history), command=command,
-                last_reasoning=sess.last_reasoning,
+                last_reasoning=getattr(sess, "last_reasoning", ""),
                 ppt_title=ppt_title, ppt_slides=ppt_slides,
                 excel_tables=excel_tables, excel_filename=excel_filename,
                 report_title=report_title, report_sections=report_sections,

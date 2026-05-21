@@ -157,6 +157,7 @@ def generate(
 
     x_col = mapping.get("x") or x
     y_cols = mapping.get("y") or y
+    series_col = mapping.get("series") or mapping.get("color") or None
     title = options.get("title", title)
     color_scheme_name = options.get("color_scheme", "mckinsey")
 
@@ -168,6 +169,76 @@ def generate(
         y_cols = list(y_cols)
     elif not isinstance(y_cols, list):
         y_cols = [str(y_cols)]
+
+    # ── Series 分组模式（x=维度, y=数值, series=分组列）──────────────
+    if series_col and series_col in df.columns:
+        x_key = x_col if (x_col and x_col in df.columns) else _auto_col(df, x_col, "x")
+        y_key = (y_cols[0] if isinstance(y_cols, list) and y_cols else y_cols) if y_cols else None
+        if not y_key or y_key not in df.columns:
+            y_key = _auto_col(df, y_key or "y", "y")
+
+        if x_key and y_key and x_key in df.columns and y_key in df.columns:
+            # 判断是否为 ROC 模式（x/y 均为 [0,1] 范围内的浮点数值列）
+            x_numeric = pd.api.types.is_numeric_dtype(df[x_key])
+            y_numeric = pd.api.types.is_numeric_dtype(df[y_key])
+            is_roc_like = (
+                x_numeric and y_numeric
+                and df[x_key].dropna().between(0, 1).all()
+                and df[y_key].dropna().between(0, 1).all()
+                and "auc" in df.columns
+            )
+
+            colors = _get_colors_for_scheme(color_scheme_name, df[series_col].nunique() + 1)
+            fig = go.Figure()
+            for idx, (grp_val, grp_df) in enumerate(df.groupby(series_col, sort=True)):
+                grp_df = grp_df.sort_values(x_key)
+                color = colors[idx % len(colors)]
+                auc_str = ""
+                if is_roc_like and "auc" in grp_df.columns:
+                    auc_val = grp_df["auc"].iloc[0]
+                    auc_str = f" (AUC={auc_val:.4f})"
+                hover = (
+                    f"<b>{grp_val}{auc_str}</b><br>{x_key}: %{{x:.4f}}<br>{y_key}: %{{y:.4f}}<extra></extra>"
+                    if is_roc_like
+                    else f"<b>{grp_val}</b><br>{x_key}: %{{x}}<br>{y_key}: %{{y:,.2f}}<extra></extra>"
+                )
+                fig.add_trace(go.Scatter(
+                    x=grp_df[x_key],
+                    y=grp_df[y_key],
+                    mode="lines+markers" if not is_roc_like else "lines",
+                    name=f"{grp_val}{auc_str}",
+                    line=dict(color=color, width=2.5),
+                    marker=dict(size=5, color=color),
+                    hovertemplate=hover,
+                ))
+
+            xaxis_cfg = dict(title=x_key, showgrid=False,
+                             showline=True, linewidth=1.2, linecolor="#B0B0B0")
+            yaxis_cfg = dict(title=y_key,
+                             showgrid=True, gridcolor="#E6E6E6", gridwidth=1, showline=False)
+            if is_roc_like:
+                xaxis_cfg["range"] = [0, 1]
+                yaxis_cfg["range"] = [0, 1]
+                fig.add_shape(type="line", x0=0, y0=0, x1=1, y1=1,
+                              line=dict(color="#aaa", width=1.2, dash="dash"))
+
+            fig.update_layout(
+                title=dict(text=title, x=0.02, xanchor="left", font=dict(size=20, color="#1F1F1F")),
+                font=dict(family="Arial, Helvetica, sans-serif", size=12, color="#1F1F1F"),
+                paper_bgcolor="white", plot_bgcolor="white",
+                margin=dict(l=70, r=40, t=70, b=60),
+                xaxis=xaxis_cfg,
+                yaxis=yaxis_cfg,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                            xanchor="left", x=0, bgcolor="rgba(0,0,0,0)",
+                            borderwidth=0, font=dict(size=11)),
+                hovermode="x unified" if not is_roc_like else "closest",
+            )
+            chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+            html = _build_html(title, "line_chart", "plotly", _DATA_FMT, _DESC, chart_html)
+            return ChartResult(html=html, spec={}, warnings=warnings,
+                               meta={"chart_id": "line_chart", "n_rows": len(df),
+                                     "x_col": x_key, "y_cols": [y_key], "series_col": series_col})
 
     is_wide, id_col, value_cols = _detect_wide_format(df)
     strict_y = bool(options.get("strict_y", False))

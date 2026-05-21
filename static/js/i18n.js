@@ -35,7 +35,7 @@
       // ── Header ───────────────────────────────────────────────────
       'header.title': '💬 对话分析',
       'header.subtitle': '连接数据源开始分析',
-      'header.schema': '🗂 数据结构',
+      'header.schema': '数据预览',
       // ── Welcome ──────────────────────────────────────────────────
       'welcome.title': '开始您的数据分析',
       'welcome.desc': '连接数据库或上传 Excel，用自然语言提问，AI 会自动查询、分析并生成图表。<br>输入 <strong>/</strong> 可快速选择专属命令。',
@@ -80,7 +80,7 @@
       'modal.api.name_label': '显示名称（可选）',
       'modal.api.name_ph': '例如：业务数据 API',
       // ── Preview modal ────────────────────────────────────────────
-      'modal.preview.title': '🗂 数据预览',
+      'modal.preview.title': '数据预览',
       // ── Settings modal ───────────────────────────────────────────
       'modal.settings.title': '⚙ 模型设置',
       'modal.settings.builtin': '内置模型提供商',
@@ -196,6 +196,13 @@
       'cmd.decile.desc': '等频分桶 + Pareto 累计曲线',
       'cmd.tree.desc': 'ID3 / C4.5 / CART 分类模型 + ROC 曲线',
       'cmd.kmeans.desc': 'K-Means++ 无监督聚类 + 肘部法则',
+      'cmd.logistic.desc': '逻辑回归分类（OvR）+ 系数重要性 + ROC 曲线',
+      'cmd.regression.desc': 'OLS 线性回归 + 系数 t 检验 + 残差诊断',
+      'cmd.arima.desc':      'ARIMA 自回归差分移动平均 + AIC 自动选阶 + 预测区间',
+      'cmd.sarima.desc':     'SARIMA 季节性时间序列 + 自动周期检测 + 季节分解',
+      'cmd.var.desc':        'VAR 多变量联合预测 + 格兰杰因果检验',
+      'cmd.prophet.desc':    'Prophet 趋势 + 季节性加法分解 + 变点检测',
+      'cmd.gru.desc':        'GRU 门控循环网络预测 + MC Dropout 置信区间',
       'cmd.data.desc': '查看缺失值、分布、极值等统计信息',
       'cmd.inset.desc': '补 0 / 补均值 / 补中位数',
       'cmd.winsorize.desc': '按分位数截断极端值（如 1% ~ 99%）',
@@ -233,7 +240,7 @@
       // ── Header ───────────────────────────────────────────────────
       'header.title': '💬 Conversation',
       'header.subtitle': 'Connect a data source to start',
-      'header.schema': '🗂 Schema',
+      'header.schema': 'Data Preview',
       // ── Welcome ──────────────────────────────────────────────────
       'welcome.title': 'Start Your Data Analysis',
       'welcome.desc': 'Connect a database or upload Excel, ask in natural language, and AI will query, analyze, and generate charts.<br>Type <strong>/</strong> to browse commands.',
@@ -278,7 +285,7 @@
       'modal.api.name_label': 'Display name (optional)',
       'modal.api.name_ph': 'e.g. Business Data API',
       // ── Preview modal ────────────────────────────────────────────
-      'modal.preview.title': '🗂 Data Preview',
+      'modal.preview.title': 'Data Preview',
       // ── Settings modal ───────────────────────────────────────────
       'modal.settings.title': '⚙ Model Settings',
       'modal.settings.builtin': 'Built-in Providers',
@@ -394,6 +401,13 @@
       'cmd.decile.desc': 'Equal-frequency bucketing + Pareto curve',
       'cmd.tree.desc': 'ID3 / C4.5 / CART classifier + ROC curve',
       'cmd.kmeans.desc': 'K-Means++ unsupervised clustering + elbow method',
+      'cmd.logistic.desc': 'Logistic regression (OvR) + coefficient importance + ROC curve',
+      'cmd.regression.desc': 'OLS linear regression + t-test + residual diagnostics',
+      'cmd.arima.desc':      'ARIMA forecasting + auto order selection (AIC) + confidence interval',
+      'cmd.sarima.desc':     'SARIMA seasonal forecasting + auto period detection + decomposition',
+      'cmd.var.desc':        'VAR multivariate forecasting + Granger causality test',
+      'cmd.prophet.desc':    'Prophet trend + seasonality decomposition + changepoint detection',
+      'cmd.gru.desc':        'GRU deep learning forecast + MC Dropout confidence interval',
       'cmd.data.desc': 'Missing values, distributions, extremes',
       'cmd.inset.desc': 'Fill with zero / mean / median',
       'cmd.winsorize.desc': 'Clip extreme values by percentile (e.g. 1% ~ 99%)',

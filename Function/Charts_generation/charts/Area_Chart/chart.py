@@ -82,7 +82,7 @@ def _auto_col(df: pd.DataFrame, role: str, exclude: set = None) -> Optional[str]
     
     if role == "x":
         # x 优先查找时间/类别列
-        time_hints = ["date", "time", "month", "year", "week", "day", "period", "时间", "日期", "月份", "年份"]
+        time_hints = ["date","time","month","year","week","day","period","Week_Num","时间","日期","月份","年份","周","周数"]
         for hint in time_hints:
             if hint.lower() in col_lower:
                 return col_lower[hint.lower()]

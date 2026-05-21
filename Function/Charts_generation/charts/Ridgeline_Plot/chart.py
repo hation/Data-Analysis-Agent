@@ -35,24 +35,29 @@ def _auto_col(df: pd.DataFrame, *hints: str) -> Optional[str]:
     strs = [c for c in df.columns if pd.api.types.is_string_dtype(df[c])]
     nums = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
     col_lower = {c.lower(): c for c in df.columns}
-    
-    # 1. 精确匹配 hints
+
+    # 1. 精确匹配 hints（跳过 None）
     for h in hints:
+        if h is None:
+            continue
         h_lower = h.lower()
         if h_lower in col_lower:
             return col_lower[h_lower]
     
-    # 2. 模糊匹配（包含关系）
+    # 2. 模糊匹配（包含关系，跳过 None）
     for h in hints:
+        if h is None:
+            continue
         h_lower = h.lower()
         for col in df.columns:
             col_lower_name = col.lower()
             if h_lower in col_lower_name or col_lower_name in h_lower:
                 return col
-    
+
     # 3. 类型匹配
-    if hints:
-        hint = hints[0].lower()
+    non_none_hints = [h for h in hints if h is not None]
+    if non_none_hints:
+        hint = non_none_hints[0].lower()
         if any(kw in hint for kw in ["source", "target", "label", "name", "group", "category", "phase", "row", "col", "path", "text", "word", "location", "geo"]):
             if strs:
                 return strs[0]
@@ -74,8 +79,8 @@ def _auto_col(df: pd.DataFrame, *hints: str) -> Optional[str]:
             if strs:
                 return strs[0]
     
-    # 4. 无 hints 时自动推断
-    if not hints:
+    # 4. 无有效 hints 时自动推断
+    if not non_none_hints:
         if strs:
             return strs[0]
         if nums:
@@ -182,8 +187,9 @@ def generate(
         value_col = "value"
         warnings.append("检测到宽格式数据，已自动转换为长格式")
     else:
-        group_col = mapping.get("group") or group
-        value_col = mapping.get("value") or value
+        # 兼容 required_roles 为 group/value 或 x/y 两种写法
+        group_col = mapping.get("group") or mapping.get("x") or group
+        value_col = mapping.get("value") or mapping.get("y") or value
 
     title = options.get("title", title)
 

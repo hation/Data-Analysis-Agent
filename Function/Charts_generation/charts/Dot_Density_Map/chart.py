@@ -144,24 +144,27 @@ def generate(
     # ── 列识别 ────────────────────────────────────────────
     used: set = set()
 
-    # 识别市列
+    # 识别市列（模糊匹配，支持 city/城市/城市名/市/省市 等变体）
+    _city_keywords = ['市', 'city', '城市', '省市', '城市名', '所在市', 'prefecture']
     _city = None
     if city_hint and city_hint in df.columns:
         _city = city_hint
     else:
         for c in df.columns:
             c_lower = c.lower()
-            if c_lower in ['市', 'city', '城市', '省市']:
+            if any(kw in c_lower for kw in _city_keywords):
                 _city = c
                 break
 
+    # 若仍未找到，city 列可选——取第一个字符串列作为地区名即可，city 可为 None
     if _city:
         used.add(_city)
-    else:
-        return ChartResult(warnings=["找不到市列 [city]"])
 
     # 识别地区名列
     _label = lbl_hint if (lbl_hint and lbl_hint in df.columns) else _detect_label_col(df, used)
+    if _label is None and _city:
+        # 只有一个字符串列（city列），用它同时作为地区名列（全国地图散点）
+        _label = _city
     if _label:
         used.add(_label)
     else:
@@ -177,13 +180,22 @@ def generate(
     _value2 = _detect_value_col(df, used)  # 第二个数值列（可选）
 
     # ── 提取市名作为 maptype ──────────────────────────────
-    city_val = str(df[_city].iloc[0]).strip()
-    city_val = _fuzzy_match_region(city_val)
-    maptype = city_val[:-1] if city_val.endswith('市') else city_val
+    if _city and _city != _label:
+        # city列 与 label列 不同：city列是地图范围（如"武汉"→武汉市地图）
+        city_val = str(df[_city].iloc[0]).strip()
+        city_val = _fuzzy_match_region(city_val)
+        maptype = city_val[:-1] if city_val.endswith('市') else city_val
+    else:
+        # 没有独立city列，或city列即label列：退化为全国地图
+        maptype = "china"
 
-    # ── 构建散点数据 ────────────────────────────────────
-    scatter_data: list = []  # [(lng, lat, val1, name), ...]
+    # ── 构建散点数据（使用 pyecharts 内置坐标库 COORDINATES）──────
+    from pyecharts.datasets import COORDINATES
+
+    scatter_data: list = []   # [(name, val1), ...]
+    extra_coords: list = []  # [(name, lng, lat), ...] 需要手动注册坐标的点
     val1_list: list = []
+    missing_regions: list = []
 
     for _, row in df.iterrows():
         try:
@@ -191,19 +203,34 @@ def generate(
             name = _fuzzy_match_region(raw_name)
             val1 = round(float(row[_value1]), 2)
         except Exception as e:
-            warnings_.append(f"行解析失败 [{raw_name}]: {e}")
+            warnings_.append(f"行解析失败: {e}")
             continue
 
-        coord = _REGION_COORDS.get(name)
-        if not coord:
-            warnings_.append(f"无坐标: {name}")
+        # 查询 pyecharts 内置坐标库（COORDINATES 是 FuzzyDict，支持模糊匹配）
+        coord = COORDINATES.get(name)
+        if coord is None:
+            # 尝试去掉"区"/"县"/"市"后缀再查一次
+            for suffix in ['区', '县', '市', '镇']:
+                if name.endswith(suffix):
+                    alt = COORDINATES.get(name[:-1])
+                    if alt is not None:
+                        coord = alt
+                        # 用原始名字保留（不改名），注册坐标给 Geo
+                        extra_coords.append((name, coord[0], coord[1]))
+                        break
+        if coord is None:
+            missing_regions.append(name)
             continue
 
-        scatter_data.append((coord[0], coord[1], val1, name))
+        scatter_data.append((name, val1))
         val1_list.append(val1)
 
+    if missing_regions:
+        warnings_.append(f"以下地区未找到坐标（已跳过）: {', '.join(missing_regions[:10])}"
+                         + (f" 等{len(missing_regions)}处" if len(missing_regions) > 10 else ""))
+
     if not scatter_data:
-        return ChartResult(warnings=["没有有效数据点"])
+        return ChartResult(warnings=["没有有效数据点，请检查地区名是否在 pyecharts 坐标库中"])
 
     vmin1, vmax1 = min(val1_list), max(val1_list)
 
@@ -211,12 +238,13 @@ def generate(
     geo = Geo()
     geo.add_schema(maptype=maptype)
 
-    # 构建散点数据：[(name, val1), ...]
-    geo_data = [(name, val1) for _, _, val1, name in scatter_data]
+    # 注册 COORDINATES 中无法直接查到的坐标（如带后缀的区县名）
+    for ec_name, ec_lng, ec_lat in extra_coords:
+        geo.add_coordinate(ec_name, ec_lng, ec_lat)
 
     geo.add(
         series_name=_value1,
-        data_pair=geo_data,
+        data_pair=scatter_data,   # 已是 [(name, val1), ...] 格式
         type_="effectScatter",
         symbol_size=20,
         itemstyle_opts=opts.ItemStyleOpts(opacity=0.9),
@@ -245,7 +273,7 @@ def generate(
 
     raw_html = geo.render_embed()
 
-    sub_parts = [f"共 {len(scatter_data)} 个地区"]
+    sub_parts = [f"共 {len(scatter_data)} 个地区（maptype: {maptype}）"]
     sub_parts.append(f"字段: {_value1} · 范围: {vmin1:.2f} ~ {vmax1:.2f}")
     if _value2:
         sub_parts.append(f"附加: {_value2}")

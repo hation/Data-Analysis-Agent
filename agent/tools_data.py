@@ -144,12 +144,14 @@ class DataToolsMixin:
             extra_df = None
 
         try:
+            _out_tbls = entry.get("output_tables", [])
             self._write_analysis_df(result_df, "analysis_result")
             if not breakdown_df.empty:
                 self._write_analysis_df(breakdown_df, "analysis_breakdown")
-            if extra_df is not None and not extra_df.empty:
-                _out_tbls = entry.get("output_tables", [])
-                extra_table_name = _out_tbls[2] if len(_out_tbls) > 2 else "analysis_roc"
+            # Always write the third table so LLM SQL queries don't fail on missing table.
+            # Write an empty-but-structured DataFrame when the result is empty.
+            if extra_df is not None:
+                extra_table_name = _out_tbls[2] if len(_out_tbls) > 2 else "analysis_extra"
                 self._write_analysis_df(extra_df, extra_table_name)
         except Exception as exc:
             return (
@@ -160,6 +162,9 @@ class DataToolsMixin:
 
         if analysis_name == "K_Means" and "cluster" in breakdown_df.columns:
             markdown += self._kmeans_build_labeled(sql, breakdown_df)
+
+        if analysis_name == "Data_Decile_Analysis" and "decile" in result_df.columns:
+            markdown += self._decile_build_labeled(sql, target_column, n_deciles)
 
         return markdown
 
@@ -202,6 +207,89 @@ class DataToolsMixin:
         except Exception:
             return ""
 
+    def _decile_build_labeled(self, sql: str, target_column: str, n_deciles: int) -> str:
+        """回写十分位标签到原始数据，生成 decile_labels 表。"""
+        try:
+            labeled_sql = re.sub(
+                r"(?is)\bSELECT\b.+?\bFROM\b",
+                "SELECT *\nFROM",
+                sql,
+                count=1,
+            )
+            full_df, err = self.data_source.execute_query(labeled_sql)
+            if err or full_df.empty:
+                return ""
+
+            import pandas as pd
+            col = full_df[target_column]
+            # 用与 analyze.py 完全一致的逻辑重新打标签
+            raw_cut = pd.qcut(
+                pd.to_numeric(col, errors="coerce"),
+                q=n_deciles,
+                duplicates="drop",
+            )
+            ordered_cats = raw_cut.cat.categories
+            cat_to_int = {cat: i + 1 for i, cat in enumerate(ordered_cats)}
+            decile_int = raw_cut.map(cat_to_int)
+            actual_n = int(decile_int.nunique())
+
+            labeled_df = full_df.copy().reset_index(drop=True)
+            labeled_df["decile"] = decile_int.values
+            # 生成可读标签，如 "D01 (低)" / "D10 (高)"
+            width = len(str(actual_n))
+            def _label(d):
+                if pd.isna(d):
+                    return None
+                d = int(d)
+                if d == 1:
+                    suffix = "（最低）"
+                elif d == actual_n:
+                    suffix = "（最高）"
+                else:
+                    suffix = ""
+                return f"D{str(d).zfill(width)}{suffix}"
+            labeled_df["decile_label"] = labeled_df["decile"].map(_label)
+
+            self._write_analysis_df(labeled_df, "decile_labels")
+            self._schema_cache = None
+
+            cols_preview = ", ".join(str(c) for c in labeled_df.columns[:8])
+            if len(labeled_df.columns) > 8:
+                cols_preview += ", ..."
+            return (
+                "\n\n---\n"
+                "### 📌 数据标签表 `decile_labels`\n"
+                f"已将十分位标签（`decile` + `decile_label`）回写到原始数据，"
+                f"共 {len(labeled_df)} 行：\n\n"
+                f"**列：** `{cols_preview}`\n\n"
+                "可直接导出或用于进一步分析，例如：\n"
+                "```sql\n"
+                "-- 查看某分位的原始记录\n"
+                f"SELECT * FROM decile_labels WHERE decile = 10 LIMIT 20\n\n"
+                "-- 各分位均值汇总\n"
+                f"SELECT decile, decile_label, AVG({target_column}) AS avg_val\n"
+                "FROM decile_labels GROUP BY decile, decile_label ORDER BY decile\n"
+                "```"
+            )
+        except Exception:
+            return ""
+
+    # ── Chart selector ────────────────────────────────────────────────────────
+
+    def _tool_select_chart(self, user_intent: str, available_columns: list = None) -> str:
+        """Query the embedded chart registry and return ranked candidates with exact field_mapping specs."""
+        try:
+            from LLM.chart_selector import select_charts, format_selection_result
+            cols = list(available_columns or [])
+            # Auto-enrich with schema column names when the caller didn't supply them
+            if not cols and self.data_source:
+                schema = self._tool_get_schema()
+                cols = re.findall(r"^\s{2,4}(\w+)\b", schema, re.MULTILINE)
+            candidates = select_charts(user_intent, cols, top_n=3)
+            return format_selection_result(candidates)
+        except Exception as exc:
+            return f"Chart selection error: {exc}"
+
     # ── Chart tool ────────────────────────────────────────────────────────────
 
     def _tool_generate_chart(
@@ -234,11 +322,17 @@ class DataToolsMixin:
     def _discover_all_tables(self) -> list:
         if not self.data_source:
             return []
-        df, err = self.data_source.execute_query(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY rowid"
-        )
-        if not err and not df.empty:
-            return df["name"].tolist()
+        # Preferred: connector.list_tables() — returns ALL tables incl. runtime
+        # analysis/derived tables (DuckDB information_schema based).
+        list_fn = getattr(self.data_source, "list_tables", None)
+        if callable(list_fn):
+            try:
+                tables = list_fn()
+                if tables:
+                    return list(tables)
+            except Exception:
+                pass
+        # Fallback: parse the schema text (works for any connector).
         schema = self._tool_get_schema()
         return re.findall(r"^Table:\s+(\S+)", schema, re.MULTILINE)
 

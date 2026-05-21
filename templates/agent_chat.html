@@ -85,7 +85,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <span style="color:#f8f9f9;">v3.0 Author: Zafer_Liu</span>
+      <span style="color:#f8f9f9;">v4.0beta Author: Zafer_Liu</span>
       <div style="display:flex;gap:6px;align-items:center;">
         <button class="btn-lang" id="lang-toggle" onclick="setLang(getLang()==='zh'?'en':'zh')">EN</button>
         <button class="btn-update" onclick="openOverlay('ov-update')" data-i18n="sidebar.check_update">🔄 检查更新</button>
@@ -101,7 +101,7 @@
         <div class="chat-header-sub" id="hdr-sub" data-i18n="header.subtitle">连接数据源开始分析</div>
       </div>
       <div class="header-btns">
-        <button class="hdr-btn" id="btn-schema" style="display:none" onclick="openSchemaView()" data-i18n="header.schema">🗂 数据结构</button>
+        <button class="hdr-btn" id="btn-schema" style="display:none" onclick="openSchemaView()" data-i18n="header.schema"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" style="vertical-align:-2px;margin-right:4px" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="3" width="14" height="2.5" rx="1" fill="currentColor"/><rect x="1" y="7" width="14" height="2.5" rx="1" fill="currentColor" opacity=".7"/><rect x="1" y="11" width="9" height="2.5" rx="1" fill="currentColor" opacity=".45"/></svg>数据预览</button>
       </div>
     </div>
 
@@ -301,7 +301,7 @@
 <!-- Data preview modal -->
 <div class="overlay" id="ov-schema" onclick="closeOutside(event,'ov-schema')">
   <div class="modal preview-modal">
-    <div class="modal-title" id="preview-title" data-i18n="modal.preview.title">🗂 数据预览</div>
+    <div class="modal-title" id="preview-title" data-i18n="modal.preview.title">数据预览</div>
     <div class="preview-tabs" id="preview-tabs"></div>
     <div class="preview-table-wrap" id="preview-table-wrap">
       <div class="preview-loading" data-i18n="preview.loading">加载中…</div>
@@ -495,7 +495,10 @@
     <div class="kb-panel" id="kb-panel-metrics">
       <div class="kb-toolbar">
         <span class="kb-count" id="kb-metrics-count">—</span>
-        <button class="btn-sm btn-sm-primary" onclick="kbOpenForm('metrics')">＋ 新增指标</button>
+        <div style="display:flex;gap:6px">
+          <button class="btn-sm btn-sm-ghost" onclick="kbRefresh('metrics')" title="刷新列表">↻ 刷新</button>
+          <button class="btn-sm btn-sm-primary" onclick="kbOpenForm('metrics')">＋ 新增指标</button>
+        </div>
       </div>
       <div class="kb-list" id="kb-list-metrics">
         <div class="kb-empty">暂无指标定义</div>
@@ -506,7 +509,10 @@
     <div class="kb-panel" id="kb-panel-rules" style="display:none">
       <div class="kb-toolbar">
         <span class="kb-count" id="kb-rules-count">—</span>
-        <button class="btn-sm btn-sm-primary" onclick="kbOpenForm('rules')">＋ 新增规则</button>
+        <div style="display:flex;gap:6px">
+          <button class="btn-sm btn-sm-ghost" onclick="kbRefresh('rules')" title="刷新列表">↻ 刷新</button>
+          <button class="btn-sm btn-sm-primary" onclick="kbOpenForm('rules')">＋ 新增规则</button>
+        </div>
       </div>
       <div class="kb-list" id="kb-list-rules">
         <div class="kb-empty">暂无业务规则</div>
@@ -517,7 +523,10 @@
     <div class="kb-panel" id="kb-panel-notes" style="display:none">
       <div class="kb-toolbar">
         <span class="kb-count" id="kb-notes-count">—</span>
-        <button class="btn-sm btn-sm-primary" onclick="kbOpenForm('notes')">＋ 新增背景知识</button>
+        <div style="display:flex;gap:6px">
+          <button class="btn-sm btn-sm-ghost" onclick="kbRefresh('notes')" title="刷新列表">↻ 刷新</button>
+          <button class="btn-sm btn-sm-primary" onclick="kbOpenForm('notes')">＋ 新增背景知识</button>
+        </div>
       </div>
       <div class="kb-list" id="kb-list-notes">
         <div class="kb-empty">暂无背景知识</div>

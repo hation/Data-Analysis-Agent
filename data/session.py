@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """In-memory session management for the business analyst agent."""
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, MISSING
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -25,15 +25,19 @@ class ChatSession:
     ppt_color_scheme: str = "mckinsey"
     # TTL tracking — updated on every access
     last_accessed: datetime = field(default_factory=datetime.now)
+    # Last turn's reasoning chain summary — injected into the next turn's messages
+    last_reasoning: str = ""
 
     def add_user(self, text: str):
         self.history.append({"role": "user", "content": text})
 
-    def add_assistant(self, text: str):
+    def add_assistant(self, text: str, reasoning: str = ""):
         self.history.append({"role": "assistant", "content": text})
+        self.last_reasoning = reasoning
 
     def clear_history(self):
         self.history.clear()
+        self.last_reasoning = ""
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.last_prompt_tokens = 0
@@ -42,6 +46,19 @@ class ChatSession:
         self.total_input_tokens += prompt_tokens
         self.total_output_tokens += completion_tokens
         self.last_prompt_tokens = prompt_tokens
+
+    def _ensure_fields(self):
+        """Backfill any dataclass field missing on objects created by an
+        older code version (e.g. surviving a hot-reload). Keeps old in-memory
+        sessions usable after a field is added to ChatSession."""
+        for f in fields(self):
+            if not hasattr(self, f.name):
+                if f.default is not MISSING:
+                    setattr(self, f.name, f.default)
+                elif f.default_factory is not MISSING:  # type: ignore[misc]
+                    setattr(self, f.name, f.default_factory())
+                else:
+                    setattr(self, f.name, None)
 
 
 _SESSION_TTL = 7200      # seconds before an idle session is evicted
@@ -61,12 +78,14 @@ class SessionManager:
     def get(self, sid: str) -> Optional[ChatSession]:
         s = self._store.get(sid)
         if s:
+            s._ensure_fields()
             s.last_accessed = datetime.now()
         return s
 
     def get_or_create(self, sid: str) -> ChatSession:
         if sid and sid in self._store:
             s = self._store[sid]
+            s._ensure_fields()
             s.last_accessed = datetime.now()
             return s
         s = ChatSession(session_id=sid) if sid else ChatSession()

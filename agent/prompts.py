@@ -40,31 +40,20 @@ def _build_analyze_guide() -> str:
         return "  Data_Decile_Analysis — 十分位分析（Decile Analysis）"
 
 
-def _build_chart_guide() -> tuple:
-    """Return (system_prompt_guide, tool_type_list) built from the registry."""
+def _build_chart_ids() -> str:
+    """Return a comma-separated list of all chart_ids from the embedded selector registry."""
     try:
-        from charts.registry import REGISTRY
-        lines, ids = [], []
-        current_cat = ""
-        for c in REGISTRY:
-            if "ongoing" in c.name.lower():
-                continue
-            ids.append(c.chart_id)
-            if c.category != current_cat:
-                current_cat = c.category
-                lines.append(f"\n[{current_cat}]")
-            lines.append(f"  {c.chart_id:<35} → {c.desc[:80]}")
-        return "\n".join(lines), ", ".join(ids)
+        from LLM.chart_selector import _CHARTS
+        return ", ".join(c["chart_id"] for c in _CHARTS)
     except Exception:
-        fallback = (
+        return (
             "Bar_Chart, Line_Chart, Pie_Chart, Scatter_Plot, Area_Chart, "
             "Heatmap, Waterfall, Treemap, Sunburst_Diagram, Nightingale_Chart"
         )
-        return fallback, fallback
 
 
 _ANALYZE_GUIDE = _build_analyze_guide()
-_CHART_GUIDE, _CHART_IDS = _build_chart_guide()
+_CHART_IDS = _build_chart_ids()
 _KNOWLEDGE_SUMMARY = _build_knowledge_summary()
 
 
@@ -103,36 +92,28 @@ Behaviour rules:
    the SQL directly in generate_chart instead — avoid unnecessary extra round-trips.
 8. When the user invokes /analyze <AnalysisName>, use run_analysis with the named template.
    After run_analysis succeeds, ALWAYS generate at least one chart from the result tables.
-   Result tables (module-specific, check OUTPUT_TABLES in each module):
-     analysis_result    — primary summary table (always written)
-     analysis_breakdown — secondary per-sample or cross-tab table (if non-empty)
-     analysis_roc       — Decision_Tree only: ROC curve points (fpr/tpr/auc/class)
-     analysis_elbow     — K_Means only: elbow curve (k/inertia/silhouette)
-   Recommended charts per analysis:
-     - Data_Decile_Analysis:
-         Bar_Chart(analysis_result, x=decile, y=sum) + Line_Chart(x=decile, y=cumulative_pct)
-     - Decision_Tree:
-         Bar_Chart(analysis_result, x=feature, y=importance_pct)       — feature importance
-         Heatmap(analysis_breakdown, x=predicted, y=actual, z=count)   — confusion matrix
-         Line_Chart(analysis_roc, x=fpr, y=tpr, series=class)          — ROC curve
-     - K_Means:
-         Bar_Chart(analysis_result, x=cluster, y=count)                — cluster sizes
-         Scatter_Plot(analysis_breakdown, x=<feat1>, y=<feat2>, color=cluster) — cluster view
-         Line_Chart(analysis_elbow, x=k, y=inertia)                    — elbow curve
-         cluster_labels — ALL original columns + cluster label; use for any follow-up
-           analysis, e.g. GROUP BY cluster, filter by cluster, join with other tables
+   Result tables written after run_analysis (always available for query/chart):
+     analysis_result    — primary summary table
+     analysis_breakdown — secondary detail table
+     analysis_metrics   — model fit metrics
+     analysis_roc       — ROC curve (Decision_Tree / Logistic_Regression only)
+     analysis_elbow     — elbow curve (K_Means only)
+   Chart instructions for each analysis type are provided in the active command hint.
 
-Complete chart type list (use the exact chart_id shown):
-{_CHART_GUIDE}
+Chart generation workflow — MANDATORY STEPS (do NOT skip):
+1. Call select_chart(user_intent=<what the user wants to visualize>, available_columns=[...])
+   → This queries the registry and returns the EXACT chart_id and required field_mapping keys.
+   → Do NOT guess the chart type. Do NOT skip this step.
+   → Exception: you MAY skip select_chart ONLY when re-generating a chart type you already
+     confirmed in the same conversation turn (e.g. repeating the exact same chart after a fix).
+2. Call query_data to verify actual column names match what the chart requires.
+3. Call generate_chart using the chart_id and field_mapping keys returned by select_chart.
 
-field_mapping key rules (use the required_roles from each chart's description):
-- Most charts: x/y for axes, series for grouping
-- Pie/Nightingale: label+value or names+values
-- Treemap/Sunburst: labels+values (+ optional parents)
-- Sankey/Chord/Arc: source+target+value (or x+y+z)
-- Distribution charts (Box, Violin, Beeswarm, Ridgeline): y (+ optional x for grouping)
-- Parallel coordinates: dimensions (list of column names) + optional color
-- Geographic charts: label+value (+ optional category)
+field_mapping rules — CRITICAL:
+- Use EXACTLY the required_roles keys returned by select_chart as your field_mapping keys.
+- y can be a list of column names for multi-series: {{"x":"month","y":["rev","cost"]}}
+- Parallel coordinates: dimensions must be a list: {{"dimensions":["col1","col2","col3"]}}
+- If a required role column is missing from the SQL result, the chart will fail — ensure SQL SELECTs all needed columns.
 
 9. OUTPUT TOOLS — SLASH COMMANDS ONLY (STRICT):
    propose_ppt_outline, generate_ppt, propose_report_outline, export_report,
@@ -219,6 +200,158 @@ COMMAND_HINTS: Dict[str, str] = {
         "   SELECT cluster, AVG(revenue) FROM cluster_labels GROUP BY cluster\n"
         "8. Conclude with a 2-4 sentence business interpretation."
     ),
+    "regression": (
+        "The user issued the /regression command for Linear Regression analysis.\n"
+        "Workflow:\n"
+        "1. Call get_schema ONCE.\n"
+        "2. target_column = the continuous numeric column to predict.\n"
+        "3. groupby_column = ridge regularization lambda as a string (e.g. '0' for plain OLS, '0.1' for ridge; default '0').\n"
+        "4. n_deciles = polynomial degree (1=linear, 2=quadratic, etc.; default 1; pass 0 for default).\n"
+        "5. Call run_analysis(analysis_name='Regression', sql=..., target_column=..., "
+        "groupby_column=<lambda_str>, n_deciles=<degree>).\n"
+        "   SQL: SELECT <feature_cols>, <target_col> FROM <table>\n"
+        "   Include numeric and/or categorical feature columns; preprocessing is automatic.\n"
+        "6. Generate ALL THREE charts:\n"
+        "   a) Bar_Chart(analysis_result): x=feature, y=coefficient  — regression coefficients\n"
+        "      Exclude the (intercept) row for cleaner visuals: WHERE feature != '(intercept)'\n"
+        "   b) Scatter_Plot(analysis_breakdown): x=y_pred, y=std_residual  — residual diagnostics\n"
+        "      A good model has residuals randomly scattered around 0; patterns suggest non-linearity.\n"
+        "   c) Display analysis_metrics table (R²/RMSE/MAE for train vs test) as a formatted table.\n"
+        "7. Conclude with a 2-4 sentence business interpretation covering model fit (R²), "
+        "top significant predictors (p<0.05), and any multicollinearity warnings (VIF>10)."
+    ),
+    "arima": (
+        "The user issued the /arima command for ARIMA time series forecasting.\n"
+        "⚠️ CRITICAL: You MUST call run_analysis with analysis_name='Time_Series_ARIMA'. "
+        "Do NOT use Prophet, SARIMA, or any other model. ARIMA only.\n"
+        "Workflow:\n"
+        "1. Call get_schema ONCE. Identify the time column and the numeric target column.\n"
+        "2. groupby_column = the time column name (e.g. 'date'), OR a manual order string 'p,d,q' (e.g. '2,1,1').\n"
+        "   If not sure, leave groupby_column empty — the model will auto-detect the time column and select orders via AIC.\n"
+        "3. n_deciles = forecast horizon (number of future steps; default 12).\n"
+        "4. Call run_analysis(analysis_name='Time_Series_ARIMA', sql=..., target_column=..., "
+        "groupby_column=<time_col_or_order>, n_deciles=<steps>).\n"
+        "   SQL: SELECT <time_col>, <value_col> FROM <table> ORDER BY <time_col>\n"
+        "5. Generate ALL THREE outputs:\n"
+        "   a) Line_Chart(analysis_result): x=ds — TWO y-series in ONE chart:\n"
+        "      SQL: SELECT ds, y_actual, y_pred FROM analysis_result\n"
+        "      field_mapping: {\"x\":\"ds\",\"y\":[\"y_actual\",\"y_pred\"]}\n"
+        "      ⚠️ Do NOT filter by segment. Do NOT split into two separate queries.\n"
+        "      The chart will show historical actuals (y_actual) and the full forecast line (y_pred) together.\n"
+        "   b) Scatter_Plot(analysis_breakdown): x=row_num, y=std_residual — residual diagnostics\n"
+        "      analysis_breakdown has columns: ds, row_num (integer), residual, std_residual.\n"
+        "      Use row_num as x — Scatter_Plot requires a numeric x column; ds is a string and will fail.\n"
+        "      Randomly scattered residuals around 0 indicate a good fit.\n"
+        "   c) Display analysis_metrics table (AIC/BIC/MAE/RMSE) as a formatted table.\n"
+        "6. Conclude with a 2-4 sentence interpretation: trend direction, forecast confidence, and model order chosen."
+    ),
+    "sarima": (
+        "The user issued the /sarima command for SARIMA seasonal time series forecasting.\n"
+        "⚠️ CRITICAL: You MUST call run_analysis with analysis_name='Time_Series_SARIMA'. "
+        "Do NOT use ARIMA, Prophet, or any other model. SARIMA only.\n"
+        "Workflow:\n"
+        "1. Call get_schema ONCE. Identify the time column and numeric target column.\n"
+        "2. groupby_column = time column name, OR a numeric string for the seasonal period (e.g. '12' for monthly, '4' for quarterly, '7' for daily-weekly).\n"
+        "   Leave empty for automatic detection.\n"
+        "3. n_deciles = forecast horizon (default 12).\n"
+        "4. Call run_analysis(analysis_name='Time_Series_SARIMA', sql=..., target_column=..., "
+        "groupby_column=<time_col_or_period>, n_deciles=<steps>).\n"
+        "   SQL: SELECT <time_col>, <value_col> FROM <table> ORDER BY <time_col>\n"
+        "5. Generate ALL THREE outputs:\n"
+        "   a) Line_Chart(analysis_result): x=ds — TWO y-series in ONE chart:\n"
+        "      SQL: SELECT ds, y_actual, y_pred FROM analysis_result\n"
+        "      field_mapping: {\"x\":\"ds\",\"y\":[\"y_actual\",\"y_pred\"]}\n"
+        "      ⚠️ Do NOT filter by segment. Do NOT split into two separate queries.\n"
+        "   b) Line_Chart(analysis_breakdown): x=ds, y=trend — trend component\n"
+        "      Also plot seasonal column to visualize seasonality.\n"
+        "   c) Display analysis_metrics table (AIC/BIC/MAE/RMSE/seasonal period) as a table.\n"
+        "6. Conclude with trend direction, detected seasonality pattern, and forecast summary."
+    ),
+    "var": (
+        "The user issued the /var command for VAR (Vector Autoregression) multivariate forecasting.\n"
+        "Workflow:\n"
+        "1. Call get_schema ONCE. Identify the time column and at least 2 numeric columns.\n"
+        "2. target_column = the primary variable to forecast.\n"
+        "3. groupby_column = time column name; OR comma-separated variable names to include (e.g. 'sales,cost,profit').\n"
+        "   If groupby_column contains commas, those columns are used as the VAR variables.\n"
+        "4. n_deciles = forecast horizon (default 6).\n"
+        "5. Call run_analysis(analysis_name='Time_Series_VAR', sql=..., target_column=..., "
+        "groupby_column=<time_col_or_cols>, n_deciles=<steps>).\n"
+        "   SQL: SELECT <time_col>, <col1>, <col2>[, <col3>...] FROM <table> ORDER BY <time_col>\n"
+        "6. Generate ALL THREE outputs:\n"
+        "   a) Line_Chart(analysis_result): x=ds, y=<target>_pred — primary variable forecast\n"
+        "   b) Heatmap(analysis_breakdown): x=effect, y=cause, z=f_stat — Granger causality heatmap\n"
+        "      Highlight significant cells (p_value < 0.05).\n"
+        "   c) Display analysis_metrics table (VAR lag, AIC/BIC, per-variable MAE) as a table.\n"
+        "7. Conclude with key Granger causal relationships and forecast direction for the target variable."
+    ),
+    "prophet": (
+        "The user issued the /prophet command for Prophet-style additive time series decomposition.\n"
+        "⚠️ CRITICAL: You MUST call run_analysis with analysis_name='Time_Series_Prophet'. "
+        "Do NOT use ARIMA, SARIMA, or any other model. Prophet only.\n"
+        "Workflow:\n"
+        "1. Call get_schema ONCE. Identify the time column and numeric target column.\n"
+        "2. groupby_column = time column name (auto-detected if empty).\n"
+        "3. n_deciles = forecast horizon (default 30, suitable for daily data).\n"
+        "4. Call run_analysis(analysis_name='Time_Series_Prophet', sql=..., target_column=..., "
+        "groupby_column=<time_col>, n_deciles=<steps>).\n"
+        "   SQL: SELECT <time_col>, <value_col> FROM <table> ORDER BY <time_col>\n"
+        "5. Generate ALL THREE outputs:\n"
+        "   a) Line_Chart(analysis_result): x=ds — TWO y-series in ONE chart:\n"
+        "      SQL: SELECT ds, y_actual, y_pred FROM analysis_result\n"
+        "      field_mapping: {\"x\":\"ds\",\"y\":[\"y_actual\",\"y_pred\"]}\n"
+        "      ⚠️ Do NOT filter by segment. Do NOT split into two separate queries.\n"
+        "      The chart shows historical actuals (y_actual) overlaid with the full forecast line (y_pred).\n"
+        "   b) Line_Chart(analysis_breakdown): x=ds, y=trend — pure trend line\n"
+        "      If yearly column is non-zero, also plot yearly seasonality.\n"
+        "   c) Display analysis_metrics table (R²/MAE/RMSE, active changepoints) as a table.\n"
+        "6. Conclude with trend direction, seasonal pattern strength, and changepoint highlights."
+    ),
+    "gru": (
+        "The user issued the /gru command for GRU (Gated Recurrent Unit) deep learning time series forecasting.\n"
+        "⚠️ CRITICAL: You MUST call run_analysis with analysis_name='Time_Series_GRU'. "
+        "Do NOT use Prophet, ARIMA, SARIMA, or any other model under ANY circumstances. GRU only.\n"
+        "⚠️ CRITICAL: Do NOT do manual analysis, do NOT call query_data for EDA, do NOT generate charts "
+        "before run_analysis. Your ONLY job is to call run_analysis immediately after get_schema.\n"
+        "⚠️ CRITICAL: If the data has fewer than 14 rows, still call run_analysis — let the model "
+        "return an error message. Do NOT fall back to manual analysis or a different model.\n"
+        "Note: GRU is implemented from scratch in pure numpy — no keras/tensorflow required.\n"
+        "Workflow:\n"
+        "1. Call get_schema ONCE. Identify the time column and numeric target column.\n"
+        "2. groupby_column = time column name (auto-detected if empty).\n"
+        "3. n_deciles = forecast horizon (default 12).\n"
+        "4. Call run_analysis(analysis_name='Time_Series_GRU', sql=..., target_column=..., "
+        "groupby_column=<time_col>, n_deciles=<steps>) — do this immediately, no EDA first.\n"
+        "   SQL: SELECT <time_col>, <value_col> FROM <table> ORDER BY <time_col>\n"
+        "   NOTE: GRU training may take 10-30 seconds for large datasets — this is expected.\n"
+        "5. Generate ALL THREE outputs:\n"
+        "   a) Line_Chart(analysis_result): x=ds — TWO y-series in ONE chart:\n"
+        "      SQL: SELECT ds, y_actual, y_pred FROM analysis_result\n"
+        "      field_mapping: {\"x\":\"ds\",\"y\":[\"y_actual\",\"y_pred\"]}\n"
+        "      ⚠️ Do NOT filter by segment. Do NOT split into two separate queries.\n"
+        "   b) Line_Chart(analysis_breakdown): x=epoch, y=train_loss — training loss curve\n"
+        "      A smoothly decreasing curve indicates successful training.\n"
+        "   c) Display analysis_metrics table (R²/MAE/RMSE/final loss) as a table.\n"
+        "6. Conclude with forecast trend, model convergence quality, and uncertainty interpretation."
+    ),
+    "logistic": (
+        "The user issued the /logistic command for Logistic Regression analysis.\n"
+        "Workflow:\n"
+        "1. Call get_schema ONCE.\n"
+        "2. target_column = the classification label column (binary or multi-class).\n"
+        "3. groupby_column = L2 regularization lambda as a string (e.g. '0.01'; default '0.01').\n"
+        "4. n_deciles = max training iterations (default 1000; pass 0 for default).\n"
+        "5. Call run_analysis(analysis_name='Logistic_Regression', sql=..., target_column=..., "
+        "groupby_column=<lambda_str>, n_deciles=<max_iter>).\n"
+        "   SQL: SELECT <feature_cols>, <target_col> FROM <table>\n"
+        "   Include both numeric and categorical feature columns; preprocessing is automatic.\n"
+        "6. Generate ALL THREE charts:\n"
+        "   a) Bar_Chart(analysis_result): x=feature, y=importance_pct  — feature importance\n"
+        "   b) Heatmap(analysis_breakdown): x=predicted, y=actual, z=count  — confusion matrix\n"
+        "   c) Line_Chart(analysis_roc): x=fpr, y=tpr, series=class  — ROC curve\n"
+        "      Include AUC values in the chart title.\n"
+        "7. Conclude with a 2-4 sentence business interpretation covering top predictors and model fit."
+    ),
     "data": (
         "The user issued the /data command to profile their data.\n"
         "Call profile_data immediately as your FIRST and ONLY tool call.\n"
@@ -258,10 +391,24 @@ COMMAND_HINTS: Dict[str, str] = {
     ),
     "export": (
         "The user issued the /export command to export data to Excel.\n"
-        "Call propose_excel_export — NEVER export_excel this turn.\n"
-        "Call propose_excel_export(tables=[\"*\"], summary=<one-line description>) immediately.\n"
-        "Only pass specific table names if the user explicitly asked for them.\n"
-        "Output NOTHING after the tool call — the UI handles confirmation."
+        "Goal: call propose_excel_export — NEVER export_excel this turn.\n\n"
+        "STEP 1 — Check what the user wants to export:\n"
+        "  • If they just want the raw/current data → skip to STEP 3.\n"
+        "  • If they ask for LABELS, analysis results, derived/cross-tab tables, or any\n"
+        "    table that does NOT yet exist in the data source (e.g. '带标签', '十分位标签',\n"
+        "    '聚类结果', '分组汇总', 'with labels') → you MUST create those tables FIRST.\n\n"
+        "STEP 2 — Generate the missing tables (only if STEP 1 requires it):\n"
+        "  • Call get_schema to see existing tables.\n"
+        "  • For label tables: run the relevant run_analysis (Data_Decile_Analysis writes\n"
+        "    'decile_labels'; K_Means writes 'cluster_labels'), OR use create_analysis_table\n"
+        "    with SQL that joins/derives the labelled columns.\n"
+        "  • Verify the new table exists before continuing. Do this in the SAME turn.\n\n"
+        "STEP 3 — Propose the export:\n"
+        "  Call propose_excel_export(tables=[\"*\"], summary=<one-line description>).\n"
+        "  tables=[\"*\"] exports EVERY table currently in the data source — so any label\n"
+        "  table you created in STEP 2 will be included automatically.\n"
+        "  Only pass specific table names if the user explicitly named the tables.\n"
+        "  Output NOTHING after propose_excel_export — the UI handles confirmation."
     ),
     "excel_revise": (
         "The user wants to revise the Excel export plan. "

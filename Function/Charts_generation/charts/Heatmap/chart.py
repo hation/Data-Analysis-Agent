@@ -169,9 +169,11 @@ def generate(
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
 
-    row_col = mapping.get("row") or row
-    col_col = mapping.get("col") or col
-    val_col = mapping.get("value") or value
+    # Support both (row/col/value) and (x/y/z) mapping keys.
+    # y → row axis (True Label), x → col axis (Predicted Label), z → value.
+    row_col = mapping.get("row") or mapping.get("y") or row
+    col_col = mapping.get("col") or mapping.get("x") or col
+    val_col = mapping.get("value") or mapping.get("z") or value
     title = options.get("title", title)
 
     # ── 检测并转换宽格式数据 ──────────────────────────────
@@ -195,10 +197,14 @@ def generate(
         ))
         
         fig.update_layout(
-            title=title,
-            font_family="Heiti SC, Microsoft YaHei, sans-serif",
-            margin=dict(l=40, r=40, t=60, b=40),
-            height=500
+            title=dict(text=title, x=0.02, xanchor="left", font=dict(size=18, color="#1F1F1F")),
+            font=dict(family="Arial, Helvetica, sans-serif", size=12, color="#1F1F1F"),
+            xaxis_title=col_col,
+            yaxis_title=row_col,
+            margin=dict(l=80, r=40, t=70, b=70),
+            height=500,
+            paper_bgcolor="white",
+            plot_bgcolor="white",
         )
     else:
         # 长格式数据：正常处理
@@ -214,24 +220,53 @@ def generate(
             return ChartResult(warnings=warnings)
 
         # 转换为透视表（矩阵）
-        pivot_df = df.pivot_table(values=_val, index=_row, columns=_col, aggfunc='first')
-        
+        pivot_df = df.pivot_table(
+            values=_val, index=_row, columns=_col,
+            aggfunc='sum', fill_value=0
+        )
+        pivot_df.columns = [str(c) for c in pivot_df.columns]
+        pivot_df.index   = [str(i) for i in pivot_df.index]
+
+        # 坐标轴标签：直接用实际列名
+        x_label = _col
+        y_label = _row
+
+        z_vals = pivot_df.values.tolist()
+        y_vals = pivot_df.index.tolist()
+        x_vals = pivot_df.columns.tolist()
+
+        # 数值显示格式：整数用 %{text:.0f}，小数用 %{text:.2f}，自动判断
+        import numpy as _np
+        _flat = [v for row_ in z_vals for v in row_ if v is not None]
+        _all_int = all(float(v) == int(v) for v in _flat) if _flat else True
+        _texttemplate = "%{text:.0f}" if _all_int else "%{text:.2f}"
+
         fig = go.Figure(data=go.Heatmap(
-            z=pivot_df.values,
-            y=pivot_df.index.tolist(),
-            x=pivot_df.columns.tolist(),
+            z=z_vals,
+            y=y_vals,
+            x=x_vals,
             colorscale="Blues",
-            text=pivot_df.values,
-            texttemplate="%{text:.2f}",
-            textfont={"size": 10},
-            hovertemplate="行: %{y}<br>列: %{x}<br>值: %{z:.2f}<extra></extra>"
+            text=z_vals,
+            texttemplate=_texttemplate,
+            textfont={"size": 11},
+            hovertemplate=f"{y_label}: %{{y}}<br>{x_label}: %{{x}}<br>值: %{{z:.3g}}<extra></extra>"
         ))
-        
+
         fig.update_layout(
-            title=title,
-            font_family="Heiti SC, Microsoft YaHei, sans-serif",
-            margin=dict(l=40, r=40, t=60, b=40),
-            height=500
+            title=dict(text=title, x=0.02, xanchor="left", font=dict(size=18, color="#1F1F1F")),
+            font=dict(family="Arial, Helvetica, sans-serif", size=12, color="#1F1F1F"),
+            xaxis=dict(
+                title=x_label,
+                side="bottom",
+            ),
+            yaxis=dict(
+                title=y_label,
+                autorange="reversed",
+            ),
+            margin=dict(l=80, r=40, t=70, b=70),
+            height=500,
+            paper_bgcolor="white",
+            plot_bgcolor="white",
         )
 
     chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")

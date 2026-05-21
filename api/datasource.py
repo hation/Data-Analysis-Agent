@@ -110,11 +110,26 @@ def connect_db(sid: str):
 
 @bp.get("/api/session/<sid>/preview")
 def preview_data(sid: str):
+    """Return table metadata only (name / columns / total_rows). No row data — fast."""
     sess = session_manager.get(sid)
     if not sess or not sess.data_source:
         return jsonify({"error": "no data source"}), 404
     tables = sess.data_source.get_preview()
     return jsonify({"source_name": sess.data_source.name, "tables": tables})
+
+
+@bp.get("/api/session/<sid>/preview-table")
+def preview_table(sid: str):
+    """Return row data for a single table, fetched on demand by the frontend."""
+    from flask import request as _req
+    sess = session_manager.get(sid)
+    if not sess or not sess.data_source:
+        return jsonify({"error": "no data source"}), 404
+    table_name = _req.args.get("table", "")
+    if not table_name:
+        return jsonify({"error": "missing table parameter"}), 400
+    data = sess.data_source.get_preview_table(table_name, max_rows=100)
+    return jsonify(data)
 
 
 @bp.delete("/api/session/<sid>/datasource")

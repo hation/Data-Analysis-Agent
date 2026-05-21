@@ -77,7 +77,7 @@ def _auto_col(df: pd.DataFrame, role: str, exclude: set = None) -> Optional[str]
             if role == "y" and len(nums) > 1:
                 return nums[1]
             return nums[0]
-        if objs:
+        if role != "size" and objs:   # size 必须是数值列，不回退到字符串列
             return objs[0]
     elif role == "color":
         if objs:
@@ -212,10 +212,17 @@ def generate(
     if _color:
         exclude_set.add(_color)
 
-    # 数据验证
+    # 数据验证 — 先直接转，失败后去除百分号/货币符号再转
+    def _to_numeric_col(series):
+        converted = pd.to_numeric(series, errors="coerce")
+        if converted.isna().all():
+            cleaned = series.astype(str).str.strip().str.replace(r'[%￥$,，]', '', regex=True)
+            converted = pd.to_numeric(cleaned, errors="coerce")
+        return converted
+
     try:
-        df[_x] = pd.to_numeric(df[_x], errors="coerce")
-        df[_y] = pd.to_numeric(df[_y], errors="coerce")
+        df[_x] = _to_numeric_col(df[_x])
+        df[_y] = _to_numeric_col(df[_y])
         if df[_x].isna().all() or df[_y].isna().all():
             return ChartResult(warnings=["x或y列包含非数值数据"])
     except Exception as e:
@@ -276,10 +283,10 @@ def generate(
                 # 构建悬停文本
                 hover_texts = []
                 for i, (gx, gy) in enumerate(zip(group_x, group_y)):
-                    hover_text = f"<b>{_x}</b>: {gx:.2f}<br>"
-                    hover_text += f"<b>{_y}</b>: {gy:.2f}<br>"
+                    hover_text = f"<b>{_x}</b>: {float(gx):.2f}<br>"
+                    hover_text += f"<b>{_y}</b>: {float(gy):.2f}<br>"
                     if _size:
-                        hover_text += f"<b>{_size}</b>: {df_plot[_size].values[mask][i]:.2f}<br>"
+                        hover_text += f"<b>{_size}</b>: {float(df_plot[_size].values[mask][i]):.2f}<br>"
                     hover_text += f"<b>{_color}</b>: {group}"
                     hover_texts.append(hover_text)
                 
@@ -302,10 +309,10 @@ def generate(
             # 无分组，单色散点
             hover_texts = []
             for i, (gx, gy) in enumerate(zip(x_data, y_data)):
-                hover_text = f"<b>{_x}</b>: {gx:.2f}<br>"
-                hover_text += f"<b>{_y}</b>: {gy:.2f}<br>"
+                hover_text = f"<b>{_x}</b>: {float(gx):.2f}<br>"
+                hover_text += f"<b>{_y}</b>: {float(gy):.2f}<br>"
                 if _size:
-                    hover_text += f"<b>{_size}</b>: {df_plot[_size].values[i]:.2f}"
+                    hover_text += f"<b>{_size}</b>: {float(df_plot[_size].values[i]):.2f}"
                 hover_texts.append(hover_text)
             
             fig.add_trace(go.Scatter(

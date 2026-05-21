@@ -15,9 +15,16 @@ _ANALYZE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # analysis_id → subdirectory name (may contain hyphens)
 _REGISTRY_MAP: Dict[str, str] = {
-    "Data_Decile_Analysis": "Data_Decile_Analysis",
-    "Decision_Tree":        "Decision_Tree",
-    "K_Means":              "K-Means",
+    "Data_Decile_Analysis":  "Data_Decile_Analysis",
+    "Decision_Tree":         "Decision_Tree",
+    "K_Means":               "K-Means",
+    "Logistic_Regression":   "Logistic_Regression",
+    "Regression":            "Regression",
+    "Time_Series_ARIMA":     "Time_Series_ARIMA",
+    "Time_Series_SARIMA":    "Time_Series_SARIMA",
+    "Time_Series_VAR":       "Time_Series_VAR",
+    "Time_Series_Prophet":   "Time_Series_Prophet",
+    "Time_Series_GRU":       "Time_Series_GRU",
 }
 
 

@@ -277,6 +277,10 @@ class SSETransport(BaseTransport):
 # ── Connection layer ───────────────────────────────────────────────────────────
 
 class MCPServerConnection:
+    # Max consecutive reconnect attempts before giving up until next explicit connect
+    _MAX_RECONNECT_ATTEMPTS = 3
+    _RECONNECT_BASE_WAIT = 1.0  # seconds, doubled each attempt
+
     def __init__(self, config):
         self._config = config
         self.status: str = STATUS_DISCONNECTED
@@ -284,6 +288,8 @@ class MCPServerConnection:
         self._transport: Optional[BaseTransport] = None
         self._tools_cache: List[dict] = []
         self._openai_schemas: List[dict] = []
+        self._reconnect_attempts: int = 0
+        self._last_reconnect_at: float = 0.0
 
     @property
     def server_id(self) -> str:
@@ -305,6 +311,7 @@ class MCPServerConnection:
                 mcp_tool_to_openai_schema(self.server_id, t) for t in raw_tools
             ]
             self.status = STATUS_CONNECTED
+            self._reconnect_attempts = 0  # reset on successful connect
             log.info("[mcp] %s connected, %d tools", self.server_id, len(raw_tools))
             return True
         except Exception as e:
@@ -319,6 +326,36 @@ class MCPServerConnection:
                 self._transport = None
             return False
 
+    async def _reconnect(self) -> bool:
+        """Attempt a single reconnect with exponential backoff tracking."""
+        if self._reconnect_attempts >= self._MAX_RECONNECT_ATTEMPTS:
+            log.warning(
+                "[mcp] %s max reconnect attempts (%d) reached, giving up",
+                self.server_id, self._MAX_RECONNECT_ATTEMPTS,
+            )
+            return False
+
+        wait = self._RECONNECT_BASE_WAIT * (2 ** self._reconnect_attempts)
+        self._reconnect_attempts += 1
+        self._last_reconnect_at = time.monotonic()
+        log.info(
+            "[mcp] %s reconnecting (attempt %d/%d) after %.1fs...",
+            self.server_id, self._reconnect_attempts,
+            self._MAX_RECONNECT_ATTEMPTS, wait,
+        )
+        await asyncio.sleep(wait)
+
+        # Tear down stale transport before reconnecting
+        if self._transport:
+            try:
+                await self._transport.close()
+            except Exception:
+                pass
+            self._transport = None
+        self.status = STATUS_DISCONNECTED
+
+        return await self.connect()
+
     def _build_transport(self) -> BaseTransport:
         cfg = self._config
         if cfg.transport == "stdio":
@@ -329,8 +366,14 @@ class MCPServerConnection:
             raise ValueError(f"未知 transport: {cfg.transport}")
 
     async def call_tool(self, tool_name: str, args: dict) -> str:
+        # Auto-reconnect if not connected
         if self.status != STATUS_CONNECTED or not self._transport:
-            return format_mcp_error(self.server_id, tool_name, "服务器未连接")
+            log.info("[mcp] %s not connected (status=%s), attempting reconnect before call",
+                     self.server_id, self.status)
+            reconnected = await self._reconnect()
+            if not reconnected:
+                return format_mcp_error(self.server_id, tool_name,
+                                        f"服务器未连接且重连失败: {self.last_error}")
 
         # find original tool schema for validation
         raw_schema = next(
@@ -358,6 +401,43 @@ class MCPServerConnection:
                 parts = [c.get("text", "") for c in content if c.get("type") == "text"]
                 return "\n".join(parts) if parts else str(result)
             return str(result)
+        except (ConnectionError, RuntimeError, OSError) as e:
+            # Transport-level failure — mark disconnected and try once more
+            log.warning("[mcp] %s transport error during call: %s — attempting reconnect",
+                        self.server_id, e)
+            self.status = STATUS_ERROR
+            self.last_error = str(e)
+            if self._transport:
+                try:
+                    await self._transport.close()
+                except Exception:
+                    pass
+                self._transport = None
+
+            reconnected = await self._reconnect()
+            if not reconnected:
+                return format_mcp_error(self.server_id, tool_name,
+                                        f"调用时连接断开且重连失败: {self.last_error}")
+            # Single retry after successful reconnect
+            try:
+                result = await self._transport.send_request("tools/call", {
+                    "name": tool_name,
+                    "arguments": args,
+                })
+                if isinstance(result, dict):
+                    if result.get("isError"):
+                        content = result.get("content", [])
+                        err_text = " ".join(
+                            c.get("text", "") for c in content if c.get("type") == "text"
+                        )
+                        return format_mcp_error(self.server_id, tool_name, err_text or "工具返回错误")
+                    content = result.get("content", [])
+                    parts = [c.get("text", "") for c in content if c.get("type") == "text"]
+                    return "\n".join(parts) if parts else str(result)
+                return str(result)
+            except Exception as retry_exc:
+                return format_mcp_error(self.server_id, tool_name,
+                                        f"重连后重试仍失败: {retry_exc}")
         except Exception as e:
             return format_mcp_error(self.server_id, tool_name, str(e))
 
@@ -442,6 +522,8 @@ class MCPManager:
         if not conn:
             return {"server_id": server_id, "status": STATUS_ERROR,
                     "last_error": "服务器未注册", "tool_count": 0}
+        # Explicit connect resets the reconnect counter so auto-reconnect can retry
+        conn._reconnect_attempts = 0
         try:
             self._submit(conn.connect(), timeout=60)
         except Exception as e:

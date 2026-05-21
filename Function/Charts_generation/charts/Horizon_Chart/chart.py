@@ -140,15 +140,20 @@ def generate(
         df = df.melt(
             id_vars=[id_col],
             value_vars=value_cols,
-            var_name="year",
+            var_name="_x_label",
             value_name="value"
         ).rename(columns={id_col: "_series"})
 
-        df["year"] = pd.to_numeric(df["year"], errors="coerce").round().astype("Int64")
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        df = df.dropna(subset=["year", "value"]).sort_values(["_series", "year"])
 
-        x_col = "year"
+        # 尝试把列名转为数值（年份场景）；若全部失败则保留列名字符串作为 x 轴标签
+        x_as_num = pd.to_numeric(df["_x_label"], errors="coerce")
+        if x_as_num.notna().mean() > 0.8:
+            df["_x_label"] = x_as_num.round().astype("Int64")
+
+        df = df.dropna(subset=["value"]).sort_values(["_series", "_x_label"])
+
+        x_col = "_x_label"
         y_cols = ["value"]
         series_col = "_series"
         warnings.append("检测到宽格式数据，已自动转换")

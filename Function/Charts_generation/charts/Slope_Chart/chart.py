@@ -152,14 +152,37 @@ def generate(
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
 
-    group_col = mapping.get("group") or group
-    start_col = mapping.get("start") or start
-    end_col = mapping.get("end") or end
     title = options.get("title", title)
 
-    _group = _auto_col(df, group_col, "group", "国家", "产品", "name", "category")
-    _start = _auto_col(df, start_col, "start", "2010", "起点", "value")
-    _end = _auto_col(df, end_col, "end", "2020", "终点", "value")
+    # Support x/y mapping (LLM typically sends x=group, y=[start,end])
+    x_col = mapping.get("x")
+    y_cols = mapping.get("y") or mapping.get("y_cols")
+    if isinstance(y_cols, str):
+        y_cols = [y_cols]
+
+    if x_col and y_cols and len(y_cols) >= 2:
+        group_col = x_col
+        start_col = y_cols[0]
+        end_col = y_cols[1]
+    else:
+        group_col = mapping.get("group") or group
+        start_col = mapping.get("start") or start
+        end_col = mapping.get("end") or end
+
+    def _resolve(col_name: str, role: str, exclude: set = None) -> Optional[str]:
+        exclude = exclude or set()
+        if col_name and col_name in df.columns and col_name not in exclude:
+            return col_name
+        nums = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c not in exclude]
+        strs = [c for c in df.columns if df[c].dtype == object and c not in exclude]
+        if role == "group":
+            return strs[0] if strs else (nums[0] if nums else None)
+        else:
+            return nums[0] if nums else None
+
+    _group = _resolve(group_col, "group")
+    _start = _resolve(start_col, "start", exclude={_group} if _group else set())
+    _end   = _resolve(end_col, "end", exclude={_group, _start} - {None})
 
     for role, col_ in [("group", _group), ("start", _start), ("end", _end)]:
         if col_ is None or col_ not in df.columns:
@@ -185,7 +208,7 @@ def generate(
         color = _MCKINSEY_COLORS[3] if change >= 0 else _MCKINSEY_COLORS[6]
         
         fig.add_trace(go.Scatter(
-            x=["起点", "终点"],
+            x=[_start, _end],
             y=[row[_start], row[_end]],
             mode="lines+markers+text",
             text=[str(row[_group]), f"{change:+.1f}"],
@@ -201,12 +224,11 @@ def generate(
                 f"变化: {change:+.2f}<extra></extra>"
             ),
             showlegend=False,
-            **kwargs
         ))
     
     fig.update_xaxes(
         type="category",
-        tickvals=["起点", "终点"],
+        tickvals=[_start, _end],
         tickfont=dict(size=13, color="#333"),
         showgrid=False,
         showline=True,

@@ -11,15 +11,85 @@ The heavy lifting is split across:
 import json
 import logging
 import time
-from typing import Iterator, List, Dict, Any, Optional
+from typing import Iterator, List, Dict, Any, Optional, Tuple
 
 from .prompts      import get_system_prompt, COMMAND_HINTS
 from .tools_schema import AGENT_TOOLS, get_tools_with_mcp
 from .tools_data   import DataToolsMixin
 from .tools_export import ExportToolsMixin
 from .mcp_manager  import get_mcp_manager
+from .compaction   import should_compact_history, compact_history
 
 log = logging.getLogger(__name__)
+
+# ── Retry helper ──────────────────────────────────────────────────────────────
+
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+def _is_retryable(exc: Exception) -> Tuple[bool, float]:
+    """Return (should_retry, wait_seconds). Inspects status code when available."""
+    msg = str(exc).lower()
+    # Rate limit: respect Retry-After if present
+    if "429" in msg or "rate limit" in msg or "too many requests" in msg:
+        return True, 5.0
+    # Transient server errors
+    for code in ("500", "502", "503", "504"):
+        if code in msg:
+            return True, 3.0
+    # Connection / timeout
+    if any(k in msg for k in ("timeout", "connection", "network", "timed out")):
+        return True, 2.0
+    return False, 0.0
+
+
+def _call_with_retry(fn, *args, max_retries: int = 3, **kwargs):
+    """Call fn(*args, **kwargs) with exponential backoff on transient errors."""
+    attempt = 0
+    while True:
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            retryable, base_wait = _is_retryable(exc)
+            attempt += 1
+            if not retryable or attempt > max_retries:
+                raise
+            wait = base_wait * (2 ** (attempt - 1))
+            log.warning("[retry] attempt %d/%d failed (%s), waiting %.1fs", attempt, max_retries, exc, wait)
+            time.sleep(wait)
+
+
+_SQL_TOOLS = {"create_analysis_table", "query_data", "generate_chart", "run_analysis"}
+_SQL_BLOCKED_WRITES = ("drop ", "delete ", "truncate ", "insert ", "update ", "alter ", "create table", "create index")
+
+def _validate_tool_args(name: str, args: Dict[str, Any]) -> Optional[str]:
+    """Return an error string if args are obviously invalid, else None."""
+    if name in _SQL_TOOLS:
+        sql = args.get("sql", "").strip().lower()
+        if not sql:
+            return f"'{name}' requires a non-empty 'sql' argument."
+        if not sql.startswith("select") and not sql.startswith("with"):
+            return f"'{name}' only accepts SELECT/WITH queries. Got: {sql[:60]}"
+        for kw in _SQL_BLOCKED_WRITES:
+            if kw in sql:
+                return f"'{name}' blocked: write keyword '{kw.strip()}' detected in SQL."
+
+    if name == "run_analysis":
+        if not args.get("analysis_name"):
+            return "'run_analysis' requires 'analysis_name'."
+        if not args.get("target_column"):
+            return "'run_analysis' requires 'target_column'."
+
+    if name in ("propose_ppt_outline", "generate_ppt"):
+        slides = args.get("slides")
+        if slides is not None and not isinstance(slides, list):
+            return f"'{name}': 'slides' must be a list."
+
+    if name in ("propose_dashboard_outline", "generate_dashboard"):
+        widgets = args.get("widgets")
+        if widgets is not None and not isinstance(widgets, list):
+            return f"'{name}': 'widgets' must be a list."
+
+    return None
 
 
 _PROPOSE_CMDS = (
@@ -30,6 +100,11 @@ _PROPOSE_CMDS = (
 
 class BusinessAgent(DataToolsMixin, ExportToolsMixin):
     MAX_ITERATIONS = 100
+
+    # Approximate chars-per-token ratio for fast estimation (conservative)
+    _CHARS_PER_TOKEN = 3.5
+    # Reserve headroom for the response + tools list
+    _CONTEXT_RESERVE = 12000
 
     def __init__(
         self,
@@ -54,6 +129,62 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         self.ppt_color_scheme: str = color_scheme
         self._session_id: str = session_id
         self._mcp_manager = get_mcp_manager()
+
+    # ── Context helpers ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        return max(1, int(len(text) / BusinessAgent._CHARS_PER_TOKEN))
+
+    def _estimate_messages_tokens(self, messages: List[Dict]) -> int:
+        total = 0
+        for m in messages:
+            content = m.get("content") or ""
+            if isinstance(content, list):
+                content = " ".join(str(c) for c in content)
+            total += self._estimate_tokens(str(content))
+            # tool_calls entries add overhead
+            if m.get("tool_calls"):
+                total += self._estimate_tokens(json.dumps(m["tool_calls"]))
+        return total
+
+    def _hard_prune(
+        self, system_msgs: List[Dict], history: List[Dict], extra_msgs: List[Dict], context_window: int
+    ) -> List[Dict]:
+        """Hard truncation safety net: drop oldest messages until tokens fit."""
+        budget = context_window - self._CONTEXT_RESERVE
+        fixed_tokens = self._estimate_messages_tokens(system_msgs + extra_msgs)
+        available = budget - fixed_tokens
+
+        pruned = list(history)
+        before = len(pruned)
+        while pruned and self._estimate_messages_tokens(pruned) > available:
+            pruned.pop(0)
+
+        if len(pruned) < before:
+            log.info(
+                "[context] hard-pruned %d→%d turns (budget=%d tokens)",
+                before, len(pruned), available,
+            )
+        return pruned
+
+    def _get_context_window(self) -> int:
+        """Best-effort context window for the current model."""
+        model = self.model.lower()
+        if "claude" in model:
+            return 190000
+        if "deepseek" in model:
+            return 60000
+        if "gpt-4o" in model:
+            return 120000
+        if "gpt-4" in model:
+            return 120000
+        return 60000  # safe default
+
+    def _adaptive_thinking_budget(self, remaining_tokens: int) -> int:
+        """Scale thinking budget so it never exceeds ~40% of what's left."""
+        cap = int(remaining_tokens * 0.4)
+        return max(1000, min(self.thinking_budget, cap))
 
     def set_data_source(self, source):
         self.data_source = source
@@ -160,7 +291,8 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
 
         prior_reasoning_msg: List[Dict] = []
         if last_reasoning:
-            summary = last_reasoning[:1500]  # cap to avoid ballooning context
+            # Truncate reasoning to a reasonable cap but keep it meaningful
+            summary = last_reasoning[:2000]
             prior_reasoning_msg = [{
                 "role": "system",
                 "content": (
@@ -170,21 +302,73 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                 ),
             }]
 
+        _system_msg = {"role": "system", "content": system}
+        _user_msg = {"role": "user", "content": user_message}
+        _ctx_window = self._get_context_window()
+
+        # ── Semantic compaction (with frontend animation) ─────────────────────
+        _needs_compact = should_compact_history(
+            history=history,
+            context_window=_ctx_window,
+            chars_per_token=self._CHARS_PER_TOKEN,
+            reserve=self._CONTEXT_RESERVE,
+        )
+        if _needs_compact:
+            yield {
+                "type": "tool_start",
+                "tool": "compaction",
+                "display": "压缩对话历史…",
+                "detail": "对话历史较长，正在语义压缩以节省上下文空间",
+            }
+            _working_history, _ = compact_history(
+                history=history,
+                client=self.client,
+                model=self.model,
+                chars_per_token=self._CHARS_PER_TOKEN,
+            )
+            yield {"type": "tool_end", "tool": "compaction"}
+        else:
+            _working_history = history
+
+        # ── Hard truncation safety net ────────────────────────────────────────
+        _pruned_history = self._hard_prune(
+            system_msgs=[_system_msg],
+            history=_working_history,
+            extra_msgs=prior_reasoning_msg + [_user_msg],
+            context_window=_ctx_window,
+        )
+
         messages: List[Dict] = [
-            {"role": "system", "content": system},
-            *history[-20:],
+            _system_msg,
+            *_pruned_history,
             *prior_reasoning_msg,
-            {"role": "user", "content": user_message},
+            _user_msg,
         ]
 
         pending_charts: List[str] = []
         all_reasoning: List[str] = []
+        _consecutive_errors = 0
+        _run_start = time.monotonic()
+        _MAX_RUN_SECONDS = 300  # 5-minute hard ceiling
+        _MAX_CONSECUTIVE_ERRORS = 3
 
         _PROPOSE_FLOW_CMDS = ("ppt", "ppt_revise", "export", "excel_revise",
                               "report", "report_revise", "dashboard", "dashboard_revise")
 
         _force_propose = False
         for _ in range(self.MAX_ITERATIONS):
+            # ── Hard exit guards ──────────────────────────────────────────────
+            if time.monotonic() - _run_start > _MAX_RUN_SECONDS:
+                log.warning("[run] time limit reached (%.0fs)", _MAX_RUN_SECONDS)
+                yield {"type": "text", "content": "分析超时，已终止。请尝试缩小问题范围后重试。"}
+                yield {"type": "done"}
+                return
+            if _consecutive_errors >= _MAX_CONSECUTIVE_ERRORS:
+                log.warning("[run] %d consecutive tool errors, aborting", _consecutive_errors)
+                yield {"type": "text", "content": "连续工具调用失败，已终止。请检查数据源连接或简化查询。"}
+                yield {"type": "done"}
+                return
+
             if _force_propose:
                 if command in ("ppt", "ppt_revise"):
                     nudge = (
@@ -234,20 +418,29 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
             )
 
             if self.enable_thinking and self.model.startswith("claude"):
+                _ctx = self._get_context_window()
+                _used = self._estimate_messages_tokens(messages)
+                _remaining = max(4000, _ctx - _used)
+                _budget = self._adaptive_thinking_budget(_remaining)
                 call_kwargs["temperature"] = 1
                 call_kwargs["extra_body"] = {
-                    "thinking": {"type": "enabled", "budget_tokens": self.thinking_budget}
+                    "thinking": {"type": "enabled", "budget_tokens": _budget}
                 }
+                log.debug("[thinking] budget=%d (remaining≈%d tokens)", _budget, _remaining)
 
             # ── Streaming path ────────────────────────────────────────────────
             call_kwargs["stream"] = True
             call_kwargs["stream_options"] = {"include_usage": True}
             _t0 = time.monotonic()
             try:
-                stream = self.client.chat.completions.create(**call_kwargs)
+                stream = _call_with_retry(self.client.chat.completions.create, **call_kwargs)
             except Exception as exc:
-                log.error("[llm] API call failed: %s", exc)
-                yield {"type": "error", "message": f"LLM 调用失败: {exc}"}
+                log.error("[llm] API call failed after retries: %s", exc)
+                retryable, _ = _is_retryable(exc)
+                if retryable:
+                    yield {"type": "error", "message": f"LLM 服务暂时不可用，请稍后重试: {exc}"}
+                else:
+                    yield {"type": "error", "message": f"LLM 调用失败: {exc}"}
                 yield {"type": "done"}
                 return
 
@@ -368,16 +561,8 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                 if blocked:
                     blocked_names = ", ".join(tc.function.name for tc in blocked)
                     log.warning("[tool] blocked output tool(s): %s (command=%r)", blocked_names, command)
-                    # Append assistant turn + fake tool results so the model can continue
-                    messages.append({
-                        "role": "assistant",
-                        "content": full_content,
-                        "tool_calls": [
-                            {"id": tc.id, "type": "function",
-                             "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-                            for tc in tc_objects
-                        ],
-                    })
+                    # asst_entry (with reasoning_content if present) was already appended at line 540.
+                    # Only append fake tool results so the model can continue.
                     for tc in tc_objects:
                         if tc.function.name in _OUTPUT_TOOL_GUARDS:
                             content = (
@@ -400,11 +585,27 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                     try:
                         args: Dict[str, Any] = json.loads(tc.function.arguments or "{}")
                     except json.JSONDecodeError:
+                        log.warning("[tool] %s: invalid JSON args=%r, using {}", name, tc.function.arguments)
                         args = {}
+
+                    # Pre-dispatch validation: catch obviously bad args early
+                    _val_err = _validate_tool_args(name, args)
+                    if _val_err:
+                        log.warning("[tool] %s: arg validation failed: %s", name, _val_err)
+                        # Inject as a synthetic tool result so the model can self-correct
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": f"[ARG ERROR] {_val_err}",
+                        })
+                        yield {"type": "tool_end", "tool": name}
+                        _consecutive_errors += 1
+                        continue
                     display_map = {
                         "query_knowledge":       f"查询知识库: {args.get('question', '')}",
                         "get_schema":            "读取数据结构",
                         "create_analysis_table": f"提取字段 → {args.get('table_name', 'analysis_data')}",
+                        "select_chart":          f"查询图表注册表: {args.get('user_intent', '?')[:40]}",
                         "query_data":            f"执行查询: {args.get('sql', '')}",
                         "run_analysis":          f"运行分析: {args.get('analysis_name', '?')} · 目标列: {args.get('target_column', '?')}",
                         "generate_chart":        f"生成 {args.get('chart_type', '?')} 图表",
@@ -435,7 +636,12 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                     _tool_t0 = time.monotonic()
 
                     try:
-                        if name == "query_knowledge":
+                        if name == "select_chart":
+                            tool_result = self._tool_select_chart(
+                                user_intent=args.get("user_intent", ""),
+                                available_columns=args.get("available_columns", []),
+                            )
+                        elif name == "query_knowledge":
                             tool_result = self._tool_query_knowledge(
                                 question=args.get("question", "")
                             )
@@ -655,7 +861,9 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                     except Exception as exc:
                         tool_result = f"工具执行错误 [{name}]: {exc}"
                         log.error("[tool] %s FAILED (%.2fs): %s", name, time.monotonic() - _tool_t0, exc)
+                        _consecutive_errors += 1
                     else:
+                        _consecutive_errors = 0
                         _result_preview = str(tool_result)[:120].replace("\n", " ")
                         log.info("[tool] %s OK  %.2fs  result=%r", name, time.monotonic() - _tool_t0, _result_preview)
 

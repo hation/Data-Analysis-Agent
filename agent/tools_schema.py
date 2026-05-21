@@ -4,7 +4,7 @@
 Depends on module-level globals from prompts.py — import order matters:
   prompts.py  →  tools_schema.py  →  agent.py
 """
-from .prompts import _ANALYZE_GUIDE, _CHART_IDS
+from .prompts import _ANALYZE_GUIDE, _CHART_IDS  # _CHART_IDS built from chart_selector._CHARTS
 
 AGENT_TOOLS = [
     {
@@ -145,11 +145,50 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "select_chart",
+            "description": (
+                "Look up the chart registry to find the best-matching chart type for the user's request. "
+                "ALWAYS call this BEFORE generate_chart whenever the user asks for a visualization "
+                "and you are not 100% certain which chart_id and field_mapping keys to use. "
+                "Returns the top matching charts with their exact required_roles, data_format, "
+                "and constraints — use this information to construct the correct field_mapping for generate_chart. "
+                "Do NOT skip this step and guess the chart type directly."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_intent": {
+                        "type": "string",
+                        "description": (
+                            "A concise description of what the user wants to visualize. "
+                            "Include chart type hints if the user mentioned one, the business question, "
+                            "and any dimension/metric keywords. "
+                            "Examples: '各月销售额趋势', '产品类别占比饼图', '两个时间点的排名变化', "
+                            "'地区销售热力图', 'KPI达成率对比'."
+                        ),
+                    },
+                    "available_columns": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Column names available in the data (from get_schema or query_data). "
+                            "Helps the selector match required_roles to actual columns. "
+                            "Leave empty if schema is unknown."
+                        ),
+                    },
+                },
+                "required": ["user_intent"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "generate_chart",
             "description": (
                 "Create a data visualization chart displayed to the user. "
-                "Use after querying to confirm the data shape. "
-                "See the system prompt for the complete chart type list and their field_mapping requirements."
+                "IMPORTANT: Call select_chart first to confirm the correct chart_id and field_mapping keys. "
+                "Use the exact required_roles returned by select_chart as your field_mapping keys."
             ),
             "parameters": {
                 "type": "object",

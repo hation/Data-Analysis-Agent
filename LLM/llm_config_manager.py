@@ -10,20 +10,12 @@ import json
 from pathlib import Path
 from typing import Dict, Optional, Any, List
 from dataclasses import dataclass, asdict
-import os
-from pathlib import Path
-# 配置文件路径 - 使用相对路径
+
+CONFIG_DIR = Path("/tmp/LLM") if os.environ.get("VERCEL") else Path(__file__).parent
 if os.environ.get("VERCEL"):
-    CONFIG_DIR = Path("/tmp/LLM")
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-else:
-    CONFIG_DIR = Path(__file__).parent
 
 LLM_CONFIG_FILE = CONFIG_DIR / "llm_config.json"
-
-print(f"[LLM] __file__={__file__}")
-print(f"[LLM] CONFIG_DIR={CONFIG_DIR}")
-print(f"[LLM] LLM_CONFIG_FILE={LLM_CONFIG_FILE.resolve()}")
 
 @dataclass
 class LLMConfig:
@@ -84,7 +76,6 @@ class LLMConfigManager:
 
         if LLM_CONFIG_FILE.exists():
             try:
-                print(f"[LLM] loading from: {LLM_CONFIG_FILE.resolve()}, exists={LLM_CONFIG_FILE.exists()}")
                 with open(LLM_CONFIG_FILE, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     for provider, config in data.items():
@@ -114,7 +105,6 @@ class LLMConfigManager:
     def save_configs(self):
         """保存配置到文件"""
         try:
-            print(f"[LLM] saving to: {LLM_CONFIG_FILE.resolve()}")
             data = {
                 provider: asdict(config)
                 for provider, config in self.configs.items()
@@ -353,6 +343,50 @@ def get_llm_client(provider: Optional[str] = None):
 
     from openai import OpenAI
     return OpenAI(api_key=config.api_key, base_url=config.base_url)
+
+
+def get_llm_client_with_fallback(preferred_provider: Optional[str] = None):
+    """
+    Return (client, provider, config) trying preferred_provider first,
+    then falling back through enabled providers in priority order.
+    Raises ValueError only when all providers are exhausted.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    manager = get_config_manager()
+    from openai import OpenAI
+
+    # Build candidate list: preferred first, then priority order
+    candidates: List[str] = []
+    if preferred_provider:
+        candidates.append(preferred_provider)
+
+    priority = ["deepseek", "openai", "claude"]
+    for p in priority:
+        if p not in candidates and p in manager.configs and manager.configs[p].enabled:
+            candidates.append(p)
+
+    # Append any enabled custom models not already listed
+    for p, cfg in manager.configs.items():
+        if p not in candidates and cfg.is_custom and cfg.enabled:
+            candidates.append(p)
+
+    last_exc: Optional[Exception] = None
+    for provider in candidates:
+        config = manager.get_config(provider)
+        if not config or not config.api_key:
+            continue
+        try:
+            client = OpenAI(api_key=config.api_key, base_url=config.base_url)
+            # Lightweight probe — just instantiate, don't make a network call
+            log.info("[llm] selected provider=%s model=%s", provider, config.model)
+            return client, provider, config
+        except Exception as exc:
+            log.warning("[llm] provider %s unavailable: %s", provider, exc)
+            last_exc = exc
+
+    raise ValueError(f"所有 LLM 提供商均不可用。最后错误: {last_exc}")
 
 
 if __name__ == "__main__":
