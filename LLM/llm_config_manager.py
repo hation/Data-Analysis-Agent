@@ -51,14 +51,6 @@ class LLMConfigManager:
             "is_custom": False,
             "context_window": 128000,
             "max_output_tokens": 16384,
-        },
-        "claude": {
-            "base_url": "https://api.anthropic.com",
-            "model": "claude-3-5-haiku-20241022",
-            "env_var": "ANTHROPIC_API_KEY",
-            "is_custom": False,
-            "context_window": 200000,
-            "max_output_tokens": 8192,
         }
     }
 
