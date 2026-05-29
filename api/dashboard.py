@@ -46,6 +46,51 @@ _CHART_TYPE_ALIASES = {
 }
 
 
+def _render_kpi_widget(data_source, spec: dict) -> dict:
+    """Execute SQL for a KPI_Card widget and return scalar value fields.
+
+    Returns a dict with keys: kpi_value, kpi_sub, kpi_trend, error.
+    The SQL should return a single row with one or more columns:
+      - First column → displayed as the main KPI value
+      - Second column (optional) → sub-label / description
+      - Third column (optional) → trend percentage (number)
+    """
+    sql = spec.get("sql", "")
+    if not sql or not data_source:
+        return {"kpi_value": "—", "kpi_sub": "", "kpi_trend": None, "error": "No SQL" if not sql else "No data source"}
+    try:
+        df, err = data_source.execute_query(sql)
+        if err:
+            return {"kpi_value": "—", "kpi_sub": "", "kpi_trend": None, "error": f"SQL error: {err}"}
+        if df.empty or len(df.columns) == 0:
+            return {"kpi_value": "—", "kpi_sub": "", "kpi_trend": None, "error": "No rows returned"}
+        row = df.iloc[0]
+        kpi_value = row.iloc[0]
+        # Format numbers nicely
+        try:
+            fv = float(kpi_value)
+            if abs(fv) >= 1e8:
+                kpi_value = f"{fv/1e8:.2f} 亿"
+            elif abs(fv) >= 1e4:
+                kpi_value = f"{fv/1e4:.1f} 万"
+            elif fv == int(fv):
+                kpi_value = str(int(fv))
+            else:
+                kpi_value = f"{fv:.2f}"
+        except (TypeError, ValueError):
+            kpi_value = str(kpi_value)
+        kpi_sub = str(row.iloc[1]) if len(row) > 1 else ""
+        kpi_trend = None
+        if len(row) > 2:
+            try:
+                kpi_trend = round(float(row.iloc[2]), 1)
+            except (TypeError, ValueError):
+                pass
+        return {"kpi_value": kpi_value, "kpi_sub": kpi_sub, "kpi_trend": kpi_trend, "error": None}
+    except Exception as exc:
+        return {"kpi_value": "—", "kpi_sub": "", "kpi_trend": None, "error": str(exc)}
+
+
 def _render_widget(data_source, chart_store, color_scheme: str, spec: dict) -> tuple[str | None, str | None]:
     """Execute SQL and generate chart HTML. Returns (chart_id, error)."""
     sql = spec.get("sql", "")
@@ -111,18 +156,24 @@ def create_dashboard():
     built_widgets = []
     for spec in widgets_spec:
         widget_id = spec.get("id") or str(uuid.uuid4())[:8]
-        chart_id, error = _render_widget(data_source, chart_store, color_scheme, spec)
-        built_widgets.append({
+        chart_type = spec.get("chart_type", "Bar_Chart")
+        base = {
             "id": widget_id,
             "title": spec.get("title", ""),
-            "chart_type": spec.get("chart_type", "Bar_Chart"),
+            "chart_type": chart_type,
             "sql": spec.get("sql", ""),
             "field_mapping": spec.get("field_mapping", {}),
             "options": spec.get("options", {}),
             "grid": spec.get("grid", {"x": 0, "y": 0, "w": 6, "h": 4}),
-            "chart_id": chart_id,
-            "error": error,
-        })
+        }
+        if chart_type == "KPI_Card":
+            kpi = _render_kpi_widget(data_source, spec)
+            base.update(kpi)
+        else:
+            chart_id, error = _render_widget(data_source, chart_store, color_scheme, spec)
+            base["chart_id"] = chart_id
+            base["error"] = error
+        built_widgets.append(base)
 
     dashboard = {
         "_schema_version": _SCHEMA_VERSION,
@@ -203,7 +254,7 @@ def delete_dashboard(dashboard_id: str):
     return jsonify({"ok": True})
 
 
-# ── API: refresh ──────────────────────────────────────────────────────────────
+# ── API: refresh all widgets ───────────────────────────────────────────────────
 
 @bp.post("/api/dashboard/<dashboard_id>/refresh")
 def refresh_dashboard(dashboard_id: str):
@@ -223,13 +274,56 @@ def refresh_dashboard(dashboard_id: str):
     color_scheme = dashboard.get("color_scheme", "mckinsey")
 
     widget_results = []
+    kpi_results = []
     for widget in dashboard["widgets"]:
-        chart_id, error = _render_widget(data_source, chart_store, color_scheme, widget)
-        widget["chart_id"] = chart_id
-        widget["error"] = error
-        widget_results.append({"id": widget["id"], "chart_id": chart_id, "error": error})
+        if widget.get("chart_type") == "KPI_Card":
+            # KPI cards: re-execute SQL and extract scalar value
+            kpi = _render_kpi_widget(data_source, widget)
+            widget.update(kpi)
+            kpi_results.append({"id": widget["id"], **kpi})
+        else:
+            chart_id, error = _render_widget(data_source, chart_store, color_scheme, widget)
+            widget["chart_id"] = chart_id
+            widget["error"] = error
+            widget_results.append({"id": widget["id"], "chart_id": chart_id, "error": error})
 
     dashboard["refreshed_at"] = datetime.datetime.now().isoformat()
     _save_dashboard(dashboard, dashboard_id)
 
-    return jsonify({"ok": True, "widgets": widget_results})
+    return jsonify({"ok": True, "widgets": widget_results, "kpi_widgets": kpi_results})
+
+
+# ── API: refresh single widget ─────────────────────────────────────────────────
+
+@bp.post("/api/dashboard/<dashboard_id>/widget/<widget_id>/refresh")
+def refresh_widget(dashboard_id: str, widget_id: str):
+    from .state import session_manager, chart_store
+    body = request.get_json(force=True)
+    sid = body.get("session_id", "")
+
+    sess = session_manager.get(sid)
+    if not sess:
+        return jsonify({"error": "Session not found"}), 404
+
+    data_source = sess.data_source
+    if not data_source:
+        return jsonify({"error": "No data source connected"}), 400
+
+    dashboard = _load_dashboard(dashboard_id)
+    widget = next((w for w in dashboard["widgets"] if w["id"] == widget_id), None)
+    if not widget:
+        return jsonify({"error": f"Widget '{widget_id}' not found"}), 404
+
+    color_scheme = dashboard.get("color_scheme", "mckinsey")
+
+    if widget.get("chart_type") == "KPI_Card":
+        kpi = _render_kpi_widget(data_source, widget)
+        widget.update(kpi)
+        _save_dashboard(dashboard, dashboard_id)
+        return jsonify({"ok": True, "id": widget_id, **kpi})
+    else:
+        chart_id, error = _render_widget(data_source, chart_store, color_scheme, widget)
+        widget["chart_id"] = chart_id
+        widget["error"] = error
+        _save_dashboard(dashboard, dashboard_id)
+        return jsonify({"ok": True, "id": widget_id, "chart_id": chart_id, "error": error})

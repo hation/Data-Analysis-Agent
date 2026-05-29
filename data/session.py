@@ -31,8 +31,13 @@ class ChatSession:
     def add_user(self, text: str):
         self.history.append({"role": "user", "content": text})
 
-    def add_assistant(self, text: str, reasoning: str = ""):
-        self.history.append({"role": "assistant", "content": text})
+    def add_assistant(self, text: str, reasoning: str = "", chart_ids: list = None):
+        msg = {"role": "assistant", "content": text}
+        # Record the charts produced in this turn so they can be restored when
+        # the conversation is reloaded from disk.
+        if chart_ids:
+            msg["chart_ids"] = list(chart_ids)
+        self.history.append(msg)
         self.last_reasoning = reasoning
 
     def clear_history(self):

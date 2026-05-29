@@ -1,7 +1,7 @@
-# Business Analyst Agent
+# Intelligent Business Analysis Agent
 
 <p align="center">
-  <img src="./Images/Banner.png" alt="Business Analyst Agent Banner" width="100%" />
+  <img src="./Images/Banner.png" alt="Business Analysis Agent Banner" width="100%" />
 </p>
 
 <p align="right"><a href="./README.md">中文</a></p>
@@ -13,172 +13,229 @@
 ![Charts](https://img.shields.io/badge/Charts-43_Types-orange.svg)
 ![License](https://img.shields.io/badge/License-Apache%202.0-yellow.svg)
 
-> An AI Agent built for business analytics.  
-> After connecting to a data source, users can ask questions in natural language and the system will automatically:
+> An AI Agent designed for business analytics scenarios.  
+> Once connected to a data source, users can ask questions in plain language — the system automatically handles:
 >
-> - Detect schema
-> - Generate & run SQL
-> - Generate charts
-> - Produce concise business insights
+> - Data schema recognition
+> - SQL generation & execution
+> - Chart generation
+> - Business insight analysis
 
 ---
-## Table of Contents
 
-- [✨ Overview](#-overview)
-- [🧠 Key Features](#-key-features)
-- [Installation](#installation)
+# Table of Contents
+
+- [✨ Project Highlights](#-project-highlights)
+- [🧠 Core Capabilities](#-core-capabilities)
+- [⚙️ Installation](#️-installation)
 - [🛠 Slash Commands](#-slash-commands)
-- [📁 Suggested Project Structure](#-suggested-project-structure)
-- [⚙️ Configuration](#-configuration)
-- [🗺️ Roadmap](#-roadmap)
+- [📈 Usage Examples](#-usage-examples)
+- [🤖 LLM Configuration](#-llm-configuration)
+- [🗺️ Project Milestones](#️-project-milestones)
 - [❓ FAQ](#-faq)
+- [🚀 Looking for Contributors](#-looking-for-contributors)
 - [📄 License](#-license)
-- [⭐ Goal](#-goal)
----
-## ✨ Overview
+- [⭐ Project Goal](#-project-goal)
 
-**Business Analyst Agent** is a conversational business data analysis system.  
-Upload an Excel/CSV file or connect to a database, then ask questions like chatting:
+---
+
+# ✨ Project Highlights
+
+Business Analyst Agent is a conversational business data analysis system. Its goal is to let non-technical users perform data analysis simply by "chatting."
+
+Upload an Excel / CSV file or connect a database, then ask questions directly:
 
 ```text
-How does sales trend over the last 3 months?
+What is the sales trend for the last three months?
 Which region has the highest profit?
-Generate a user growth chart.
+Generate a user growth chart for me.
 ```
 
 The system will automatically:
 
-1. Understand intent
-2. Inspect data schema
-3. Generate SQL
-4. Execute queries
-5. Recommend appropriate charts
-6. Summarize insights
+1. Understand the intent of the question
+2. Analyze the data schema
+3. Generate SQL automatically
+4. Execute the query
+5. Recommend a suitable chart
+6. Output business insights
 
-It also supports **SSE (Server-Sent Events)** streaming so you can see the analysis progress in real time.
+All results are streamed in real time via **SSE (Server-Sent Events)**.
 
 ---
 
-## 🧠 Key Features
+# 🧠 Core Capabilities
 
-### 1️⃣ Natural Language Analytics
-No need to write SQL manually. The agent turns plain language into SQL + results + insights.
+## 1️⃣ Natural Language Data Analysis
 
-### 2️⃣ Multiple Data Sources
-Supported:
+No SQL required.
 
-- Excel
-- CSV
-- SQLite
-- MySQL
-- PostgreSQL
-- SQL Server
-
-Planned:
-
-- DuckDB
-- Spark
-
-### 3️⃣ Smart Chart Recommendation
-
-| Category | Chart Type |
-|---|---|
-| **对比类** COMPARING | Marimekko_ABS（马里美科-绝对值）、Marimekko_PCT（马里美科-百分比）、Bar_Chart（柱状图）、Grouped_Bar_Chart（分组柱状图）、Stacked_Bar_Chart（堆叠柱状图）、Diverging_Bar_Chart（对比条形图）、Dot_Plot（点图）、Waffle（华夫格）、Bullet_Chart（靶心图）、Sankey_Chart（桑基图）、Heatmap（热力图）、Waterfall（瀑布图） |
-| **时间趋势类** TIME | Line_Chart（折线图）、Circular_Line_Chart（圆形折线图）、Slope_Chart（斜率图）、Sparkline（迷你图）、Bump_Chart（凹凸图）、Cycle_Chart（周期图）、Area_Chart（面积图）、Stacked_Area_Chart（堆叠面积图）、Horizon_Chart（地平线图）、Connected_Scatter（连线散点图） |
-| **分布类** DISTRIBUTION | Histogram_Pareto_chart（直方图与帕累托图）、Pyramid_Chart（金字塔图）、Error_Bar_Chart（误差条形图）、Box-and-Whisker_Plot（箱线图）、Violin_Chart（小提琴图）、Ridgeline_Plot（山脊线图）、Beeswarm_Plot（分簇散点图）、stem_leaf（茎叶图） |
-| **地理类** GEOSPATIAL | Flow_Map（动态流向图）、Dot_Density_Map（点密度地图）、Choropleth_Map（面量图） |
-| **关系类** RELATIONSHIP | Scatter_Plot（散点图）、Bubble_Plot（气泡图）、Radar_Charts（雷达图）、Chord_Diagram（弦图）、Arc_Chart（弧图）、Network_Diagram（网络图）、Parallel_Coordinates_Plot（平行坐标图） |
-| **占比类** PART-TO-WHOLE | Treemap（矩形树图）、Sunburst_Diagram（旭日图）、Nightingale_Chart（南丁格尔玫瑰图）、Pie_Chart（饼图） |
-
-
-The agent selects charts automatically based on the query result.
-
-### 4️⃣ SSE Real-time Feedback
-Streaming progress like:
+Just type in plain language:
 
 ```text
-[1/4] Reading schema...
-[2/4] Generating SQL...
-[3/4] Running query...
-[4/4] Creating chart & insights...
+Monthly order volume trend for this year
 ```
 
-### 5️⃣ Configurable LLM Providers
-Built-in support:
+The system automatically handles:
 
-- **DeepSeek** (default: `deepseek-chat`)
-- **OpenAI** (default: `gpt-4o-mini`)
-- **Anthropic Claude** (default: `claude-3-5-haiku-20241022`)
+- SQL generation
+- Data querying
+- Chart recommendation
+- Analysis summary
 
-Also supports any **OpenAI SDK compatible API** via custom:
+![Data Query](Images/Data_query.png)
+
+---
+
+## 2️⃣ Multi-Source Data Support
+
+Supports uploading and connecting various data sources:
+
+- Files: Excel / CSV
+- Databases: SQLite, MySQL, PostgreSQL, SQL Server
+- Planned: DuckDB, Spark
+
+![Data Preview](Images/Data_preview.png)
+
+---
+
+## 3️⃣ Intelligent Chart System
+
+| Category | Chart Types |
+|---|---|
+| **COMPARING** | Marimekko_ABS, Marimekko_PCT, Bar_Chart, Grouped_Bar_Chart, Stacked_Bar_Chart, Diverging_Bar_Chart, Dot_Plot, Waffle, Bullet_Chart, Sankey_Chart, Heatmap, Waterfall |
+| **TIME** | Line_Chart, Circular_Line_Chart, Slope_Chart, Sparkline, Bump_Chart, Cycle_Chart, Area_Chart, Stacked_Area_Chart, Horizon_Chart, Connected_Scatter |
+| **DISTRIBUTION** | Histogram_Pareto_chart, Pyramid_Chart, Error_Bar_Chart, Box-and-Whisker_Plot, Violin_Chart, Ridgeline_Plot, Beeswarm_Plot, stem_leaf |
+| **GEOSPATIAL** | Flow_Map, Dot_Density_Map, Choropleth_Map |
+| **RELATIONSHIP** | Scatter_Plot, Bubble_Plot, Radar_Charts, Chord_Diagram, Arc_Chart, Network_Diagram, Parallel_Coordinates_Plot |
+| **PART-TO-WHOLE** | Treemap, Sunburst_Diagram, Nightingale_Chart, Pie_Chart |
+
+The system automatically recommends the most suitable chart based on query results.
+
+![Auto Generated](Images/Auto_generated_image.png)
+
+---
+
+## 4️⃣ SSE Streaming Analysis
+
+The analysis process is visible in real time:
+
+```text
+[1/4] Reading data schema...
+[2/4] Generating SQL...
+[3/4] Executing query...
+[4/4] Generating charts and insights...
+```
+
+More transparent and interactive than traditional BI tools.
+
+---
+
+## 5️⃣ Multi-Model Compatibility
+
+Supports:
+- DeepSeek
+- OpenAI
+- Claude
+- Any OpenAI SDK-compatible API
+
+Fully customizable:
 
 - `base_url`
 - `model`
 - `api_key`
 
----
+Default configuration:
 
-## 🖼️ UI Preview
-
-### Data Preview
-![Data Preview](Images/Data_preview.png)
-
----
-### Data Query
-![Data Query](Images/Data_query.png)
+| Provider | Default Model |
+|---|---|
+| DeepSeek | `deepseek-chat` |
+| OpenAI | `gpt-4o-mini` |
+| Anthropic | `claude-3-5-haiku-20241022` |
 
 ---
 
-### Auto Generated Chart
-![Auto Generated](Images/Auto_generated_image.png)
+## 6️⃣ Data Analysis
+
+Currently supported analytics features:
+- Outlier handling (trimming & winsorizing)
+- Decile grouping analysis
+- K-Means clustering
+- Decision tree modeling
+
+![Analyze](Images/Analyze.png)
 
 ---
 
-## Installation
+## 7️⃣ Report Generation
 
-### Option 1: Windows One-click Start (Recommended)
+Supports exporting:
+- Formatted Excel spreadsheets
+- DOCX reports
+- Built-in styled PPT presentations
 
-#### 1) Download and install the package
+![Output](Images/Output.png)
+
+---
+
+## 8️⃣ MCP Extension
+
+**Supports connecting local or remote MCP servers to extend Agent capabilities**
+
+![MCP](Images/MCP1.png)
+
+- Tutorial: [MCP_tutorial](Information/MCP_tutorial.md)
+
+---
+
+## 9️⃣ Knowledge Base Input
+
+Upload domain knowledge to help the Agent better understand your data.
+
+![repository](Images/repository2.png)
+
+- Tutorial: [repository_tutorial](Information/repository_tutorial.md)
+
+---
+
+# ⚙️ Installation
+
+### Option 1: Download Package (Recommended)
+
+#### 1) Download the archive
+
 ![Download installation package](Images/package.png)
 
-### Method 1: Installation Package Download (Recommended)
+#### 2) Extract and run directly from the project directory:
 
-#### 1) Download the installation package
-
-![Download installation package](Images/package.png)
-
-#### 2) Unzip the package, then double-click to run directly in the project directory:
-
-**Windows Users**
+**Windows users**
 
 ```bat
 start.bat
 ```
 
-> Note: The first time you run `start.bat`, it will automatically configure the runtime environment, which may take a while. On subsequent runs, there will be no waiting.
+> Note: The first run of `start.bat` will automatically set up the environment — this may take a while. Subsequent runs will be much faster.
 
-**Mac Users**
+**Mac users**
 
-① Use the script `start.command`  
-② Grant execution permissions in the terminal:  
+① Use the script `start.command`
+
+② Grant execution permission in Terminal (press Command + Space, type Terminal, press Enter):
    ```bash
    chmod +x start.command
-   ```  
-③ Double-click `start.command` to run.  
+   ```
 
-> Note: The first time you run it, it may be blocked by macOS security policies. To resolve this:  
-> - Right-click `start.command` → Select "Open" → Confirm "Open" again, or  
-> - Run the following command in the terminal:  
->   ```bash
->   xattr -d com.apple.quarantine start.command
->   ```
+③ Double-click `start.command` to run.
 
-#### 2) Extract and Run via Command Line (Backup Method)
+> Note: macOS security policy may block the first run. To fix: right-click `start.command` → "Open" → confirm "Open", or run in Terminal: `xattr -d com.apple.quarantine start.command`
+
+#### 2) Extract and run via command line (fallback method)
 
 **① Windows:**
-Navigate to the project directory (or hold Shift + right-click inside the project folder to open PowerShell):
+
+Navigate to the project directory (or Shift + right-click inside the folder to open PowerShell):
 ```bash
-cd \Data-Analysis-Agent (Replace with your actual path)
+cd ~/Data-Analysis-Agent   # replace with your actual path
 ```
 
 Install dependencies:
@@ -192,9 +249,10 @@ python app.py
 ```
 
 **② Mac:**
-Navigate to the project directory:
+
+Navigate to the project directory (press Command + Space, type Terminal, press Enter):
 ```bash
-cd Data-Analysis-Agent
+cd ~/Data-Analysis-Agent   # replace with your actual path
 ```
 
 Install dependencies:
@@ -207,47 +265,46 @@ Start the service:
 python3 app.py
 ```
 
-#### 3) Open in browser`http://localhost:5001`
+#### 3) Open `http://localhost:5001` in your browser
 
-Note: This is a local address and will not leak any information. Please use it with confidence.
+Note: This is a local address — your data stays on your machine.
 
 ![Download installation package2](Images/package2.png)
 
-#### 4) Configure API key
+#### 4) Configure your API key
 
 ![Configure the API3](Images/Deepseek3.png)
 
-#### 5) Subsequent updates
+#### 5) Future updates
 
 ![Update](Images/Update.png)
 
-Note: Please restart the system before updating.
-
+> Note: Please restart before updating.
 
 ---
 
-### Option 2: One-Click Install + Launch (Still testing, unstable)
+### Option 2: One-Command Install + Launch (Beta — unstable)
 
-#### Windows (PowerShell)
+#### 1) Windows (PowerShell)
 
 ```powershell
 iwr -useb https://raw.githubusercontent.com/Zafer-Liu/Data-Analysis-Agent/main/install.ps1 | iex
 ```
 
-After installation, you can start it in either of the following ways:
+After installation, launch with:
 
-- Double-click to run (Windows):
+- Double-click (Windows):
   ```bat
   %USERPROFILE%\data-analysis-agent.bat
   ```
-- Or start manually from the project directory:
+- Or navigate to the directory manually:
   ```powershell
   cd $env:USERPROFILE\.data-analysis-agent\Data-Analysis-Agent
   .\.venv\Scripts\activate
   python app.py
   ```
 
-#### macOS / Linux (Shell)
+#### 1) macOS / Linux (Shell)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Zafer-Liu/Data-Analysis-Agent/main/install.sh | sh
@@ -265,17 +322,15 @@ If you see `command not found`, add `~/.local/bin` to your PATH (in `~/.bashrc` 
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-#### Open in browser (Same as Option 1)
+#### 2) Open in browser (same as Option 1)
 
-#### Configure API key (Same as Option 1)
+#### 3) Configure API key (same as Option 1)
 
-#### Subsequent updates (Same as Option 1)
-
-Note: Please refresh the page before updating.
+#### 4) Future updates (same as Option 1)
 
 ---
 
-### Method 3: Install via GitHub (Command Line)
+### Option 3: Install via GitHub (Command Line)
 
 #### 1) Clone the repository
 
@@ -301,11 +356,11 @@ pip install -r requirements.txt
 python app.py
 ```
 
-#### Open in browser (Same as Option 1)
+#### 5) Open in browser (same as Option 1)
 
-#### Configure API key (Same as Option 1)
+#### 6) Configure API key (same as Option 1)
 
-#### Subsequent updates (Same as Option 1)
+#### 7) Future updates (same as Option 1)
 
 ---
 
@@ -313,82 +368,123 @@ python app.py
 
 | Command | Status | Description |
 |---|---|---|
-| `/chart` | ✅ | Force priority chart generation |
+| `/chart` | ✅ | Force chart generation as the primary output |
 | `/sql` | ✅ | Execute SQL directly |
 | `/analyze` | ✅ | In-depth statistical analysis |
 | `/tree` | ✅ | Decision tree analysis |
 | `/kmeans` | ✅ | K-Means clustering analysis |
-| `/data` | ✅ | Data profiling and preview |
+| `/data` | ✅ | Data exploration and preview |
 | `/inset` | ✅ | Missing value imputation |
-| `/winsorize` | ✅ | Winsorization (outlier replacement) |
-| `/trimming` | ✅ | Trimming (outlier removal) |
+| `/winsorize` | ✅ | Winsorizing (replace extreme values) |
+| `/trimming` | ✅ | Trimming (remove extreme values) |
 | `/export` | ✅ | Export data file |
 | `/report` | ✅ | Export Word/PDF report |
-| `/ppt` | ✅ | Export PowerPoint presentation |
+| `/ppt` | ✅ | Export PPT presentation |
 | `/status` | ✅ | View task status |
+
 ---
 
-## 📁 Suggested Project Structure
+# 📈 Usage Examples
+
+## Example 1: Trend Analysis
+
+User input:
 
 ```text
-Business-Analyst-Agent/
-│
-├── app.py
-├── requirements.txt
-├── start.bat
-│
-├── Function/
-│   ├── Charts_generation/
-│   │   ├── charts/
-│   │   └── registry.py
-│   ├── SQL/
-│   ├── LLM/
-│   └── DataSource/
-│
-├── Images/
-└── README.md
+Sales trend over the last 12 months
 ```
 
----
+System output:
 
-## ⚙️ Configuration
-
-### LLM Setup
-If you see “LLM not configured”, open the sidebar ⚙ and fill in:
-
-- API Key
-- Base URL (optional)
-- Model
-
-Save to apply.
+- SQL query
+- Trend line chart
+- Sales growth analysis
 
 ---
 
-## 🗺️ Roadmap
-## Version Development Log
-- [Version_Update_Log](Version_Update_Log.md)
-- [Version_Update_Log_EN](Version_Update_Log_EN.md)
-## ✅ Phase 1
-- Conversational analytics + multi data sources + 43 charts + SSE streaming
-## 🔲 Phase 2
-- Drag-and-drop dashboards
-## ✅ Phase 3
-- `/report` automated report export (Word/PDF)
-## 🔲 Phase 4
-- DuckDB / Spark support for big data
+## Example 2: Regional Analysis
+
+User input:
+
+```text
+Which region has the highest profit?
+```
+
+System output:
+
+- Regional profit ranking
+- Bar chart
+- Regional business insights
 
 ---
 
-## ❓ FAQ
+## Example 3: Chart-First Mode
 
-**Q: It says LLM is not configured.**  
-A: Fill in your API key in the sidebar ⚙ and save.
+User input:
 
-**Q: Chart links disappear after restart.**  
-A: The generated charts are stored in the local directory \outputs\charts.
+```text
+/chart User growth overview
+```
 
-**Q: How to Obtain an API Key?**
-Here is an example using Deepseek. The steps are as follows:
+The system prioritizes generating a visualization.
+
+---
+
+# 🤖 LLM Configuration
+
+Fill in the following fields in the ⚙ sidebar:
+
+```text
+API Key
+Base URL
+Model
+```
+
+You can switch models at any time.
+
+---
+
+# 🗺️ Project Milestones
+
+## Changelog
+
+**Current Version: v4.0 — May 29, 2026**
+
+This release focuses on **a complete frontend overhaul, improved chart stability, and engineering quality enhancements**.
+
+### 1. UI Improvements
+- Sidebar restructured into a three-section layout: status, actions, and history
+- Added **model connection test** indicator (auto-tests on model selection; can also be triggered manually in settings)
+- Agent output bubbles redesigned in "report style": left-side brand-color vertical bar + shaded background, visually consistent with chart frames
+- One-click dark mode toggle
+- `agent_chat.css` split into five submodules: `tokens`, `base`, `chat`, `modals`, `kb`
+- Added an operation guide with common issue explanations
+
+### 2. Stability Enhancements
+- Chart dependencies localized to eliminate external CDN reliance
+- Fixed a bug where loading conversation history would overwrite the currently selected model — now only restores model from history if the user hasn't made a selection yet
+
+### 3. Batch Data Processing Improvements
+- Replaced SQLite with DuckDB for data source ingestion, enabling millions of rows to be processed in seconds
+
+### 4. New Time Series Analysis Module
+- Added support for Prophet, SARIMA, ARIMA, VAR, and GRU models
+
+## Full Changelog
+- [Version_Update_Log](Information/Version_Update_Log.md)
+- [Version_Update_Log_EN](Information/Version_Update_Log_EN.md)
+
+---
+
+# ❓ FAQ
+
+## Q: "LLM not configured" error?
+
+A: Fill in your API Key in the ⚙ sidebar and save.
+
+## Q: How do I get an API Key?
+
+A: Using DeepSeek as an example:
 
 ![Configure the API1](Images/Deepseek1.png)
 
@@ -396,12 +492,58 @@ Here is an example using Deepseek. The steps are as follows:
 
 ![Configure the API3](Images/Deepseek3.png)
 
+## Q: Chart links stop working after restart?
+
+A: Generated charts are stored locally in the `*\outputs\charts` directory.
+
+## Q: How do I connect a SQL database?
+
+A: Use the following connection string format: `mysql+pymysql://username:password@host:port/dbname`
+
+- ❌ Incorrect: `mysql://user:pass@host:3306/dbname`
+- ✅ Correct: `mysql+pymysql://user:pass@host:3306/dbname`
+
 ---
 
-## 📄 License
+# 🚀 Looking for Contributors
+
+A great open-source project is never a solo act.  
+We're building a **data tool that can truly handle complex business scenarios** — one that blazes through massive datasets, navigates multi-table logic with ease, and surfaces insights on visual dashboards.
+
+Right now, we're facing some genuinely challenging — and genuinely rewarding — problems. If you love solving hard problems, we need you:
+
+---
+
+### Key challenges we'd love your help with:
+- **Multi-sheet inter-table logic optimization** — How do you intelligently untangle dependencies across dozens of sheets?
+- **Dashboard interaction & performance** — Make data stories flow more smoothly, intuitively, and powerfully.
+- **Model capability in edge business scenarios** — The edge cases general-purpose tools can't handle are exactly where we operate.
+- **Remote server integration** — Building a framework for remote GPU invocation.
+
+---
+
+### Why is it worth your time?
+
+- You'll tackle **real, deep, non-toy** technical challenges
+- Your code will directly impact **end-user productivity** in the field
+- Flexible contributions — submit a PR or reach out directly, your call
+- Outstanding contributors may be invited to become project Committers
+
+---
+
+### How to get involved?
+
+- Submit a **Pull Request** — we review within 24 hours
+- Or email: `rusboldtshanti34@gmail.com` (please include "Contributor + your area of expertise")
+
+---
+
+# 📄 License
+
 Apache License 2.0
 
 ---
 
-## ⭐ Goal
-Make business analytics as easy as chatting.
+# ⭐ Project Goal
+
+Make business analysis as simple as having a conversation.

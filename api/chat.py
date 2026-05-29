@@ -27,6 +27,9 @@ def _build_agent(sess) -> BusinessAgent:
         session_chart_ids=list(getattr(sess, "chart_ids", [])),
         color_scheme=getattr(sess, "ppt_color_scheme", "mckinsey"),
         session_id=sess.session_id,
+        # Pass the configured context window so the compaction trigger and the
+        # frontend context bar agree on the same denominator.
+        context_window=getattr(cfg, "context_window", None),
     )
 
 
@@ -97,6 +100,7 @@ def chat_stream(sid: str):
 
         collected: list[str] = []
         collected_reasoning: list[str] = []
+        turn_chart_ids: list[str] = []   # charts produced during this turn
         completed_normally = False
 
         # ── Agent loop ─────────────────────────────────────────────────────
@@ -113,6 +117,7 @@ def chat_stream(sid: str):
             for event in agent.run(
                 message, list(sess.history), command=command,
                 last_reasoning=getattr(sess, "last_reasoning", ""),
+                last_prompt_tokens=getattr(sess, "last_prompt_tokens", 0),
                 ppt_title=ppt_title, ppt_slides=ppt_slides,
                 excel_tables=excel_tables, excel_filename=excel_filename,
                 report_title=report_title, report_sections=report_sections,
@@ -133,6 +138,7 @@ def chat_stream(sid: str):
                     if not hasattr(sess, "chart_ids"):
                         sess.chart_ids = []
                     sess.chart_ids.append(cid)   # persist for export
+                    turn_chart_ids.append(cid)   # attach to this turn's message
                     yield _sse({"type": "chart_ref", "chart_id": cid})
                 elif etype == "chart_placeholder":
                     pass   # internal signal, not forwarded
@@ -145,13 +151,20 @@ def chat_stream(sid: str):
                         event.get("completion_tokens", 0),
                     )
                     cfg = config_manager.get_config(sess.model_provider)
+                    # The agent already puts context_window on the usage event
+                    # (= its _get_context_window(), which itself prefers the
+                    # configured value). Keep it — only fall back to cfg when
+                    # the agent did not provide one.
                     enriched = {
                         **event,
-                        "context_window": cfg.context_window if cfg else None,
                         "max_output_tokens": cfg.max_output_tokens if cfg else None,
                         "session_total_input": sess.total_input_tokens,
                         "session_total_output": sess.total_output_tokens,
                     }
+                    if not enriched.get("context_window"):
+                        enriched["context_window"] = (
+                            cfg.context_window if cfg else None
+                        )
                     yield _sse(enriched)
                 else:
                     yield _sse(event)
@@ -167,6 +180,7 @@ def chat_stream(sid: str):
             sess.add_assistant(
                 "".join(collected),
                 reasoning="".join(collected_reasoning),
+                chart_ids=turn_chart_ids,
             )
 
         except Exception as exc:

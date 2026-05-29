@@ -7,9 +7,12 @@ LLM API Key 配置管理
 """
 import os
 import json
+import logging
 from pathlib import Path
 from typing import Dict, Optional, Any, List
 from dataclasses import dataclass, asdict
+
+log = logging.getLogger(__name__)
 
 CONFIG_DIR = Path("/tmp/LLM") if os.environ.get("VERCEL") else Path(__file__).parent
 if os.environ.get("VERCEL"):
@@ -73,7 +76,7 @@ class LLMConfigManager:
                     for provider, config in data.items():
                         self.configs[provider] = LLMConfig(**config)
             except Exception as e:
-                print(f"加载配置失败: {e}")
+                log.error("加载配置失败: %s", e)
 
         if load_from_env:
             self._load_from_env()
@@ -105,7 +108,7 @@ class LLMConfigManager:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             return True
         except Exception as e:
-            print(f"保存配置失败: {e}")
+            log.error("保存配置失败: %s", e)
             return False
 
     def add_custom_model(
@@ -153,11 +156,11 @@ class LLMConfigManager:
     ) -> bool:
         """设置内置提供商配置"""
         if provider not in self.DEFAULT_CONFIGS:
-            print(f"不支持的提供商: {provider}")
+            log.warning("不支持的提供商: %s", provider)
             return False
 
         if not api_key or not api_key.strip():
-            print("API Key 不能为空")
+            log.warning("API Key 不能为空")
             return False
 
         defaults = self.DEFAULT_CONFIGS[provider]
@@ -228,7 +231,7 @@ class LLMConfigManager:
             thinking_budget=thinking_budget,
         )
         if self.save_configs():
-            return True, f"配置已更新"
+            return True, "配置已更新"
         self.configs[provider] = old
         return False, "保存失败"
 

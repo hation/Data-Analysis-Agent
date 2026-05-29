@@ -1,0 +1,696 @@
+/* ── Messages ─────────────────────────────────────────────────── */
+.messages {
+  flex: 1; overflow-y: auto;
+  padding: 18px 24px 12px;
+  display: flex; flex-direction: column;
+  gap: 14px;
+  scroll-behavior: smooth;
+}
+
+/* ── Message containers ────────────────────────────────────────
+   Two distinct styles:
+     User      — compact blue chat bubble, anchored right.
+     Assistant — "report" style: no card chrome, just a left brand-coloured
+                 rule + body type, designed to host long markdown bodies
+                 (tables / lists / code) without feeling like a chat message. */
+.msg {
+  display: flex; gap: 10px;
+  animation: fadeIn .2s var(--ease-out);
+  min-width: 0;
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; } }
+
+.msg.user {
+  max-width: 78%;
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+.msg.assistant {
+  align-self: stretch;            /* take the full row, content inside controls width */
+  max-width: 100%;
+}
+
+.msg-avatar {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: var(--fs-md); flex-shrink: 0; overflow: hidden;
+  margin-top: 2px;
+}
+.msg.user .msg-avatar { background: var(--color-user-bubble-bg); color: #fff; }
+.msg.assistant .msg-avatar {
+  background: var(--color-surface-3); color: var(--color-text-mute);
+  border: 1px solid var(--color-border-soft);
+}
+.assistant-avatar-img { width: 17px; height: 17px; object-fit: contain; display: block; }
+
+.msg-body { display: flex; flex-direction: column; gap: 5px; min-width: 0; flex: 1; }
+
+/* ── User bubble (chat style) ─────────────────────────────────── */
+.msg.user .msg-bubble {
+  align-self: flex-end;
+  padding: 9px 13px;
+  background: var(--color-user-bubble-bg);
+  color: var(--color-user-bubble-fg);
+  border-radius: 12px;
+  border-bottom-right-radius: 4px;
+  font-size: var(--fs-md); line-height: 1.55;
+  word-break: break-word;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, .2);
+  max-width: 100%;
+}
+
+/* ── Assistant bubble (report-card style) ─────────────────────────
+   Keeps the readable "report" feel (no chat-bubble tail, generous width)
+   but restores a subtle tinted background so the message has presence
+   against the page surface. */
+.msg.assistant .msg-bubble {
+  align-self: stretch;
+  position: relative;
+  padding: 10px 14px 10px 16px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-soft);
+  border-left: 3px solid var(--color-primary-tint);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-md); line-height: 1.65;
+  word-break: break-word;
+  box-shadow: var(--shadow-xs);
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+.msg.assistant .msg-bubble:hover {
+  border-left-color: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+}
+[data-theme="dark"] .msg.assistant .msg-bubble {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  border-left-color: rgba(96, 165, 250, .45);
+}
+[data-theme="dark"] .msg.assistant .msg-bubble:hover {
+  border-left-color: var(--color-primary);
+}
+
+/* Collapse the empty bubble while tool-steps are still streaming */
+.msg-bubble:empty {
+  padding: 0; border: none; box-shadow: none; background: transparent;
+}
+
+/* ── Assistant action bar (copy / re-run) — fades in on hover ─── */
+.msg.assistant .msg-bubble::after {
+  /* Reserve a thin gutter to the right so copy-button overlays don't shift layout */
+  content: "";
+  display: block; height: 0;
+}
+.msg-actions {
+  display: inline-flex; gap: 4px;
+  margin-top: 6px;
+  opacity: 0;
+  transition: opacity var(--t-base);
+}
+.msg.assistant:hover .msg-actions { opacity: 1; }
+.msg-actions button {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-mute);
+  font-family: inherit; font-size: var(--fs-2xs);
+  padding: 3px 9px; border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: border-color var(--t-fast), color var(--t-fast),
+              background var(--t-fast);
+}
+.msg-actions button:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.msg-actions button.copied {
+  border-color: var(--color-success);
+  color: var(--color-success-text);
+  background: var(--color-success-soft);
+}
+
+/* ── Tool steps — pill chips with spin icon + tinted background ──
+   Kept on a left-side timeline (2px guide line + dot connector) so
+   multi-step flows still read as a sequence, but each step itself is
+   a coloured pill: blue tint while running, green tint when done. */
+.tool-steps {
+  display: flex; flex-direction: column;
+  align-items: flex-start;            /* pills hug their content width */
+  gap: 6px;
+  position: relative;
+  padding: 2px 0 2px 20px;
+  margin: 2px 0;
+}
+.tool-steps:empty { display: none; }
+.tool-steps::before {
+  content: ""; position: absolute;
+  left: 6px; top: 6px; bottom: 6px;
+  width: 2px; background: var(--color-border);
+  border-radius: 1px;
+}
+
+.tool-step {
+  display: inline-flex; align-items: center; gap: 6px;
+  position: relative;
+  max-width: 100%;
+  padding: 4px 11px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-sm); line-height: 1.4;
+  background: var(--color-primary-soft);
+  border: 1px solid var(--color-primary-tint);
+  color: #1d4ed8;
+  cursor: pointer; user-select: none;
+  transition: background var(--t-base), border-color var(--t-base), color var(--t-base);
+}
+/* Timeline connector dot (sits on the guide line, anchored to the pill) */
+.tool-step::before {
+  content: ""; position: absolute;
+  left: -17px; top: 50%; transform: translateY(-50%);
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-surface);
+  z-index: 1;
+  transition: background var(--t-base);
+}
+
+/* Spinning icon ("⟳") — the JS renders <span class="spin"> on tool_start */
+.tool-step .spin {
+  display: inline-block;
+  flex-shrink: 0;
+  font-size: var(--fs-md);
+  line-height: 1;
+  animation: tool-spin .9s linear infinite;
+}
+@keyframes tool-spin { to { transform: rotate(360deg); } }
+
+/* Done state — green pill, ✓ icon (JS swaps the character on tool_end) */
+.tool-step.done {
+  background: var(--color-success-soft);
+  border-color: var(--color-success-tint);
+  color: var(--color-success-text);
+}
+.tool-step.done::before { background: var(--color-success); }
+.tool-step.done .spin { animation: none; }  /* "spin" class is reused for ✓ */
+
+.tool-step-text {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
+}
+/* When expanded, the pill becomes a rounded rectangle — full pill radius on
+   a multi-line block would render as large half-circle caps at top/bottom.
+   Also align items to the top so the spin icon doesn't centre over a tall block. */
+.tool-step.expanded {
+  align-items: flex-start;
+  border-radius: var(--radius-md);
+  padding: 6px 12px;
+  white-space: normal;
+}
+.tool-step.expanded .spin,
+.tool-step.expanded .compaction-spin,
+.tool-step.expanded .tool-step-toggle {
+  margin-top: 2px;   /* nudge icons to align with first line of text */
+}
+.tool-step.expanded .tool-step-text {
+  white-space: pre-wrap; word-break: break-all;
+}
+.tool-step-toggle {
+  flex-shrink: 0; font-size: var(--fs-2xs); opacity: .55;
+  margin-left: 2px; transition: opacity var(--t-fast);
+}
+.tool-step:hover .tool-step-toggle { opacity: .9; }
+
+/* Compaction step — purple pill variant */
+.tool-step-compaction {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent-tint);
+  color: var(--color-accent);
+}
+.tool-step-compaction::before { background: var(--color-accent); }
+
+/* Compaction running indicator (rotating + scaling pulse) */
+.tool-step-compaction .compaction-spin {
+  display: inline-block;
+  flex-shrink: 0;
+  font-size: var(--fs-md);
+  line-height: 1;
+  animation: compaction-pulse 1.2s ease-in-out infinite;
+}
+@keyframes compaction-pulse {
+  0%   { transform: rotate(0deg)   scale(1);    opacity: 1; }
+  40%  { transform: rotate(200deg) scale(1.25); opacity: .7; }
+  100% { transform: rotate(360deg) scale(1);    opacity: 1; }
+}
+
+.tool-step-compaction.done-compaction {
+  background: #f5f3ff;
+  border-color: #c4b5fd;
+  color: var(--color-accent-text);
+}
+.tool-step-compaction.done-compaction::before { background: var(--color-accent-text); }
+.tool-step-compaction.done-compaction .compaction-spin { animation: none; }
+
+/* ── Chart frame — sits inside .msg-body, visually consistent with
+   the assistant bubble (same surface, same left accent border). ── */
+.chart-frame {
+  width: 100%;
+  align-self: stretch;   /* stretch inside .msg-body flex column */
+  position: relative;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-soft);
+  border-left: 3px solid var(--color-primary-tint);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-xs);
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+.chart-frame:hover {
+  border-left-color: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+}
+[data-theme="dark"] .chart-frame {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  border-left-color: rgba(96, 165, 250, .45);
+}
+[data-theme="dark"] .chart-frame:hover {
+  border-left-color: var(--color-primary);
+}
+.chart-frame iframe {
+  width: 100%; height: 420px; border: none; display: block;
+}
+.chart-expand-btn {
+  position: absolute; top: 8px; right: 8px; z-index: 10;
+  background: rgba(255,255,255,.85); backdrop-filter: blur(6px);
+  border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+  padding: 4px 9px; font-size: var(--fs-sm); color: var(--color-text-soft);
+  cursor: pointer; line-height: 1.4; transition: all var(--t-fast);
+}
+.chart-expand-btn:hover {
+  background: #fff; color: var(--color-primary); border-color: var(--color-primary);
+}
+[data-theme="dark"] .chart-expand-btn {
+  background: rgba(30,41,59,.85);
+  color: var(--color-text-mute);
+}
+
+/* typing */
+.typing-dots { display: flex; align-items: center; gap: 4px; padding: 3px 0; }
+.typing-dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--color-text-dim);
+  animation: bounce .85s ease infinite; }
+.typing-dots span:nth-child(2) { animation-delay: .15s; }
+.typing-dots span:nth-child(3) { animation-delay: .3s; }
+@keyframes bounce { 0%,80%,100%{transform:translateY(0)} 40%{transform:translateY(-6px)} }
+
+/* markdown in bubbles */
+/* Markdown rendered inside a bubble — keep typography compact and aligned
+   to the bubble's smaller font size so multi-paragraph replies don't sprawl. */
+.msg-bubble p { margin: 4px 0; }
+.msg-bubble p:first-child { margin-top: 0; }
+.msg-bubble p:last-child  { margin-bottom: 0; }
+.msg-bubble h1, .msg-bubble h2, .msg-bubble h3,
+.msg-bubble h4, .msg-bubble h5, .msg-bubble h6 {
+  margin: 10px 0 4px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.msg-bubble h1 { font-size: 15px; }
+.msg-bubble h2 { font-size: 14.5px; }
+.msg-bubble h3 { font-size: 14px; }
+.msg-bubble h4,
+.msg-bubble h5,
+.msg-bubble h6 { font-size: 13px; }
+.msg-bubble h1:first-child,
+.msg-bubble h2:first-child,
+.msg-bubble h3:first-child { margin-top: 0; }
+
+.msg-bubble pre {
+  background: #0f172a; color: #e2e8f0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  font-size: 12px; line-height: 1.5;
+  margin: 6px 0;
+}
+.msg-bubble code {
+  background: var(--color-surface-3);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #0f172a;
+}
+.msg-bubble pre code { background: none; color: inherit; padding: 0; font-size: 12px; }
+
+.msg-bubble table {
+  border-collapse: collapse;
+  width: auto; max-width: 100%;
+  font-size: 12.5px;
+  margin: 6px 0;
+}
+.msg-bubble th, .msg-bubble td { border: 1px solid var(--color-border); padding: 4px 9px; }
+.msg-bubble th { background: var(--color-surface-2); font-weight: 600; text-align: left; }
+
+.msg-bubble ul, .msg-bubble ol { padding-left: 1.3em; margin: 4px 0; }
+.msg-bubble li { margin: 1px 0; }
+.msg-bubble li > p { margin: 0; }
+
+.msg-bubble hr { border: none; border-top: 1px solid var(--color-border); margin: 8px 0; }
+.msg-bubble a { color: var(--color-primary); text-decoration: none; }
+.msg-bubble a:hover { text-decoration: underline; }
+
+/* User-bubble override — code/links on blue must be readable */
+.msg.user .msg-bubble code {
+  background: rgba(255, 255, 255, .2);
+  color: #fff;
+}
+.msg.user .msg-bubble a {
+  color: #fff;
+  text-decoration: underline;
+}
+
+/* welcome */
+.welcome { flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 11px; color: var(--color-text-dim);
+  text-align: center; padding: 40px; }
+.welcome .big-icon { font-size: 46px; }
+.welcome h2 { font-size: var(--fs-2xl); color: var(--color-text-soft); font-weight: 600; }
+.welcome p { font-size: var(--fs-lg); max-width: 440px; line-height: 1.65; }
+.hint-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 8px; }
+.hint-chip { background: var(--color-surface); border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill); padding: 7px 14px; font-size: var(--fs-md);
+  color: var(--color-text-soft); cursor: pointer;
+  transition: border-color var(--t-fast), color var(--t-fast), box-shadow var(--t-fast); }
+.hint-chip:hover { border-color: var(--color-primary); color: var(--color-primary);
+  box-shadow: var(--shadow-xs); }
+
+/* ── Reasoning chain ─────────────────────────────────────────── */
+.reasoning-block { background: var(--color-accent-soft); border: 1px solid var(--color-accent-tint);
+  border-radius: var(--radius-md); margin-bottom: 8px; overflow: hidden; }
+.reasoning-toggle { display: flex; align-items: center; gap: 6px;
+  padding: 7px 12px; cursor: pointer; font-size: var(--fs-sm); color: var(--color-accent);
+  font-weight: 500; user-select: none; transition: background var(--t-fast); }
+.reasoning-toggle:hover { background: #f3e8ff; }
+.reasoning-arrow { transition: transform .2s; font-size: var(--fs-2xs); display: inline-block; }
+.reasoning-toggle.open .reasoning-arrow { transform: rotate(90deg); }
+.reasoning-body { display: none; padding: 0 12px 10px;
+  font-size: var(--fs-sm); color: #6b7280; line-height: 1.65;
+  white-space: pre-wrap; border-top: 1px solid var(--color-accent-tint);
+  max-height: 400px; overflow-y: auto; }
+.reasoning-body.open { display: block; }
+
+/* ── Token usage bar ──────────────────────────────────────────── */
+/* ── Input area ─────────────────────────────────────────────────
+   Card-style composer:
+     ┌────────────────────────────────────────────────────────┐
+     │ chip chip chip chip chip                          (scrolls →)  ← hint chips
+     │ ┌────────────────────────────────────────────────────┐ │
+     │ │ [/cmd ×]                              [▮▮▮  5.2K] │ │  ← cmd badge + token pill
+     │ │                                                    │ │
+     │ │  textarea (auto-grow, max 200px)                   │ │
+     │ │                                                    │ │
+     │ │  ⏎ Enter 发送 · Shift+⏎ 换行          [ ↑ send ]  │ │  ← keyboard hint + send
+     │ └────────────────────────────────────────────────────┘ │
+     └────────────────────────────────────────────────────────┘
+*/
+.input-area {
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  padding: 8px 22px 12px;
+  position: relative;
+}
+
+/* ── Top bar above the composer: hint chips + token pill ────────── */
+.input-topbar {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 6px;
+  min-width: 0;
+}
+.input-hints {
+  flex: 1; min-width: 0;
+  display: flex; gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+  /* Fade the right edge so users feel there's more to scroll */
+  mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 24px), transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 24px), transparent 100%);
+}
+.input-hints::-webkit-scrollbar { height: 4px; }
+.input-hints::-webkit-scrollbar-thumb {
+  background: var(--color-border); border-radius: 2px;
+}
+.input-hint-chip {
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+  color: var(--color-text-mute);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color var(--t-fast), color var(--t-fast),
+              background var(--t-fast), transform var(--t-fast);
+}
+.input-hint-chip:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.input-hint-chip:active { transform: scale(.97); }
+
+/* ── Composer card ─────────────────────────────────────────────── */
+.input-card {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 8px 8px 8px 14px;
+  display: grid;
+  /* Three columns: textarea (grows) | meta column (auto) | send button (auto)
+     meta column hosts the floating cmd-badge + token-pill above textarea row */
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto 1fr;
+  column-gap: 8px;
+  row-gap: 2px;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+  position: relative;
+}
+.input-card:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, .12),
+              var(--shadow-sm);
+}
+
+/* Command-badge row inside the card.
+   Hidden when no slash command is active (token-pill lives outside now). */
+.input-meta {
+  grid-column: 1 / -1;
+  display: none;
+  align-items: center;
+  margin-bottom: 2px;
+}
+/* Show this row only when a command badge is present */
+.input-card:has(.cmd-badge.show) .input-meta {
+  display: flex;
+}
+
+/* ── Command badge (when a slash command is active) ─────────────── */
+.cmd-badge {
+  display: none;
+  align-items: center; gap: 6px;
+  background: var(--color-primary-tint);
+  border: 1px solid #93c5fd;
+  color: #1d4ed8;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-sm); font-weight: 600;
+  padding: 3px 10px 3px 11px;
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.cmd-badge.show { display: inline-flex; }
+.cmd-badge:hover { background: #c7defc; border-color: #60a5fa; }
+.cmd-badge .x {
+  font-size: var(--fs-md); line-height: 1;
+  opacity: .65; padding: 0 0 0 2px;
+  transition: opacity var(--t-fast);
+}
+.cmd-badge:hover .x { opacity: 1; }
+
+/* ── Token usage pill (right end of the input-topbar row) ───────── */
+.token-pill {
+  display: none;
+  align-items: center; gap: 8px;
+  flex-shrink: 0;
+  padding: 3px 10px 3px 8px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-2xs);
+  color: var(--color-text-mute);
+  user-select: none;
+  cursor: help;
+}
+.token-pill.visible { display: inline-flex; }
+.token-pill-bar {
+  width: 44px; height: 4px;
+  background: var(--color-border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.token-pill-fill {
+  height: 100%;
+  background: var(--color-success);
+  border-radius: 2px;
+  transition: width .4s var(--ease-out), background-color .4s var(--ease-out);
+}
+.token-pill-fill.warn { background: var(--color-warn); }
+.token-pill-fill.crit { background: var(--color-danger); }
+.token-pill-label {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+
+/* ── Textarea ──────────────────────────────────────────────────── */
+/* Sits in the bottom-left cell of the input-card grid. */
+#msg-input {
+  grid-column: 1; grid-row: 2;
+  align-self: center;
+  width: 100%;
+  border: none; background: transparent; resize: none; outline: none;
+  font-family: inherit; color: var(--color-text);
+  font-size: var(--fs-md); line-height: 1.5;
+  min-height: 22px; max-height: 160px;
+  padding: 4px 0;
+}
+#msg-input::placeholder { color: var(--color-text-dim); }
+#msg-input::-webkit-scrollbar { width: 6px; }
+#msg-input::-webkit-scrollbar-thumb {
+  background: var(--color-border); border-radius: 3px;
+}
+#msg-input::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
+
+/* ── Send button (round, sits in bottom-right cell of input-card grid) ── */
+.send-btn {
+  grid-column: 2; grid-row: 2;
+  align-self: end;
+  width: 34px; height: 34px;
+  margin-bottom: 1px;
+  border: none; border-radius: 50%;
+  background: var(--color-primary); color: #fff;
+  cursor: pointer; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: 0 1px 0 rgba(255,255,255,.15) inset,
+              0 2px 6px rgba(37, 99, 235, .35);
+  transition: background var(--t-fast), transform var(--t-fast),
+              box-shadow var(--t-fast);
+}
+.send-btn svg { width: 18px; height: 18px; display: block; }
+.send-btn:hover {
+  background: var(--color-primary-hover);
+  box-shadow: 0 1px 0 rgba(255,255,255,.15) inset,
+              0 4px 12px rgba(37, 99, 235, .45);
+}
+.send-btn:active { transform: scale(.93); }
+.send-btn:disabled {
+  background: #cbd5e1; cursor: not-allowed;
+  box-shadow: none;
+}
+.send-btn.stopping {
+  background: var(--color-danger);
+  box-shadow: 0 1px 0 rgba(255,255,255,.15) inset,
+              0 2px 6px rgba(239, 68, 68, .4);
+}
+.send-btn.stopping:hover {
+  background: var(--color-danger-hover);
+  box-shadow: 0 1px 0 rgba(255,255,255,.15) inset,
+              0 4px 12px rgba(239, 68, 68, .55);
+}
+/* When stopping, replace the arrow SVG with a stop square via ::before
+   (works because the SVG inside is hidden by the .stopping class) */
+.send-btn.stopping svg { display: none; }
+.send-btn.stopping::before {
+  content: "";
+  width: 12px; height: 12px;
+  background: currentColor;
+  border-radius: 2px;
+}
+
+/* ── "Stopped" footnote in assistant bubble after user clicks stop ── */
+.stop-note {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: var(--fs-sm); color: var(--color-text-dim);
+  padding: 3px 0 6px;
+  user-select: none;
+}
+
+/* ── PPT outline card ─────────────────────────────────────────── */
+.ppt-outline-card { background: var(--color-surface-2); border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg); overflow: hidden; margin-top: 4px; box-shadow: var(--shadow-xs); }
+.ppt-outline-header { display: flex; align-items: center; gap: 8px;
+  background: #1e3a5f; color: #fff; padding: 10px 16px; font-weight: 600; font-size: var(--fs-lg); }
+.ppt-outline-icon { font-size: var(--fs-xl); }
+.ppt-outline-content { padding: 12px 16px; font-size: var(--fs-md); line-height: 1.6;
+  max-height: 400px; overflow-y: auto; }
+.ppt-outline-content table { border-collapse: collapse; width: 100%; font-size: var(--fs-sm); }
+.ppt-outline-content th { background: #1e3a5f; color: #fff; padding: 6px 10px; text-align: left; }
+.ppt-outline-content td { padding: 5px 10px; border-bottom: 1px solid var(--color-border); }
+.ppt-outline-content tr:hover td { background: var(--color-primary-soft); }
+.ppt-outline-edit-wrap { padding: 0 16px 8px; }
+.ppt-outline-edit-hint { font-size: var(--fs-sm); color: var(--color-text-mute); margin-bottom: 6px; }
+.ppt-outline-edit { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1;
+  border-radius: var(--radius-md); padding: 8px 10px; font-size: var(--fs-md);
+  resize: vertical; font-family: inherit; }
+.ppt-outline-edit:focus { outline: none; border-color: #1e3a5f; }
+.ppt-outline-btns { display: flex; gap: 8px; padding: 10px 16px 14px; flex-wrap: wrap; }
+.ppt-btn { border: none; border-radius: var(--radius-pill); padding: 7px 18px;
+  font-size: var(--fs-md); font-weight: 600; cursor: pointer;
+  transition: opacity var(--t-fast), background var(--t-fast); }
+.ppt-btn:disabled { cursor: default; }
+.ppt-btn-confirm { background: #1e3a5f; color: #fff; }
+.ppt-btn-confirm:hover:not(:disabled) { background: #162d4a; }
+.ppt-btn-revise  { background: var(--color-surface-3); color: var(--color-text-soft);
+  border: 1px solid #cbd5e1; }
+.ppt-btn-revise:hover:not(:disabled) { background: var(--color-border); }
+.ppt-btn-cancel  { background: var(--color-surface); color: var(--color-text-dim);
+  border: 1px solid var(--color-border); }
+.ppt-btn-cancel:hover:not(:disabled) { background: var(--color-surface-2); }
+.ppt-cancelled-note { font-size: var(--fs-sm); color: var(--color-text-dim);
+  padding: 4px 16px 12px; font-style: italic; }
+
+/* (Legacy .cmd-badge rules removed — new composer card defines them above.) */
+
+/* ── Slash command popup ──────────────────────────────────────── */
+.slash-popup { position: absolute; bottom: calc(100% + 6px); left: 22px; right: 22px;
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-md); overflow: hidden;
+  z-index: 50; display: none; }
+.slash-popup.open { display: flex; flex-direction: column; }
+.slash-pop-header { padding: 9px 14px 6px; font-size: var(--fs-xs); font-weight: 700;
+  text-transform: uppercase; letter-spacing: .07em; color: var(--color-text-dim);
+  border-bottom: 1px solid var(--color-surface-3); flex-shrink: 0; }
+.slash-popup-scroll {
+  max-height: 320px; overflow-y: auto; overscroll-behavior: contain;
+}
+.slash-popup-scroll::-webkit-scrollbar { width: 6px; }
+.slash-popup-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-border); border-radius: 4px;
+}
+.slash-popup-scroll::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
+.slash-group-label { padding: 6px 14px 3px; font-size: var(--fs-2xs); font-weight: 700;
+  text-transform: uppercase; letter-spacing: .08em; color: #cbd5e1;
+  background: var(--color-surface-2); }
+.slash-item { display: flex; align-items: center; gap: 11px; padding: 9px 14px;
+  cursor: pointer; transition: background var(--t-fast); }
+.slash-item:hover, .slash-item.active { background: var(--color-primary-soft); }
+.slash-item.disabled { opacity: .45; cursor: default; }
+.slash-item.disabled:hover { background: transparent; }
+.slash-icon { font-size: 17px; flex-shrink: 0; width: 26px; text-align: center; }
+.slash-info { flex: 1; }
+.slash-name { font-size: var(--fs-md); font-weight: 600; color: var(--color-text); }
+.slash-name mark { background: #fef08a; color: var(--color-warn-text); border-radius: 2px;
+  padding: 0 1px; font-weight: 700; }
+.slash-desc { font-size: 11.5px; color: var(--color-text-mute); margin-top: 1px; line-height: 1.4; }
+.slash-soon { display: inline-block; margin-left: 6px; background: var(--color-surface-3);
+  border-radius: 4px; padding: 1px 6px; font-size: var(--fs-2xs); color: var(--color-text-dim);
+  font-weight: 600; vertical-align: middle; }
+.slash-empty { padding: 14px; text-align: center; font-size: var(--fs-sm); color: var(--color-text-dim); }

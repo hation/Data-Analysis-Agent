@@ -1,0 +1,322 @@
+/* ── Layout ───────────────────────────────────────────────────── */
+.layout { display: flex; height: 100vh; overflow: hidden; }
+
+/* ════════════════════════════════════════════════════════════════
+   Sidebar — three-tier information architecture
+   ──────────────────────────────────────────────────────────────
+   sb-brand      ← logo + product name
+   sb-status     ← datasource / model / MCP  (current session at a glance)
+   sb-actions    ← add source, new chat, save, knowledge base
+   sb-history    ← saved conversations (natural-flowing, no inner scroll)
+   sb-footer     ← version + theme/lang/update
+   ──────────────────────────────────────────────────────────────── */
+.sidebar {
+  width: 280px; min-width: 280px;
+  background: var(--color-sidebar-bg);
+  background-image: linear-gradient(180deg, #1f2340 0%, var(--color-sidebar-bg) 60%);
+  display: flex; flex-direction: column;
+  padding: 18px 13px 14px;
+  gap: 20px;                  /* was 14px — give each section more breathing room */
+  overflow-y: auto;
+  color: var(--color-sidebar-fg);
+}
+/* History section sits a bit further from the action buttons above it,
+   so the saved chats feel like a separate "library" zone. */
+.sidebar > .sb-history { margin-top: 8px; }
+[data-theme="dark"] .sidebar {
+  background-image: linear-gradient(180deg, #131730 0%, var(--color-sidebar-bg) 60%);
+}
+
+/* Sidebar scrollbar — slim and matching the dark theme */
+.sidebar::-webkit-scrollbar { width: 6px; }
+.sidebar::-webkit-scrollbar-thumb {
+  background: var(--color-sidebar-divider); border-radius: 3px;
+}
+.sidebar::-webkit-scrollbar-thumb:hover {
+  background: var(--color-sidebar-hover);
+}
+
+/* ── Brand ──────────────────────────────────────────────────── */
+.sb-brand {
+  display: flex; align-items: center; gap: 12px;
+  padding: 4px 6px 14px;
+  border-bottom: 1px solid var(--color-sidebar-divider);
+}
+.sb-brand-icon {
+  font-size: 28px; line-height: 1;
+  filter: drop-shadow(0 2px 4px rgba(96, 165, 250, .35));
+}
+.sb-brand-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sb-brand-name {
+  font-size: var(--fs-xl); font-weight: 700; color: #fff;
+  letter-spacing: .02em; line-height: 1.15;
+}
+.sb-brand-tagline {
+  font-size: var(--fs-xs); font-weight: 400;
+  color: var(--color-sidebar-fg-dim); letter-spacing: .03em;
+}
+
+/* ── Status block ───────────────────────────────────────────── */
+.sb-status {
+  display: flex; flex-direction: column; gap: 3px;
+  background: var(--color-sidebar-bg-2);
+  border: 1px solid rgba(255, 255, 255, .03);
+  border-radius: var(--radius-md);
+  padding: 8px;                /* was 6px — small bump for visual ease */
+}
+.sb-status-row {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%;
+  padding: 9px 10px;            /* was 7px×9px — taller rows */
+  border: none; background: transparent;
+  border-radius: var(--radius-sm);
+  font-family: inherit; font-size: var(--fs-sm);
+  color: var(--color-sidebar-fg);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--t-fast);
+}
+.sb-status-row:hover { background: var(--color-sidebar-hover); }
+.sb-status-row:focus-visible {
+  outline: 2px solid var(--color-primary); outline-offset: -2px;
+}
+
+.sb-status-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  background: #475569;
+  transition: background var(--t-base), box-shadow var(--t-base);
+}
+.sb-status-dot.on {
+  background: var(--color-success);
+  box-shadow: 0 0 6px rgba(34, 197, 94, .55);
+}
+.sb-status-dot--info { background: #60a5fa; box-shadow: 0 0 6px rgba(96, 165, 250, .35); }
+
+.sb-status-label {
+  color: var(--color-sidebar-fg-dim);
+  font-size: var(--fs-xs); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .06em;
+  flex-shrink: 0; min-width: 48px;
+}
+.sb-status-value {
+  flex: 1; min-width: 0;
+  color: #f1f5f9; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sb-status-chev {
+  color: var(--color-sidebar-fg-faint);
+  font-size: var(--fs-lg); line-height: 1; flex-shrink: 0;
+  transition: transform var(--t-fast), color var(--t-fast);
+}
+.sb-status-row:hover .sb-status-chev {
+  color: var(--color-sidebar-fg-mute); transform: translateX(2px);
+}
+
+/* Model row — single-line: dot · MODEL · [select grows] · ⚙
+   Tighter gap (6px) and the label drops its 48px min-width so the <select>
+   snuggles up to the caption instead of floating in the middle of the row. */
+.sb-status-row--select { cursor: default; gap: 6px; }
+.sb-status-row--select:hover { background: transparent; }
+.sb-status-row--select .sb-status-label {
+  min-width: 0;
+  margin-right: 2px;
+}
+.sb-status-select {
+  flex: 1; min-width: 0;
+  background: var(--color-sidebar-bg);
+  border: 1px solid var(--color-sidebar-divider);
+  color: #f1f5f9;
+  border-radius: var(--radius-sm);
+  padding: 5px 8px; font-size: var(--fs-sm);
+  cursor: pointer;
+  text-overflow: ellipsis;
+  transition: border-color var(--t-fast);
+}
+.sb-status-select:hover  { border-color: var(--color-sidebar-hover); }
+.sb-status-select:focus  { outline: none; border-color: var(--color-primary); }
+.sb-status-iconbtn {
+  border: none; background: transparent;
+  color: var(--color-sidebar-fg-dim);
+  font-size: var(--fs-lg); line-height: 1;
+  padding: 3px 6px; border-radius: var(--radius-sm);
+  cursor: pointer; flex-shrink: 0;
+  transition: color var(--t-fast), background var(--t-fast);
+}
+.sb-status-iconbtn:hover {
+  color: #f1f5f9; background: var(--color-sidebar-hover);
+}
+.sb-status-iconbtn:disabled {
+  cursor: progress;
+}
+
+/* Model status dot — pulsing aura via outline while the connection test runs.
+   Uses outline rather than box-shadow so it stacks cleanly with the dot's
+   own ambient glow (defined on .sb-status-dot--info / .on). */
+.sb-status-dot.testing {
+  animation: model-dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes model-dot-pulse {
+  0%, 100% { outline: 0 solid rgba(96, 165, 250, .45); outline-offset: 0; }
+  50%      { outline: 4px solid rgba(96, 165, 250, .08); outline-offset: 2px; }
+}
+
+/* ── Actions ────────────────────────────────────────────────── */
+.sb-actions { display: flex; flex-direction: column; gap: 8px; }   /* was 6 */
+.sb-actions-row { display: flex; gap: 8px; }                       /* was 6 */
+.sb-actions-row .sb-btn { flex: 1; }
+
+.sb-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  border: 1px solid transparent; cursor: pointer;
+  border-radius: var(--radius-sm);
+  padding: 9px 13px;                  /* was 8×12 — bigger touch target */
+  font-family: inherit; font-size: var(--fs-md); font-weight: 500;
+  transition: all var(--t-fast);
+}
+.sb-btn:active   { transform: scale(.97); }
+.sb-btn-block    { width: 100%; }
+.sb-btn-ghost    {
+  background: transparent; border-color: var(--color-sidebar-divider);
+  color: var(--color-sidebar-fg-mute);
+}
+.sb-btn-ghost:hover {
+  background: var(--color-sidebar-hover); color: #f1f5f9;
+  border-color: var(--color-sidebar-hover);
+}
+.sb-btn-primary {
+  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+  color: #fff;
+  border-color: rgba(255, 255, 255, .08);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .12) inset,
+              0 1px 4px rgba(37, 99, 235, .35);
+}
+.sb-btn-primary:hover {
+  background: linear-gradient(180deg, #4f8df8 0%, #2563eb 100%);
+}
+
+/* "Add data source" CTA glows when no source is connected */
+.sidebar:not(.has-source) .sb-dropdown > .sb-btn-primary {
+  animation: cta-pulse 2.4s ease-in-out infinite;
+}
+@keyframes cta-pulse {
+  0%, 100% { box-shadow: 0 1px 0 rgba(255,255,255,.12) inset,
+                          0 1px 4px rgba(37, 99, 235, .35); }
+  50%      { box-shadow: 0 1px 0 rgba(255,255,255,.12) inset,
+                          0 0 0 4px rgba(59, 130, 246, .25),
+                          0 1px 4px rgba(37, 99, 235, .35); }
+}
+
+/* ── Dropdown (add data source) ─────────────────────────────── */
+.sb-dropdown { position: relative; }
+.sb-dropdown-caret {
+  font-size: var(--fs-xs); opacity: .8;
+  transition: transform var(--t-fast);
+}
+.sb-dropdown.open .sb-dropdown-caret { transform: rotate(180deg); }
+.sb-dropdown-menu {
+  display: none;
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--color-sidebar-bg-2);
+  border: 1px solid var(--color-sidebar-divider);
+  border-radius: var(--radius-md);
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+  z-index: 20;
+}
+.sb-dropdown.open .sb-dropdown-menu { display: block; animation: dd-in .15s var(--ease-out); }
+@keyframes dd-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.sb-dropdown-item {
+  display: block; width: 100%;
+  border: none; background: transparent;
+  text-align: left;
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
+  font-family: inherit; font-size: var(--fs-md);
+  color: var(--color-sidebar-fg-mute);
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.sb-dropdown-item:hover {
+  background: var(--color-sidebar-hover); color: #f1f5f9;
+}
+.sb-dropdown-item--danger { color: #f87171; }
+.sb-dropdown-item--danger:hover {
+  background: rgba(239, 68, 68, .12); color: #fca5a5;
+}
+.sb-dropdown-sep {
+  border: none; border-top: 1px solid var(--color-sidebar-divider);
+  margin: 4px 4px;
+}
+
+/* ── History (saved sessions) ───────────────────────────────── */
+.sb-history { display: flex; flex-direction: column; gap: 6px; }
+.sb-history-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 4px;
+  font-size: var(--fs-2xs); font-weight: 700;
+  text-transform: uppercase; letter-spacing: .08em;
+  color: var(--color-sidebar-fg-faint);
+}
+.sb-history-refresh {
+  border: none; background: transparent;
+  color: var(--color-sidebar-fg-dim);
+  cursor: pointer; padding: 2px 5px;
+  border-radius: 4px; font-size: var(--fs-sm);
+  transition: color var(--t-fast), background var(--t-fast);
+}
+.sb-history-refresh:hover {
+  color: #f1f5f9; background: var(--color-sidebar-hover);
+}
+.sb-history-list {
+  display: flex; flex-direction: column; gap: 4px;
+}
+
+/* ── Footer ─────────────────────────────────────────────────── */
+.sb-footer {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-sidebar-divider);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.sb-footer-meta {
+  font-size: var(--fs-2xs);
+  color: var(--color-sidebar-fg-faint);
+  text-align: center;
+  letter-spacing: .04em;
+}
+.sb-footer-actions {
+  display: flex; gap: 6px; align-items: stretch;
+}
+.sb-iconbtn {
+  border: 1px solid var(--color-sidebar-divider);
+  background: transparent;
+  color: var(--color-sidebar-fg-mute);
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  font-family: inherit; font-size: var(--fs-xs); font-weight: 600;
+  cursor: pointer; white-space: nowrap;
+  transition: all var(--t-fast); letter-spacing: .04em;
+  min-width: 32px;
+}
+.sb-iconbtn:hover {
+  border-color: var(--color-primary);
+  color: #60a5fa;
+  background: var(--color-sidebar-bg-2);
+}
+.sb-iconbtn-wide { flex: 1; }   /* "🔄 检查更新" expands to fill row */
+
+/* All status-dot styling is handled by .sb-status-dot{,.on} above.
+   Legacy .source-dot rules were removed from modules.js / mcp_settings.js
+   in batch #33 — both now use classList.toggle("on"). */
+
+/* ── Main ─────────────────────────────────────────────────────── */
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+
+.chat-header { background: var(--color-surface); border-bottom: 1px solid var(--color-border);
+  padding: 13px 22px; display: flex; align-items: center; justify-content: space-between; }
+.chat-header-title { font-size: var(--fs-lg); font-weight: 600; color: var(--color-text); }
+.chat-header-sub { font-size: var(--fs-sm); color: var(--color-text-dim); margin-top: 1px; }
+.header-btns { display: flex; gap: 7px; }

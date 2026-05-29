@@ -4,13 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dashboard — 智析Agent</title>
-
-<!-- ── CSS ── -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/parts/tokens.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/gridstack.min.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
-
-<!-- ── JS ── -->
-<script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
+<script>
+(function(){
+  var t = localStorage.getItem("baa_theme");
+  if (t === "dark") document.documentElement.setAttribute("data-theme", "dark");
+})();
+</script>
 </head>
 <body>
 
@@ -24,46 +26,56 @@
   <div class="nav-title" id="db-name">Dashboard</div>
   <div class="nav-meta" id="db-meta"></div>
   <div class="nav-actions">
-    <button class="btn-nav" id="btn-refresh">
-      <span id="refresh-icon">↻</span> 刷新数据
-    </button>
-    <button class="btn-nav primary" id="btn-save-layout" disabled>
-      💾 保存布局
-    </button>
+    <div class="nav-refresh-group">
+      <select class="nav-refresh-sel" id="auto-refresh-sel">
+        <option value="0">手动刷新</option>
+        <option value="30">30 秒</option>
+        <option value="60">1 分钟</option>
+        <option value="300">5 分钟</option>
+        <option value="600">10 分钟</option>
+      </select>
+      <button class="btn-nav attached-r" id="btn-refresh">
+        <span id="refresh-icon">↻</span> 刷新数据
+      </button>
+    </div>
+    <span class="db-refresh-countdown" id="refresh-countdown" style="display:none;"></span>
+    <button class="btn-nav primary" id="btn-save-layout" disabled>💾 保存布局</button>
   </div>
 </nav>
 
-<!-- ── KPI Strip (可选) ── -->
-<div class="kpi-strip" id="kpi-strip"></div>
+<!-- ── Page body (padded below nav) ── -->
+<div class="db-page">
 
-<!-- ── Layout Canvas ── -->
-<div class="db-layout">
-  <div class="db-canvas">
-    <!-- Title bar -->
-    <div class="db-title-bar" id="db-title-bar" style="display:none;">
-      <div class="db-title-main" id="db-title-main"></div>
-      <div class="db-title-sub" id="db-title-sub"></div>
-      <div class="db-title-divider"></div>
-    </div>
-    <!-- Chart grid -->
-    <div class="db-grid-wrap" id="db-grid-wrap" style="display:none;">
-      <div class="grid-stack" id="grid"></div>
-    </div>
-    <!-- Empty state -->
-    <div class="db-empty" id="empty-state" style="display:none;">
-      <div class="db-empty-icon">📊</div>
-      <div class="db-empty-title">看板为空</div>
-      <div class="db-empty-desc">该看板没有任何图表组件</div>
-    </div>
+  <!-- Title bar -->
+  <div class="db-title-bar" id="db-title-bar" style="display:none;">
+    <div class="db-title-main" id="db-title-main"></div>
+    <div class="db-title-sub"  id="db-title-sub"></div>
+    <div class="db-title-divider"></div>
   </div>
-</div>
+
+  <!-- KPI Strip -->
+  <div class="kpi-strip" id="kpi-strip"></div>
+
+  <!-- Chart grid -->
+  <div class="db-grid-wrap" id="db-grid-wrap" style="display:none;">
+    <div class="grid-stack" id="grid"></div>
+  </div>
+
+  <!-- Empty state -->
+  <div class="db-empty" id="empty-state" style="display:none;">
+    <div class="db-empty-icon">📊</div>
+    <div class="db-empty-title">看板为空</div>
+    <div class="db-empty-desc">该看板没有任何图表组件</div>
+  </div>
+
+</div><!-- /.db-page -->
 
 <!-- ── Session-ID Modal ── -->
 <div class="modal-backdrop" id="sid-modal" style="display:none;">
   <div class="modal-box">
     <div class="modal-title">🔗 连接数据源</div>
     <div class="modal-desc">
-      刷新看板需要一个有效的对话 Session ID（在聊天页面地址栏可找到），以便重新查询数据。
+      刷新看板需要有效的对话 Session ID（聊天页面地址栏可找到），以便重新查询数据。
     </div>
     <input class="modal-input" id="sid-input" type="text" placeholder="输入 Session ID…">
     <div class="modal-actions">
@@ -76,7 +88,7 @@
 <!-- ── Toast ── -->
 <div class="db-toast" id="db-toast"></div>
 
-<!-- ── Dashboard JS ── -->
+<script src="{{ url_for('static', filename='vendor/gridstack-all.js') }}"></script>
 <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 </body>
 </html>

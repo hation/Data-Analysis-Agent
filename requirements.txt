@@ -1,3 +1,15 @@
+# =============================================================================
+# Loose declarations — describes what we depend on by name and minimum version.
+# Use this for development. For production / first-time installs, prefer:
+#     pip install -r requirements.lock.txt
+# which pins every transitive dependency to a known-good version.
+# =============================================================================
+#
+# Regenerate the lock after upgrading anything here:
+#     pip install -r requirements.txt --upgrade
+#     pip freeze > requirements.lock.txt
+# =============================================================================
+
 # Web
 flask>=2.0.0
 flask-cors>=3.0.0

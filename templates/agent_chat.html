@@ -11,86 +11,105 @@
 
   <!-- ── Sidebar ──────────────────────────────────────────────── -->
   <aside class="sidebar">
-    <div class="sidebar-logo">
-      <span class="icon">📊</span>
-      <h1>
-        <span data-i18n="app.title">智析Agent</span>
-        <span data-i18n="app.subtitle">Intelligent Analysis Agent</span>
-      </h1>
-    </div>
 
-    <!-- Data source -->
-    <div>
-      <div class="sec-label" data-i18n="sidebar.datasource">数据源</div>
-      <div class="source-card">
-        <div class="source-dot" id="src-dot"></div>
-        <div>
-          <div class="source-name" id="src-name" data-i18n="sidebar.disconnected">未连接</div>
-          <div class="source-hint" id="src-hint" data-i18n="sidebar.hint.noconn">请上传文件或连接数据库</div>
-        </div>
+    <!-- ── Brand ─────────────────────────────────────────────── -->
+    <header class="sb-brand">
+      <span class="sb-brand-icon">📊</span>
+      <div class="sb-brand-text">
+        <span class="sb-brand-name"    data-i18n="app.title">智析 Agent</span>
+        <span class="sb-brand-tagline" data-i18n="app.subtitle">Intelligent Analysis Agent</span>
       </div>
-      <div class="btn-group" style="margin-top:9px;">
-        <button class="btn btn-ghost" onclick="openOverlay('ov-excel')" data-i18n="sidebar.upload">📂 上传 Excel / CSV</button>
-        <button class="btn btn-ghost" onclick="openOverlay('ov-db')" data-i18n="sidebar.connect_db">🗄️ 连接 SQL 数据库</button>
-        <button class="btn btn-ghost" onclick="openOverlay('ov-gsheets')" data-i18n="sidebar.connect_gsheets">📊 连接 Google Sheets</button>
-        <button class="btn btn-ghost" onclick="openOverlay('ov-api')" data-i18n="sidebar.connect_api">🔗 连接自定义 API</button>
-        <button class="btn btn-danger-sm" id="btn-disc" style="display:none" onclick="disconnectSrc()" data-i18n="sidebar.disconnect">断开连接</button>
-      </div>
-    </div>
+    </header>
 
-    <!-- Model selector -->
-    <div>
-      <div class="sec-label" data-i18n="sidebar.model">模型</div>
-      <div class="model-row">
-        <select class="model-select" id="model-sel" onchange="onModelChange()">
+    <!-- ── Status (datasource / model / MCP) ─────────────────── -->
+    <section class="sb-status">
+      <button class="sb-status-row" id="src-row" data-action="openDataSource"
+              title="点击连接 / 查看数据源">
+        <span class="sb-status-dot" id="src-dot"></span>
+        <span class="sb-status-label" data-i18n="sidebar.datasource">数据源</span>
+        <span class="sb-status-value" id="src-name" data-i18n="sidebar.disconnected">未连接</span>
+        <span class="sb-status-chev">›</span>
+      </button>
+      <!-- Hidden hint kept for back-compat with the JS that updates src-hint on lang change -->
+      <span id="src-hint" hidden data-i18n="sidebar.hint.noconn">请上传文件或连接数据库</span>
+
+      <div class="sb-status-row sb-status-row--select">
+        <span class="sb-status-dot sb-status-dot--info" id="model-dot"></span>
+        <span class="sb-status-label" data-i18n="sidebar.model">模型</span>
+        <select class="sb-status-select" id="model-sel">
           <option value="" data-i18n="sidebar.model_placeholder">— 选择模型 —</option>
         </select>
-        <button class="btn-icon" data-i18n-title="modal.settings.title" title="模型设置" onclick="openOverlay('ov-settings')">⚙</button>
+        <button class="sb-status-iconbtn" data-i18n-title="modal.settings.title"
+                title="模型设置" data-action="openOverlay:ov-settings">⚙</button>
       </div>
-    </div>
 
-    <!-- MCP servers section -->
-    <div>
-      <div class="sec-label">MCP 工具服务器</div>
-      <div class="source-card" id="mcp-sidebar-card" style="cursor:pointer" onclick="openMcpSettings()">
-        <div class="source-dot" id="mcp-dot"></div>
-        <div>
-          <div class="source-name" id="mcp-status-text">未连接</div>
-          <div class="source-hint" id="mcp-status-hint">点击管理 MCP 工具服务器</div>
+      <button class="sb-status-row" id="mcp-sidebar-card" data-action="openMcpSettings"
+              title="点击管理 MCP 工具服务器">
+        <span class="sb-status-dot" id="mcp-dot"></span>
+        <span class="sb-status-label">MCP</span>
+        <span class="sb-status-value" id="mcp-status-text">未连接</span>
+        <span class="sb-status-chev">›</span>
+      </button>
+      <span id="mcp-status-hint" hidden>点击管理 MCP 工具服务器</span>
+    </section>
+
+    <!-- ── Actions ───────────────────────────────────────────── -->
+    <section class="sb-actions">
+      <!-- Add data source — primary CTA with dropdown of 4 sources -->
+      <div class="sb-dropdown" id="sb-add-src">
+        <button class="sb-btn sb-btn-primary sb-btn-block"
+                data-action="toggleAddSrc"
+                aria-haspopup="true" aria-expanded="false">
+          <span>＋ <span data-i18n="sidebar.add_source">添加数据源</span></span>
+          <span class="sb-dropdown-caret">▾</span>
+        </button>
+        <div class="sb-dropdown-menu" role="menu">
+          <button class="sb-dropdown-item" data-action="openOverlay:ov-excel"   data-i18n="sidebar.upload">📂 上传 Excel / CSV</button>
+          <button class="sb-dropdown-item" data-action="openOverlay:ov-db"      data-i18n="sidebar.connect_db">🗄️ 连接 SQL 数据库</button>
+          <button class="sb-dropdown-item" data-action="openOverlay:ov-gsheets" data-i18n="sidebar.connect_gsheets">📊 连接 Google Sheets</button>
+          <button class="sb-dropdown-item" data-action="openOverlay:ov-api"     data-i18n="sidebar.connect_api">🔗 连接自定义 API</button>
+          <hr class="sb-dropdown-sep" id="sb-disc-sep" hidden>
+          <button class="sb-dropdown-item sb-dropdown-item--danger"
+                  id="btn-disc" hidden data-action="disconnectSrc"
+                  data-i18n="sidebar.disconnect">断开连接</button>
         </div>
       </div>
-    </div>
 
-    <!-- Knowledge base -->
-    <div>
-      <div class="sec-label">业务知识库</div>
-      <button class="btn btn-ghost" style="width:100%" onclick="openOverlay('ov-knowledge')">🧠 管理业务知识</button>
-    </div>
+      <div class="sb-actions-row">
+        <button class="sb-btn sb-btn-ghost" data-action="newChat"
+                data-i18n="sidebar.new_chat">✦ 新对话</button>
+        <button class="sb-btn sb-btn-ghost" data-action="openSaveDialog"
+                title="保存当前对话" data-i18n="sidebar.save">💾 保存</button>
+      </div>
 
-    <!-- New chat / Save -->
-    <div style="display:flex;gap:6px;">
-      <button class="btn btn-ghost" style="flex:1" onclick="newChat()" data-i18n="sidebar.new_chat">✦ 新对话</button>
-      <button class="btn btn-ghost" style="flex:1" onclick="openSaveDialog()" data-i18n="sidebar.save" title="保存当前对话">💾 保存</button>
-    </div>
+      <button class="sb-btn sb-btn-ghost sb-btn-block"
+              data-action="openOverlay:ov-knowledge">🧠 业务知识库</button>
+    </section>
 
-    <!-- Saved sessions -->
-    <div>
-      <div class="sec-label" style="display:flex;align-items:center;justify-content:space-between;">
+    <!-- ── Saved sessions ────────────────────────────────────── -->
+    <section class="sb-history">
+      <div class="sb-history-head">
         <span data-i18n="sidebar.saved_sessions">已保存对话</span>
-        <span style="cursor:pointer;font-size:11px;color:#475569" onclick="loadSavedList()" data-i18n="sidebar.refresh">↻ 刷新</span>
+        <button class="sb-history-refresh" data-action="loadSavedList"
+                title="刷新" data-i18n-title="sidebar.refresh">↻</button>
       </div>
-      <div id="saved-list" style="display:flex;flex-direction:column;gap:5px;max-height:240px;overflow-y:auto;">
-        <div style="font-size:12px;color:#334155;padding:4px 0" data-i18n="sidebar.loading">加载中…</div>
+      <div id="saved-list" class="sb-history-list">
+        <div class="saved-empty" data-i18n="sidebar.loading">加载中…</div>
       </div>
-    </div>
+    </section>
 
-    <div class="sidebar-footer">
-      <span style="color:#f8f9f9;">v4.0beta Author: Zafer_Liu</span>
-      <div style="display:flex;gap:6px;align-items:center;">
-        <button class="btn-lang" id="lang-toggle" onclick="setLang(getLang()==='zh'?'en':'zh')">EN</button>
-        <button class="btn-update" onclick="openOverlay('ov-update')" data-i18n="sidebar.check_update">🔄 检查更新</button>
+    <!-- ── Footer ────────────────────────────────────────────── -->
+    <footer class="sb-footer">
+      <div class="sb-footer-meta">v4.0 · Zafer_Liu</div>
+      <div class="sb-footer-actions">
+        <button class="sb-iconbtn" id="theme-toggle" data-action="toggleTheme" title="Dark mode">🌙</button>
+        <button class="sb-iconbtn" id="lang-toggle"  data-action="toggleLang">EN</button>
+        <button class="sb-iconbtn sb-iconbtn-wide" data-action="openInstruction"
+                data-i18n-title="sidebar.instruction" title="说明文档">📖 说明文档</button>
+        <button class="sb-iconbtn sb-iconbtn-wide" data-action="openOverlay:ov-update"
+                data-i18n="sidebar.check_update">🔄 检查更新</button>
       </div>
-    </div>
+    </footer>
   </aside>
 
   <!-- ── Main ───────────────────────────────────────────────────── -->
@@ -101,7 +120,7 @@
         <div class="chat-header-sub" id="hdr-sub" data-i18n="header.subtitle">连接数据源开始分析</div>
       </div>
       <div class="header-btns">
-        <button class="hdr-btn" id="btn-schema" style="display:none" onclick="openSchemaView()" data-i18n="header.schema"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" style="vertical-align:-2px;margin-right:4px" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="3" width="14" height="2.5" rx="1" fill="currentColor"/><rect x="1" y="7" width="14" height="2.5" rx="1" fill="currentColor" opacity=".7"/><rect x="1" y="11" width="9" height="2.5" rx="1" fill="currentColor" opacity=".45"/></svg>数据预览</button>
+        <button class="hdr-btn" id="btn-schema" style="display:none" data-action="openSchemaView" data-i18n="header.schema"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" style="vertical-align:-2px;margin-right:4px" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="3" width="14" height="2.5" rx="1" fill="currentColor"/><rect x="1" y="7" width="14" height="2.5" rx="1" fill="currentColor" opacity=".7"/><rect x="1" y="11" width="9" height="2.5" rx="1" fill="currentColor" opacity=".45"/></svg>数据预览</button>
       </div>
     </div>
 
@@ -112,23 +131,23 @@
         <p data-i18n-html="welcome.desc">连接数据库或上传 Excel，用自然语言提问，AI 会自动查询、分析并生成图表。<br>
            输入 <strong>/</strong> 可快速选择专属命令。</p>
         <div class="hint-chips">
-          <div class="hint-chip" onclick="fillHint(this)">各品类的销售额是多少？</div>
-          <div class="hint-chip" onclick="fillHint(this)">近12个月的销售趋势如何？</div>
-          <div class="hint-chip" onclick="fillHint(this)">哪些客户贡献了最多收入？</div>
-          <div class="hint-chip" onclick="fillHint(this)">/chart 各地区业绩对比柱状图</div>
-          <div class="hint-chip" onclick="fillHint(this)">/decile 对销售额做十分位分析</div>
-          <div class="hint-chip" onclick="fillHint(this)">/tree 用 C4.5 决策树预测客户流失</div>
-          <div class="hint-chip" onclick="fillHint(this)">/kmeans 对客户做聚类分析，K=3</div>
-          <div class="hint-chip" onclick="fillHint(this)">/data 查看数据概况和分布</div>
-          <div class="hint-chip" onclick="fillHint(this)">/ppt 生成销售业绩分析演示文稿</div>
-          <div class="hint-chip" onclick="fillHint(this)">/dashboard 生成可交互销售分析看板</div>
+          <div class="hint-chip" data-action="fillHint">各品类的销售额是多少？</div>
+          <div class="hint-chip" data-action="fillHint">近12个月的销售趋势如何？</div>
+          <div class="hint-chip" data-action="fillHint">哪些客户贡献了最多收入？</div>
+          <div class="hint-chip" data-action="fillHint">/chart 各地区业绩对比柱状图</div>
+          <div class="hint-chip" data-action="fillHint">/decile 对销售额做十分位分析</div>
+          <div class="hint-chip" data-action="fillHint">/tree 用 C4.5 决策树预测客户流失</div>
+          <div class="hint-chip" data-action="fillHint">/kmeans 对客户做聚类分析，K=3</div>
+          <div class="hint-chip" data-action="fillHint">/data 查看数据概况和分布</div>
+          <div class="hint-chip" data-action="fillHint">/ppt 生成销售业绩分析演示文稿</div>
+          <div class="hint-chip" data-action="fillHint">/dashboard 生成可交互销售分析看板</div>
         </div>
       </div>
     </div>
 
     <!-- Input area -->
     <div class="input-area">
-      <!-- Slash command popup (above input) -->
+      <!-- Slash command popup (above input, absolute) -->
       <div class="slash-popup" id="slash-popup">
         <div class="slash-pop-header" data-i18n="slash.header">斜杠命令  ·  输入字母快速筛选</div>
         <div class="slash-popup-scroll" id="slash-popup-scroll">
@@ -136,27 +155,45 @@
         </div>
       </div>
 
-      <!-- Token usage bar -->
-      <div class="token-bar-wrap" id="token-bar-wrap">
-        <div class="token-bar-track">
-          <div class="token-bar-fill" id="token-bar-fill"></div>
+      <!-- Persistent hint chips + token pill on the same row.
+           chips scroll horizontally on the left; token pill sticks to the right. -->
+      <div class="input-topbar">
+        <div class="input-hints" id="input-hints">
+          <div class="input-hint-chip" data-action="fillHint">各品类的销售额是多少？</div>
+          <div class="input-hint-chip" data-action="fillHint">/chart 各地区业绩对比柱状图</div>
+          <div class="input-hint-chip" data-action="fillHint">/decile 销售额十分位分析</div>
+          <div class="input-hint-chip" data-action="fillHint">/data 数据概况</div>
+          <div class="input-hint-chip" data-action="fillHint">/sql 直接执行 SQL</div>
+          <div class="input-hint-chip" data-action="fillHint">/regression 回归分析</div>
         </div>
-        <span class="token-bar-label" id="token-bar-label"></span>
+        <div class="token-pill" id="token-bar-wrap" title="本会话上下文用量">
+          <div class="token-pill-bar">
+            <div class="token-pill-fill" id="token-bar-fill"></div>
+          </div>
+          <span class="token-pill-label" id="token-bar-label"></span>
+        </div>
       </div>
 
-      <div class="input-wrap">
+      <div class="input-card">
+        <!-- Command badge row (only shows when a slash command is active) -->
+        <div class="input-meta">
+          <div class="cmd-badge" id="cmd-badge" data-action="clearCmd">
+            <span id="cmd-badge-text"></span>
+            <span class="x" data-i18n-title="cmd_badge.clear" title="移除命令">×</span>
+          </div>
+        </div>
+
         <textarea id="msg-input" rows="1"
           data-i18n-ph="input.placeholder"
-          placeholder="输入问题，或键入 / 选择命令…"
-          oninput="onInput(event)" onkeydown="onKeyDown(event)"></textarea>
-        <div class="input-actions">
-          <div class="cmd-badge" id="cmd-badge" onclick="clearCmd()">
-            <span id="cmd-badge-text"></span>
-            <span class="x">×</span>
-          </div>
-          <button class="send-btn" id="send-btn" onclick="onSendOrStop()"
-            data-i18n-title="send.title" title="发送 (Enter)">↑</button>
-        </div>
+          placeholder="问点什么？  /  调出命令  ·  Shift+Enter 换行"></textarea>
+
+        <button class="send-btn" id="send-btn" data-action="onSendOrStop"
+          data-i18n-title="send.title" title="发送 (Enter)" aria-label="Send">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 4L12 20 M12 4L6 10 M12 4L18 10" stroke="currentColor"
+                  stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
+        </button>
       </div>
     </div>
   </div>
@@ -165,12 +202,12 @@
 <!-- ══ MODALS ═══════════════════════════════════════════════════════ -->
 
 <!-- Excel upload -->
-<div class="overlay" id="ov-excel" onclick="closeOutside(event,'ov-excel')">
+<div class="overlay" id="ov-excel">
   <div class="modal">
     <div class="modal-title" data-i18n="modal.excel.title">📂 上传 Excel / CSV 文件</div>
     <div class="f-row">
       <label data-i18n="modal.excel.label">选择文件</label>
-      <input type="file" id="xl-file" accept=".xlsx,.xls,.csv" onchange="onXlFile()">
+      <input type="file" id="xl-file" accept=".xlsx,.xls,.csv">
       <div class="f-hint" data-i18n="modal.excel.hint">支持 .xlsx / .xls / .csv</div>
     </div>
     <div class="upload-progress" id="xl-progress" style="display:none">
@@ -184,14 +221,14 @@
     <pre class="schema-box" id="xl-schema" style="display:none"></pre>
     <div class="msg-err" id="xl-err"></div>
     <div class="modal-footer">
-      <button class="btn-sm btn-sm-ghost" id="xl-cancel-btn" onclick="closeOverlay('ov-excel')" data-i18n="modal.cancel">取消</button>
-      <button class="btn-sm btn-sm-primary" id="xl-btn" onclick="uploadXl()" disabled data-i18n="modal.upload">上传</button>
+      <button class="btn-sm btn-sm-ghost"   id="xl-cancel-btn" data-action="closeOverlay:ov-excel" data-i18n="modal.cancel">取消</button>
+      <button class="btn-sm btn-sm-primary" id="xl-btn"        data-action="uploadXl" disabled       data-i18n="modal.upload">上传</button>
     </div>
   </div>
 </div>
 
 <!-- DB connect -->
-<div class="overlay" id="ov-db" onclick="closeOutside(event,'ov-db')">
+<div class="overlay" id="ov-db">
   <div class="modal">
     <div class="modal-title" data-i18n="modal.db.title">🗄️ 连接 SQL 数据库</div>
     <div class="msg-ok" id="db-status" style="display:none"></div>
@@ -214,14 +251,14 @@
     <pre class="schema-box" id="db-schema" style="display:none"></pre>
     <div class="msg-err" id="db-err"></div>
     <div class="modal-footer">
-      <button class="btn-sm btn-sm-ghost" id="db-cancel-btn" onclick="closeOverlay('ov-db')" data-i18n="modal.cancel">取消</button>
-      <button class="btn-sm btn-sm-primary" id="db-btn" onclick="connectDB()" data-i18n="modal.connect">连接</button>
+      <button class="btn-sm btn-sm-ghost"   id="db-cancel-btn" data-action="closeOverlay:ov-db" data-i18n="modal.cancel">取消</button>
+      <button class="btn-sm btn-sm-primary" id="db-btn"        data-action="connectDB"           data-i18n="modal.connect">连接</button>
     </div>
   </div>
 </div>
 
 <!-- Google Sheets connect -->
-<div class="overlay" id="ov-gsheets" onclick="closeOutside(event,'ov-gsheets')">
+<div class="overlay" id="ov-gsheets">
   <div class="modal">
     <div class="modal-title" data-i18n="modal.gsheets.title">📊 连接 Google Sheets</div>
     <div class="msg-ok" id="gsheets-status" style="display:none"></div>
@@ -251,14 +288,14 @@
     <pre class="schema-box" id="gsheets-schema" style="display:none"></pre>
     <div class="msg-err" id="gsheets-err"></div>
     <div class="modal-footer">
-      <button class="btn-sm btn-sm-ghost" id="gsheets-cancel-btn" onclick="closeOverlay('ov-gsheets')" data-i18n="modal.cancel">取消</button>
-      <button class="btn-sm btn-sm-primary" id="gsheets-btn" onclick="connectGSheets()" data-i18n="modal.connect">连接</button>
+      <button class="btn-sm btn-sm-ghost"   id="gsheets-cancel-btn" data-action="closeOverlay:ov-gsheets" data-i18n="modal.cancel">取消</button>
+      <button class="btn-sm btn-sm-primary" id="gsheets-btn"        data-action="connectGSheets"           data-i18n="modal.connect">连接</button>
     </div>
   </div>
 </div>
 
 <!-- Custom REST API connect -->
-<div class="overlay" id="ov-api" onclick="closeOutside(event,'ov-api')">
+<div class="overlay" id="ov-api">
   <div class="modal">
     <div class="modal-title" data-i18n="modal.api.title">🔗 连接自定义 API</div>
     <div class="msg-ok" id="api-status" style="display:none"></div>
@@ -275,9 +312,9 @@
     </div>
     <div class="f-row">
       <label data-i18n="modal.api.auth_label">认证方式</label>
-      <select id="api-auth-type" onchange="toggleApiAuthValue()">
-        <option value="none" data-i18n="modal.api.auth_none">无认证</option>
-        <option value="bearer" data-i18n="modal.api.auth_bearer">Bearer Token</option>
+      <select id="api-auth-type">
+        <option value="none"    data-i18n="modal.api.auth_none">无认证</option>
+        <option value="bearer"  data-i18n="modal.api.auth_bearer">Bearer Token</option>
         <option value="api_key" data-i18n="modal.api.auth_apikey">API Key (X-API-Key)</option>
       </select>
     </div>
@@ -292,14 +329,14 @@
     <pre class="schema-box" id="api-schema" style="display:none"></pre>
     <div class="msg-err" id="api-err"></div>
     <div class="modal-footer">
-      <button class="btn-sm btn-sm-ghost" id="api-cancel-btn" onclick="closeOverlay('ov-api')" data-i18n="modal.cancel">取消</button>
-      <button class="btn-sm btn-sm-primary" id="api-btn" onclick="connectAPI()" data-i18n="modal.connect">连接</button>
+      <button class="btn-sm btn-sm-ghost"   id="api-cancel-btn" data-action="closeOverlay:ov-api" data-i18n="modal.cancel">取消</button>
+      <button class="btn-sm btn-sm-primary" id="api-btn"        data-action="connectAPI"           data-i18n="modal.connect">连接</button>
     </div>
   </div>
 </div>
 
 <!-- Data preview modal -->
-<div class="overlay" id="ov-schema" onclick="closeOutside(event,'ov-schema')">
+<div class="overlay" id="ov-schema">
   <div class="modal preview-modal">
     <div class="modal-title" id="preview-title" data-i18n="modal.preview.title">数据预览</div>
     <div class="preview-tabs" id="preview-tabs"></div>
@@ -308,13 +345,13 @@
     </div>
     <div class="preview-footer" id="preview-footer"></div>
     <div class="modal-footer">
-      <button class="btn-sm btn-sm-ghost" onclick="closeOverlay('ov-schema')" data-i18n="modal.close">关闭</button>
+      <button class="btn-sm btn-sm-ghost" data-action="closeOverlay:ov-schema" data-i18n="modal.close">关闭</button>
     </div>
   </div>
 </div>
 
 <!-- Settings modal -->
-<div class="overlay" id="ov-settings" onclick="closeOutside(event,'ov-settings')">
+<div class="overlay" id="ov-settings">
   <div class="modal">
     <div class="modal-title" data-i18n="modal.settings.title">⚙ 模型设置</div>
 
@@ -329,7 +366,7 @@
       <div class="settings-sec-title" data-i18n="modal.settings.custom">自定义模型</div>
       <div class="custom-list" id="custom-list"><!-- injected by JS --></div>
 
-      <div class="add-custom-toggle" onclick="toggleAddCustom()" data-i18n="modal.settings.add_custom">＋ 添加自定义模型</div>
+      <div class="add-custom-toggle" data-action="toggleAddCustom" data-i18n="modal.settings.add_custom">＋ 添加自定义模型</div>
 
       <div class="add-custom-form" id="add-custom-form">
         <input type="text"     id="ac-name"   data-i18n-ph="add_custom.name_ph"  placeholder="模型名称（显示用）">
@@ -341,7 +378,7 @@
           <input type="number" id="ac-output" data-i18n-ph="add_custom.out_ph"   placeholder="最大输出（tokens，选填）"   style="flex:1">
         </div>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#475569;cursor:pointer;padding:2px 0">
-          <input type="checkbox" id="ac-think" onchange="document.getElementById('ac-budget-row').style.display=this.checked?'flex':'none'">
+          <input type="checkbox" id="ac-think" data-change="toggleAcBudget">
           <span data-i18n="add_custom.think">启用思考模式</span>
         </label>
         <div id="ac-budget-row" style="display:none;align-items:center;gap:8px;font-size:13px;color:#475569">
@@ -351,20 +388,20 @@
         <div class="msg-err" id="ac-err"></div>
         <div class="msg-ok"  id="ac-ok"></div>
         <div style="display:flex;gap:7px;justify-content:flex-end;">
-          <button class="btn-sm btn-sm-ghost"   onclick="toggleAddCustom()" data-i18n="modal.cancel">取消</button>
-          <button class="btn-sm btn-sm-primary" onclick="addCustomModel()"  data-i18n="modal.save_btn">保存</button>
+          <button class="btn-sm btn-sm-ghost"   data-action="toggleAddCustom" data-i18n="modal.cancel">取消</button>
+          <button class="btn-sm btn-sm-primary" data-action="addCustomModel"  data-i18n="modal.save_btn">保存</button>
         </div>
       </div>
     </div>
 
     <div class="modal-footer">
-      <button class="btn-sm btn-sm-ghost" onclick="closeOverlay('ov-settings')" data-i18n="modal.close">关闭</button>
+      <button class="btn-sm btn-sm-ghost" data-action="closeOverlay:ov-settings" data-i18n="modal.close">关闭</button>
     </div>
   </div>
 </div>
 
 <!-- Save session dialog -->
-<div class="overlay" id="ov-save" onclick="closeOutside(event,'ov-save')">
+<div class="overlay" id="ov-save">
   <div class="modal" style="width:400px">
     <div class="modal-title" data-i18n="modal.save.title">💾 保存对话</div>
     <div class="f-row">
@@ -374,8 +411,8 @@
     </div>
     <div class="msg-err" id="save-err"></div>
     <div class="modal-footer">
-      <button class="btn-sm btn-sm-ghost"   onclick="closeOverlay('ov-save')" data-i18n="modal.cancel">取消</button>
-      <button class="btn-sm btn-sm-primary" onclick="saveSession()"           data-i18n="modal.save_btn">保存</button>
+      <button class="btn-sm btn-sm-ghost"   data-action="closeOverlay:ov-save" data-i18n="modal.cancel">取消</button>
+      <button class="btn-sm btn-sm-primary" data-action="saveSession"           data-i18n="modal.save_btn">保存</button>
     </div>
   </div>
 </div>
@@ -390,7 +427,7 @@
     <div class="settings-sec">
       <div class="settings-sec-title" style="display:flex;align-items:center;justify-content:space-between;">
         <span>已配置的服务器</span>
-        <span style="cursor:pointer;font-size:11px;color:#475569" onclick="loadMcpServers()">↻ 刷新</span>
+        <span style="cursor:pointer;font-size:11px;color:#475569" data-action="loadMcpServers">↻ 刷新</span>
       </div>
       <div id="mcp-server-list" style="display:flex;flex-direction:column;gap:6px;min-height:36px;">
         <div style="font-size:12px;color:#64748b;padding:4px 0">加载中…</div>
@@ -399,7 +436,7 @@
 
     <!-- Add server form -->
     <div class="settings-sec">
-      <div class="add-custom-toggle" onclick="toggleMcpAddForm()" id="mcp-add-toggle">＋ 添加 MCP 服务器</div>
+      <div class="add-custom-toggle" id="mcp-add-toggle" data-action="toggleMcpAddForm">＋ 添加 MCP 服务器</div>
       <div class="add-custom-form" id="mcp-add-form" style="display:none">
         <div style="font-size:13px;font-weight:600;color:#1e293b;margin-bottom:4px" id="mcp-form-title">添加服务器</div>
 
@@ -412,10 +449,10 @@
         <!-- Transport selector -->
         <div style="display:flex;gap:16px;align-items:center;font-size:13px;color:#475569;padding:4px 0">
           <label style="display:flex;align-items:center;gap:5px;cursor:pointer">
-            <input type="radio" name="mcp-transport" value="stdio" checked onchange="onMcpTransportChange()"> stdio（本地命令）
+            <input type="radio" name="mcp-transport" value="stdio" checked> stdio（本地命令）
           </label>
           <label style="display:flex;align-items:center;gap:5px;cursor:pointer">
-            <input type="radio" name="mcp-transport" value="sse" onchange="onMcpTransportChange()"> SSE（远程 HTTP）
+            <input type="radio" name="mcp-transport" value="sse"> SSE（远程 HTTP）
           </label>
         </div>
 
@@ -441,21 +478,21 @@
         <div class="msg-err" id="mcp-add-err"></div>
         <div class="msg-ok"  id="mcp-add-ok"></div>
         <div style="display:flex;gap:7px;justify-content:flex-end;">
-          <button class="btn-sm btn-sm-ghost"   onclick="toggleMcpAddForm()">取消</button>
-          <button class="btn-sm btn-sm-primary" onclick="addMcpServer()">保存并连接</button>
+          <button class="btn-sm btn-sm-ghost"   data-action="toggleMcpAddForm">取消</button>
+          <button class="btn-sm btn-sm-primary" data-action="addMcpServer">保存并连接</button>
         </div>
       </div>
     </div>
     </div>
 
     <div class="modal-footer">
-      <button class="btn-sm btn-sm-ghost" onclick="closeOverlay('ov-mcp')">关闭</button>
+      <button class="btn-sm btn-sm-ghost" data-action="closeOverlay:ov-mcp">关闭</button>
     </div>
   </div>
 </div>
 
 <!-- Update modal -->
-<div class="overlay" id="ov-update" onclick="closeOutside(event,'ov-update')">
+<div class="overlay" id="ov-update">
   <div class="modal" style="width:540px">
     <div class="modal-title" data-i18n="modal.update.title">🔄 检查更新</div>
     <div class="update-repo-hint">
@@ -472,23 +509,51 @@
       ⚠️ 代码已更新，请刷新页面使改动生效。
     </div>
     <div class="modal-footer">
-      <button class="btn-sm btn-sm-ghost"   onclick="closeOverlay('ov-update')" data-i18n="modal.close">关闭</button>
-      <button class="btn-sm btn-sm-primary" id="update-btn" onclick="runUpdate()" data-i18n="modal.update.btn">⬇ 拉取更新</button>
+      <button class="btn-sm btn-sm-ghost"   data-action="closeOverlay:ov-update" data-i18n="modal.close">关闭</button>
+      <button class="btn-sm btn-sm-primary" id="update-btn" data-action="runUpdate" data-i18n="modal.update.btn">⬇ 拉取更新</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Model test failure modal ══════════════════════════════════════ -->
+<div class="overlay" id="ov-model-test">
+  <div class="modal" style="width:520px">
+    <div class="modal-title" data-i18n="modal.model_test.fail_title">⚠ 模型连接测试失败</div>
+    <div class="model-test-meta" id="model-test-meta"></div>
+    <pre class="model-test-error" id="model-test-error"></pre>
+    <div class="modal-footer">
+      <button class="btn-sm btn-sm-ghost" data-action="openOverlay:ov-settings"
+              data-i18n="modal.model_test.open_settings">打开模型设置</button>
+      <button class="btn-sm btn-sm-primary" data-action="closeOverlay:ov-model-test"
+              data-i18n="modal.close">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Instruction modal (renders Instruction.md) ════════════════════ -->
+<div class="overlay" id="ov-instruction">
+  <div class="modal instruction-modal">
+    <div class="modal-title" data-i18n="modal.instruction.title">📖 说明文档</div>
+    <div class="instruction-body" id="instruction-body">
+      <div class="instruction-loading" data-i18n="modal.instruction.loading">加载中…</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-sm btn-sm-ghost" data-action="closeOverlay:ov-instruction" data-i18n="modal.close">关闭</button>
     </div>
   </div>
 </div>
 
 <!-- ══ Knowledge Base Modal ══════════════════════════════════════════ -->
-<div class="overlay" id="ov-knowledge" onclick="closeOutside(event,'ov-knowledge')">
+<div class="overlay" id="ov-knowledge">
   <div class="modal kb-modal">
     <div class="modal-title">🧠 业务知识库</div>
 
     <!-- Tab bar -->
     <div class="kb-tabs">
-      <button class="kb-tab active" onclick="kbSwitchTab('metrics',this)">📐 指标定义</button>
-      <button class="kb-tab" onclick="kbSwitchTab('rules',this)">🛡 业务规则</button>
-      <button class="kb-tab" onclick="kbSwitchTab('notes',this)">📝 背景知识</button>
-      <button class="kb-tab kb-tab-import" onclick="kbSwitchTab('import',this)">⬆ 导入文件</button>
+      <button class="kb-tab active"     data-action="kbSwitchTab:metrics">📐 指标定义</button>
+      <button class="kb-tab"             data-action="kbSwitchTab:rules">🛡 业务规则</button>
+      <button class="kb-tab"             data-action="kbSwitchTab:notes">📝 背景知识</button>
+      <button class="kb-tab kb-tab-import" data-action="kbSwitchTab:import">⬆ 导入文件</button>
     </div>
 
     <!-- ── Tab: metrics ── -->
@@ -496,8 +561,8 @@
       <div class="kb-toolbar">
         <span class="kb-count" id="kb-metrics-count">—</span>
         <div style="display:flex;gap:6px">
-          <button class="btn-sm btn-sm-ghost" onclick="kbRefresh('metrics')" title="刷新列表">↻ 刷新</button>
-          <button class="btn-sm btn-sm-primary" onclick="kbOpenForm('metrics')">＋ 新增指标</button>
+          <button class="btn-sm btn-sm-ghost"   data-action="kbRefresh:metrics"  title="刷新列表">↻ 刷新</button>
+          <button class="btn-sm btn-sm-primary" data-action="kbOpenForm:metrics">＋ 新增指标</button>
         </div>
       </div>
       <div class="kb-list" id="kb-list-metrics">
@@ -510,8 +575,8 @@
       <div class="kb-toolbar">
         <span class="kb-count" id="kb-rules-count">—</span>
         <div style="display:flex;gap:6px">
-          <button class="btn-sm btn-sm-ghost" onclick="kbRefresh('rules')" title="刷新列表">↻ 刷新</button>
-          <button class="btn-sm btn-sm-primary" onclick="kbOpenForm('rules')">＋ 新增规则</button>
+          <button class="btn-sm btn-sm-ghost"   data-action="kbRefresh:rules"  title="刷新列表">↻ 刷新</button>
+          <button class="btn-sm btn-sm-primary" data-action="kbOpenForm:rules">＋ 新增规则</button>
         </div>
       </div>
       <div class="kb-list" id="kb-list-rules">
@@ -524,8 +589,8 @@
       <div class="kb-toolbar">
         <span class="kb-count" id="kb-notes-count">—</span>
         <div style="display:flex;gap:6px">
-          <button class="btn-sm btn-sm-ghost" onclick="kbRefresh('notes')" title="刷新列表">↻ 刷新</button>
-          <button class="btn-sm btn-sm-primary" onclick="kbOpenForm('notes')">＋ 新增背景知识</button>
+          <button class="btn-sm btn-sm-ghost"   data-action="kbRefresh:notes"  title="刷新列表">↻ 刷新</button>
+          <button class="btn-sm btn-sm-primary" data-action="kbOpenForm:notes">＋ 新增背景知识</button>
         </div>
       </div>
       <div class="kb-list" id="kb-list-notes">
@@ -535,22 +600,19 @@
 
     <!-- ── Tab: import ── -->
     <div class="kb-panel" id="kb-panel-import" style="display:none">
-      <div class="kb-import-zone" id="kb-drop-zone"
-           ondragover="event.preventDefault()" ondrop="kbOnDrop(event)">
+      <div class="kb-import-zone" id="kb-drop-zone">
         <div class="kb-import-icon">📄</div>
         <div class="kb-import-hint">拖拽文件到此处，或点击选择</div>
         <div class="kb-import-sub">支持 .xlsx / .xls / .docx</div>
-        <input type="file" id="kb-file-input" accept=".xlsx,.xls,.docx"
-               style="display:none" onchange="kbOnFileSelect(event)">
-        <button class="btn-sm btn-sm-primary" style="margin-top:10px"
-                onclick="document.getElementById('kb-file-input').click()">选择文件</button>
+        <input type="file" id="kb-file-input" accept=".xlsx,.xls,.docx" style="display:none">
+        <button class="btn-sm btn-sm-primary" style="margin-top:10px" data-action="kbPickFile">选择文件</button>
       </div>
 
       <!-- Historical uploaded files -->
       <div id="kb-files-section" style="margin-top:14px">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
           <span style="font-size:12px;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.06em">已上传的源文件</span>
-          <span style="font-size:11px;color:#94a3b8;cursor:pointer" onclick="kbLoadFiles()">↻ 刷新</span>
+          <span style="font-size:11px;color:#94a3b8;cursor:pointer" data-action="kbLoadFiles">↻ 刷新</span>
         </div>
         <div id="kb-files-list">
           <div class="kb-empty" style="padding:12px 0;font-size:12px">加载中…</div>
@@ -571,8 +633,8 @@
             <div class="kb-preview-sub" id="kb-preview-sub"></div>
           </div>
           <div style="display:flex;gap:8px">
-            <button class="btn-sm btn-sm-ghost" onclick="kbCancelImport()">重新选择</button>
-            <button class="btn-sm btn-sm-primary" onclick="kbConfirmImport()">✓ 全部入库</button>
+            <button class="btn-sm btn-sm-ghost"   data-action="kbCancelImport">重新选择</button>
+            <button class="btn-sm btn-sm-primary" data-action="kbConfirmImport">✓ 全部入库</button>
           </div>
         </div>
         <div class="kb-preview-list" id="kb-preview-list"></div>
@@ -583,13 +645,13 @@
     </div>
 
     <div class="modal-footer">
-      <button class="btn-sm btn-sm-ghost" onclick="closeOverlay('ov-knowledge')">关闭</button>
+      <button class="btn-sm btn-sm-ghost" data-action="closeOverlay:ov-knowledge">关闭</button>
     </div>
   </div>
 </div>
 
 <!-- ── Inline edit form (shared, floats over modal) ── -->
-<div class="overlay" id="ov-kb-form" onclick="closeOutside(event,'ov-kb-form')">
+<div class="overlay" id="ov-kb-form">
   <div class="modal" style="width:520px">
     <div class="modal-title" id="kb-form-title">新增指标</div>
 
@@ -658,17 +720,41 @@
 
     <div class="msg-err" id="kb-form-err"></div>
     <div class="modal-footer">
-      <button class="btn-sm btn-sm-ghost" onclick="closeOverlay('ov-kb-form')">取消</button>
-      <button class="btn-sm btn-sm-primary" onclick="kbSubmitForm()">保存</button>
+      <button class="btn-sm btn-sm-ghost"   data-action="closeOverlay:ov-kb-form">取消</button>
+      <button class="btn-sm btn-sm-primary" data-action="kbSubmitForm">保存</button>
     </div>
   </div>
 </div>
 
 <div class="toast" id="toast"></div>
 
+<!-- ── Vendor libs (markdown + sanitizer) ─────────────────────────── -->
+<script src="{{ url_for('static', filename='vendor/marked.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/purify.min.js') }}"></script>
+
+<!-- ── Core (i18n must come first; provides global t()) ───────────── -->
 <script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
+
+<!-- ── Module bundle (order: base → consumers) ────────────────────── -->
+<script src="{{ url_for('static', filename='js/modules/state.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/dom.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/theme.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/markdown.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/overlay.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/msg.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/slash.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/models.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/datasource.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/preview.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/chat_stream.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/sessions.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/update.js') }}"></script>
+
+<!-- ── External panels (decorate window.openOverlay; must come AFTER overlay.js) -->
 <script src="{{ url_for('static', filename='js/mcp_settings.js') }}"></script>
-<script src="{{ url_for('static', filename='js/agent_chat.js') }}"></script>
 <script src="{{ url_for('static', filename='js/knowledge_panel.js') }}"></script>
+
+<!-- ── Main entry: event delegation + bootstrap ───────────────────── -->
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

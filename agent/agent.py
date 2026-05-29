@@ -19,77 +19,10 @@ from .tools_data   import DataToolsMixin
 from .tools_export import ExportToolsMixin
 from .mcp_manager  import get_mcp_manager
 from .compaction   import should_compact_history, compact_history
+from .retry        import call_with_retry as _call_with_retry, is_retryable as _is_retryable
+from .validate     import validate_tool_args as _validate_tool_args
 
 log = logging.getLogger(__name__)
-
-# ── Retry helper ──────────────────────────────────────────────────────────────
-
-_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
-
-def _is_retryable(exc: Exception) -> Tuple[bool, float]:
-    """Return (should_retry, wait_seconds). Inspects status code when available."""
-    msg = str(exc).lower()
-    # Rate limit: respect Retry-After if present
-    if "429" in msg or "rate limit" in msg or "too many requests" in msg:
-        return True, 5.0
-    # Transient server errors
-    for code in ("500", "502", "503", "504"):
-        if code in msg:
-            return True, 3.0
-    # Connection / timeout
-    if any(k in msg for k in ("timeout", "connection", "network", "timed out")):
-        return True, 2.0
-    return False, 0.0
-
-
-def _call_with_retry(fn, *args, max_retries: int = 3, **kwargs):
-    """Call fn(*args, **kwargs) with exponential backoff on transient errors."""
-    attempt = 0
-    while True:
-        try:
-            return fn(*args, **kwargs)
-        except Exception as exc:
-            retryable, base_wait = _is_retryable(exc)
-            attempt += 1
-            if not retryable or attempt > max_retries:
-                raise
-            wait = base_wait * (2 ** (attempt - 1))
-            log.warning("[retry] attempt %d/%d failed (%s), waiting %.1fs", attempt, max_retries, exc, wait)
-            time.sleep(wait)
-
-
-_SQL_TOOLS = {"create_analysis_table", "query_data", "generate_chart", "run_analysis"}
-_SQL_BLOCKED_WRITES = ("drop ", "delete ", "truncate ", "insert ", "update ", "alter ", "create table", "create index")
-
-def _validate_tool_args(name: str, args: Dict[str, Any]) -> Optional[str]:
-    """Return an error string if args are obviously invalid, else None."""
-    if name in _SQL_TOOLS:
-        sql = args.get("sql", "").strip().lower()
-        if not sql:
-            return f"'{name}' requires a non-empty 'sql' argument."
-        if not sql.startswith("select") and not sql.startswith("with"):
-            return f"'{name}' only accepts SELECT/WITH queries. Got: {sql[:60]}"
-        for kw in _SQL_BLOCKED_WRITES:
-            if kw in sql:
-                return f"'{name}' blocked: write keyword '{kw.strip()}' detected in SQL."
-
-    if name == "run_analysis":
-        if not args.get("analysis_name"):
-            return "'run_analysis' requires 'analysis_name'."
-        if not args.get("target_column"):
-            return "'run_analysis' requires 'target_column'."
-
-    if name in ("propose_ppt_outline", "generate_ppt"):
-        slides = args.get("slides")
-        if slides is not None and not isinstance(slides, list):
-            return f"'{name}': 'slides' must be a list."
-
-    if name in ("propose_dashboard_outline", "generate_dashboard"):
-        widgets = args.get("widgets")
-        if widgets is not None and not isinstance(widgets, list):
-            return f"'{name}': 'widgets' must be a list."
-
-    return None
 
 
 _PROPOSE_CMDS = (
@@ -103,8 +36,18 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
 
     # Approximate chars-per-token ratio for fast estimation (conservative)
     _CHARS_PER_TOKEN = 3.5
-    # Reserve headroom for the response + tools list
+    # Reserve headroom for the response + tools list (default for large windows)
     _CONTEXT_RESERVE = 12000
+
+    def _context_reserve(self) -> int:
+        """Headroom reserved for the response + tools list.
+
+        For small context windows the fixed 12k reserve would exceed the whole
+        window and drive the prune budget negative — scale it down to at most
+        ~30% of the window so a usable budget always remains.
+        """
+        window = self._get_context_window()
+        return min(self._CONTEXT_RESERVE, max(1000, int(window * 0.3)))
 
     def __init__(
         self,
@@ -117,12 +60,19 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         session_chart_ids: Optional[List[str]] = None,
         color_scheme: str = "mckinsey",
         session_id: str = "",
+        context_window: Optional[int] = None,
     ):
         self.client = client
         self.model = model
         self.data_source = data_source
         self.enable_thinking = enable_thinking
         self.thinking_budget = thinking_budget
+        # User-configured context window (from the model config). When set, it
+        # overrides the model-name heuristic so the compaction trigger and the
+        # frontend context bar use the exact same number.
+        self._configured_context_window: Optional[int] = (
+            context_window if context_window and context_window > 0 else None
+        )
         self._schema_cache: Optional[str] = None
         self._chart_store: dict = chart_store if chart_store is not None else {}
         self._session_chart_ids: List[str] = session_chart_ids if session_chart_ids is not None else []
@@ -151,25 +101,53 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
     def _hard_prune(
         self, system_msgs: List[Dict], history: List[Dict], extra_msgs: List[Dict], context_window: int
     ) -> List[Dict]:
-        """Hard truncation safety net: drop oldest messages until tokens fit."""
-        budget = context_window - self._CONTEXT_RESERVE
+        """Hard truncation safety net: drop oldest messages until tokens fit.
+
+        Two protections beyond a naive pop(0):
+          1. A compaction summary message (tagged ``_compaction_summary``) is
+             never dropped — it IS the compressed earlier context.
+          2. After pruning, the surviving head is never an orphan ``role: tool``
+             message; OpenAI requires every tool message to follow the
+             assistant message that holds its tool_calls.
+        """
+        budget = context_window - self._context_reserve()
         fixed_tokens = self._estimate_messages_tokens(system_msgs + extra_msgs)
         available = budget - fixed_tokens
 
         pruned = list(history)
         before = len(pruned)
-        while pruned and self._estimate_messages_tokens(pruned) > available:
-            pruned.pop(0)
 
-        if len(pruned) < before:
+        # Pin a leading compaction-summary message so it survives pruning.
+        pinned: List[Dict] = []
+        if pruned and pruned[0].get("_compaction_summary"):
+            pinned = [pruned.pop(0)]
+
+        def _fits() -> bool:
+            return self._estimate_messages_tokens(pinned + pruned) <= available
+
+        while pruned and not _fits():
+            pruned.pop(0)
+            # Don't leave the head as an orphan tool message.
+            while pruned and pruned[0].get("role") == "tool":
+                pruned.pop(0)
+
+        result = pinned + pruned
+        if len(result) < before:
             log.info(
                 "[context] hard-pruned %d→%d turns (budget=%d tokens)",
-                before, len(pruned), available,
+                before, len(result), available,
             )
-        return pruned
+        return result
 
     def _get_context_window(self) -> int:
-        """Best-effort context window for the current model."""
+        """Context window for the current model.
+
+        Prefers the user-configured value (passed from the model config) so the
+        compaction trigger matches the frontend context bar exactly. Falls back
+        to a model-name heuristic when no value is configured.
+        """
+        if self._configured_context_window:
+            return self._configured_context_window
         model = self.model.lower()
         if "claude" in model:
             return 190000
@@ -198,6 +176,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         history: List[Dict],
         command: str = "",
         last_reasoning: str = "",
+        last_prompt_tokens: int = 0,
         ppt_title: str = "",
         ppt_slides: Optional[List] = None,
         excel_tables: Optional[List] = None,
@@ -307,26 +286,49 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         _ctx_window = self._get_context_window()
 
         # ── Semantic compaction (with frontend animation) ─────────────────────
+        # Trigger口径与前端上下文条一致：用上一轮真实 prompt_tokens / context_window，
+        # 达到 80% 即压缩。last_prompt_tokens 由 chat.py 从会话中传入。
         _needs_compact = should_compact_history(
             history=history,
+            last_prompt_tokens=last_prompt_tokens,
             context_window=_ctx_window,
             chars_per_token=self._CHARS_PER_TOKEN,
-            reserve=self._CONTEXT_RESERVE,
         )
         if _needs_compact:
+            # Report the larger of the two trigger signals for an honest %.
+            from .compaction import _estimate_history_tokens
+            _est = _estimate_history_tokens(history, self._CHARS_PER_TOKEN)
+            _used = max(last_prompt_tokens or 0, _est)
+            _pct = int(_used / _ctx_window * 100) if _ctx_window else 0
             yield {
                 "type": "tool_start",
                 "tool": "compaction",
                 "display": "压缩对话历史…",
-                "detail": "对话历史较长，正在语义压缩以节省上下文空间",
+                "detail": f"上下文使用已达 {_pct}%，正在语义压缩以节省上下文空间",
             }
-            _working_history, _ = compact_history(
+            _working_history, _compacted = compact_history(
                 history=history,
                 client=self.client,
                 model=self.model,
-                chars_per_token=self._CHARS_PER_TOKEN,
             )
             yield {"type": "tool_end", "tool": "compaction"}
+            log.info(
+                "[compaction] trigger≈%d/%d tokens (%d%%) compacted=%s",
+                _used, _ctx_window, _pct, _compacted,
+            )
+            # Push an immediate estimate so the frontend context bar reflects
+            # the shrink right away — the precise value arrives later via the
+            # real 'usage' event once this turn's LLM call returns.
+            if _compacted:
+                _est_after = _estimate_history_tokens(
+                    _working_history, self._CHARS_PER_TOKEN
+                ) + self._estimate_messages_tokens([_system_msg] + prior_reasoning_msg + [_user_msg])
+                yield {
+                    "type": "context_estimate",
+                    "prompt_tokens": _est_after,
+                    "context_window": _ctx_window,
+                    "estimated": True,
+                }
         else:
             _working_history = history
 
@@ -500,6 +502,10 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                     "prompt_tokens": usage_data.prompt_tokens,
                     "completion_tokens": usage_data.completion_tokens,
                     "total_tokens": usage_data.total_tokens,
+                    # context_window lets the frontend draw the context bar and
+                    # keeps the % shown there consistent with the compaction
+                    # trigger (both use _get_context_window()).
+                    "context_window": _ctx_window,
                 }
 
             class _F:

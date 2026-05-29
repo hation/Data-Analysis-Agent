@@ -1,6 +1,6 @@
 /* knowledge_panel.js — Business Knowledge Base UI
  *
- * Depends on:  openOverlay / closeOverlay / showToast  (agent_chat.js)
+ * Depends on:  openOverlay / closeOverlay / toast / t  (modules/overlay.js, i18n.js)
  * API routes:  /api/knowledge/*  (api/knowledge.py)
  */
 

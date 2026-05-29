@@ -71,7 +71,7 @@ This update focuses on **stronger analytical capabilities, more consistent prese
 
 ---
 ## v3.0
-
+May 18, 2026
 This upgrade focuses on external ecosystem integration and enhanced business knowledge capabilities, significantly expanding the Agent’s data acquisition abilities and adaptability to different fields.
 
 ### 1. MCP Tool Invocation Capability
@@ -89,3 +89,28 @@ This upgrade focuses on external ecosystem integration and enhanced business kno
 - Integration with Google Sheets API: Allows direct access to data in Google Sheets as an analysis source.
 - Custom database API interface: Provides a generic API adapter.
 - All external data sources can be utilized along with a full set of functions such as data cleaning, previewing, and analysis.
+
+---
+
+## v4.0
+May 29, 2026
+
+This upgrade focuses on comprehensive front-end experience refactoring, chart stability enhancement, and engineering quality reinforcement.
+
+### 1. User Interface Optimization
+- Sidebar refactored into a three-part information architecture: Status Area, Operations Area, History Area
+- Added Model Connection Test indicator (automatically tests upon model selection, also manually triggerable in settings)
+- Agent output bubbles changed to a "report style": left brand-colored vertical line + shaded background, visually unified with chart frames
+- Supports one-click dark mode switching
+- Split `agent_chat.css` into five sub-modules: `tokens`, `base`, `chat`, `modals`, `kb`
+- Added an operation guide, including explanations for common issues
+
+### 2. Enhanced Stability
+- Localized chart dependencies to eliminate reliance on external CDNs
+- Fixed the issue where loading historical conversations forced overriding the currently selected model: now restores from history only when the user hasn't selected a model yet
+
+### 3. Batch Data Processing Capability Improvement
+- Changed the conversion logic after original data source connection, switching from SQL Slight to duckdb, enabling second-level processing for tens of thousands of rows of data
+
+### 4. New Time Series Analysis Module
+- Supports Prophet, SARIMA, ARIMA, VAR, and GRU models

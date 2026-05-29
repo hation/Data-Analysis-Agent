@@ -27,6 +27,13 @@ from log_setup import setup_logging
 setup_logging(level=20)  # logging.INFO
 
 # -------------------------------
+# 启动后台清理（仅本地；Vercel 短生命周期不需要）
+# -------------------------------
+if not is_vercel:
+    from cleanup import setup_cleanup
+    setup_cleanup(Path(__file__).parent)
+
+# -------------------------------
 # 导入 Flask app
 # -------------------------------
 from api import create_app

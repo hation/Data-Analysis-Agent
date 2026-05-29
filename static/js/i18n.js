@@ -32,6 +32,16 @@
       'sidebar.refresh': '↻ 刷新',
       'sidebar.loading': '加载中…',
       'sidebar.check_update': '🔄 检查更新',
+      'sidebar.add_source': '添加数据源',
+      'sidebar.instruction': '说明文档',
+      'modal.instruction.title': '📖 说明文档',
+      'modal.instruction.loading': '加载中…',
+      'sidebar.model_test': '测试连接',
+      'sidebar.model_tested_ok': '已通过连接测试',
+      'sidebar.model_test_no_select': '请先选择模型',
+      'sidebar.model_test_ok': '{model} 连接成功',
+      'modal.model_test.fail_title': '⚠ 模型连接测试失败',
+      'modal.model_test.open_settings': '打开模型设置',
       // ── Header ───────────────────────────────────────────────────
       'header.title': '💬 对话分析',
       'header.subtitle': '连接数据源开始分析',
@@ -40,8 +50,13 @@
       'welcome.title': '开始您的数据分析',
       'welcome.desc': '连接数据库或上传 Excel，用自然语言提问，AI 会自动查询、分析并生成图表。<br>输入 <strong>/</strong> 可快速选择专属命令。',
       // ── Input ────────────────────────────────────────────────────
-      'input.placeholder': '输入问题，或键入 / 选择命令…',
+      'input.placeholder': '问点什么？  /  调出命令  ·  Shift+Enter 换行',
+      'input.kbd_hint': '<kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · <kbd>/</kbd> 命令',
       'send.title': '发送 (Enter)',
+      'send.stop':  '停止生成 (再点恢复)',
+      'cmd_badge.clear': '移除当前命令',
+      'msg.copy':   '复制',
+      'msg.copied': '已复制 ✓',
       // ── Modals (shared) ──────────────────────────────────────────
       'modal.cancel': '取消',
       'modal.upload': '上传',
@@ -106,6 +121,11 @@
       'settings.cleared': '已清除',
       'settings.api_key_empty': 'API Key 不能为空',
       'settings.del_custom': '删除',
+      'settings.test': '测试',
+      'settings.testing': '测试中…',
+      'settings.test_ok': '连接成功 ✓',
+      'settings.test_ok_with_model': '连接成功 · {model}',
+      'settings.test_fail': '连接失败（详情见弹窗）',
       // ── Add custom form ──────────────────────────────────────────
       'add_custom.name_ph': '模型名称（显示用）',
       'add_custom.url_ph': 'API Base URL，例如 https://api.deepseek.com',
@@ -133,7 +153,8 @@
       'src.hint.file': 'Excel / CSV 文件',
       'src.hint.gsheets': 'Google Sheets',
       'src.hint.api': '自定义 API',
-      'src.restored': '已恢复连接',
+      'src.restored': '已自动重新加载数据源',
+      'src.restored_toast': '已自动重新加载数据源「{name}」',
       'src.lost_suffix': '（文件缺失）',
       'src.lost_hint': '原文件已不存在，仅恢复对话历史',
       'toast.upload_ok': '文件上传成功 ✓',
@@ -183,8 +204,8 @@
       'status.line.output': '输出累计　{v} tokens',
       'status.line.ctx': '当前上下文　{used} / {total} tokens{pct}',
       'status.line.ctx_none': '当前上下文　{used} tokens（未配置上下文窗口）',
-      'ctx.bar': '上下文 {used} / {total} ({pct}%)',
-      'token.bar': '↑ {input}  ↓ {output} tokens',
+      'ctx.bar':  '{used} / {total} · {pct}%',
+      'token.bar': '↑{input} · ↓{output}',
       // ── Command groups ───────────────────────────────────────────
       'group.analysis': '分析',
       'group.clean': '清洗',
@@ -214,6 +235,9 @@
       'cmd.status.desc': '查看模型、数据源与 Token 用量',
       // ── Lang toggle ──────────────────────────────────────────────
       'lang.toggle': 'EN',
+      // ── Theme toggle ─────────────────────────────────────────────
+      'theme.to_dark':  '切换到深色模式',
+      'theme.to_light': '切换到浅色模式',
     },
 
     en: {
@@ -237,6 +261,16 @@
       'sidebar.refresh': '↻ Refresh',
       'sidebar.loading': 'Loading…',
       'sidebar.check_update': '🔄 Check Update',
+      'sidebar.add_source': 'Add Data Source',
+      'sidebar.instruction': 'Documentation',
+      'modal.instruction.title': '📖 Documentation',
+      'modal.instruction.loading': 'Loading…',
+      'sidebar.model_test': 'Test connection',
+      'sidebar.model_tested_ok': 'Connection test passed',
+      'sidebar.model_test_no_select': 'Select a model first',
+      'sidebar.model_test_ok': '{model} connected successfully',
+      'modal.model_test.fail_title': '⚠ Model connection test failed',
+      'modal.model_test.open_settings': 'Open model settings',
       // ── Header ───────────────────────────────────────────────────
       'header.title': '💬 Conversation',
       'header.subtitle': 'Connect a data source to start',
@@ -245,8 +279,13 @@
       'welcome.title': 'Start Your Data Analysis',
       'welcome.desc': 'Connect a database or upload Excel, ask in natural language, and AI will query, analyze, and generate charts.<br>Type <strong>/</strong> to browse commands.',
       // ── Input ────────────────────────────────────────────────────
-      'input.placeholder': 'Ask a question, or type / for commands…',
+      'input.placeholder': 'Ask anything  ·  /  for commands  ·  Shift+Enter newline',
+      'input.kbd_hint': '<kbd>Enter</kbd> Send · <kbd>Shift</kbd>+<kbd>Enter</kbd> Newline · <kbd>/</kbd> Commands',
       'send.title': 'Send (Enter)',
+      'send.stop':  'Stop generating',
+      'cmd_badge.clear': 'Remove current command',
+      'msg.copy':   'Copy',
+      'msg.copied': 'Copied ✓',
       // ── Modals (shared) ──────────────────────────────────────────
       'modal.cancel': 'Cancel',
       'modal.upload': 'Upload',
@@ -311,6 +350,11 @@
       'settings.cleared': 'Cleared',
       'settings.api_key_empty': 'API Key is required',
       'settings.del_custom': 'Delete',
+      'settings.test': 'Test',
+      'settings.testing': 'Testing…',
+      'settings.test_ok': 'Connected ✓',
+      'settings.test_ok_with_model': 'Connected · {model}',
+      'settings.test_fail': 'Connection failed (see dialog)',
       // ── Add custom form ──────────────────────────────────────────
       'add_custom.name_ph': 'Model name (display label)',
       'add_custom.url_ph': 'API Base URL, e.g. https://api.deepseek.com',
@@ -338,7 +382,8 @@
       'src.hint.file': 'Excel / CSV file',
       'src.hint.gsheets': 'Google Sheets',
       'src.hint.api': 'Custom API',
-      'src.restored': 'Connection restored',
+      'src.restored': 'Data source auto-reloaded',
+      'src.restored_toast': 'Data source "{name}" was auto-reloaded',
       'src.lost_suffix': ' (file missing)',
       'src.lost_hint': 'File not found — chat history restored',
       'toast.upload_ok': 'File uploaded ✓',
@@ -388,8 +433,8 @@
       'status.line.output': 'Total output　{v} tokens',
       'status.line.ctx': 'Context　{used} / {total} tokens{pct}',
       'status.line.ctx_none': 'Context　{used} tokens (context window not configured)',
-      'ctx.bar': 'Context {used} / {total} ({pct}%)',
-      'token.bar': '↑ {input}  ↓ {output} tokens',
+      'ctx.bar':  '{used} / {total} · {pct}%',
+      'token.bar': '↑{input} · ↓{output}',
       // ── Command groups ───────────────────────────────────────────
       'group.analysis': 'Analysis',
       'group.clean': 'Cleaning',
@@ -419,6 +464,9 @@
       'cmd.status.desc': 'View model, data source, and token usage',
       // ── Lang toggle ──────────────────────────────────────────────
       'lang.toggle': '中文',
+      // ── Theme toggle ─────────────────────────────────────────────
+      'theme.to_dark':  'Switch to dark mode',
+      'theme.to_light': 'Switch to light mode',
     },
   };
 

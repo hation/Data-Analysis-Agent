@@ -500,7 +500,7 @@ def generate(
         "#chart{width:100%;height:calc(100vh - 60px)}</style></head><body>"
         f"<div id='header'><h1>{_jesc(title)}</h1><div class='sub'>{_jesc(sub)}</div></div>"
         "<div id='chart'></div>"
-        "<script src='https://assets.pyecharts.org/assets/v6/echarts.min.js'></script>"
+        "<script src='/static/vendor/echarts.min.js'></script>"
         "<script>(function(){"
         "if(!window.echarts){document.getElementById('chart').innerHTML='ECharts加载失败';return;}"
         "var chart=echarts.init(document.getElementById('chart'),'white',{renderer:'canvas',locale:'ZH'});"

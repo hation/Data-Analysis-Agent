@@ -215,3 +215,21 @@ def zip_update():
         "added": added,
         "skipped": skipped,
     })
+
+
+@bp.get("/api/instruction")
+def get_instruction():
+    """Return the raw Markdown of Instruction.md so the frontend can render it.
+
+    Kept as JSON (rather than text/markdown) so the response can also carry a
+    consistent {ok, error} envelope when the file is missing — front-end
+    error handling is uniform across endpoints.
+    """
+    path = PROJECT_ROOT / "Instruction.md"
+    if not path.exists():
+        return jsonify({"ok": False, "error": "Instruction.md not found"}), 404
+    try:
+        return jsonify({"ok": True, "markdown": path.read_text(encoding="utf-8")})
+    except OSError as exc:
+        log.error("[instruction] read failed: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500

@@ -2,9 +2,12 @@
 # -*- coding: utf-8 -*-
 import os
 import json
+import logging
 from pathlib import Path
 from typing import Dict, Optional, List, Literal
 from dataclasses import dataclass, field, asdict
+
+log = logging.getLogger(__name__)
 
 if os.environ.get("VERCEL"):
     CONFIG_DIR = Path("/tmp/LLM")
@@ -45,7 +48,7 @@ class MCPConfigManager:
                 for sid, cfg in data.get("servers", {}).items():
                     self.servers[sid] = MCPServerConfig(**cfg)
             except Exception as e:
-                print(f"[MCP] 加载配置失败: {e}")
+                log.error("[MCP] 加载配置失败: %s", e)
 
     def _save(self) -> bool:
         try:
@@ -54,7 +57,7 @@ class MCPConfigManager:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             return True
         except Exception as e:
-            print(f"[MCP] 保存配置失败: {e}")
+            log.error("[MCP] 保存配置失败: %s", e)
             return False
 
     def add_server(self, config: MCPServerConfig) -> tuple[bool, str]:

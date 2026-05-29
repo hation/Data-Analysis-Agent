@@ -20,6 +20,21 @@ else:
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _collect_chart_ids(history: list) -> list[str]:
+    """Gather every chart_id referenced across the conversation history.
+
+    Chart HTML itself is already written through to disk by _ChartStore
+    (outputs/charts/<cid>.html), so it survives restarts on its own — we only
+    need the id list (e.g. to keep sess.chart_ids in sync for export).
+    """
+    ids: list[str] = []
+    for msg in history:
+        for cid in (msg.get("chart_ids") or []):
+            if cid not in ids:
+                ids.append(cid)
+    return ids
+
+
 # ── helpers ────────────────────────────────────────────────────────────────
 
 def _safe_stem(name: str) -> str:
@@ -40,7 +55,13 @@ def _ds_info(sess) -> dict | None:
 
 
 def _restore_ds(info: dict):
-    """Re-instantiate a data source from saved metadata. Returns None on failure."""
+    """Re-instantiate a data source from saved metadata.
+
+    Returns None when the source cannot be genuinely restored — the original
+    file is missing, construction fails, or the rebuilt source has no usable
+    table. The caller maps None → ds_lost so the frontend never shows a
+    misleading "connected" state for a source that is not actually usable.
+    """
     if not info:
         return None
     fp = info.get("file_path", "")
@@ -50,11 +71,19 @@ def _restore_ds(info: dict):
     ext = Path(fp).suffix.lower()
     try:
         if info.get("ds_type") == "CSVDataSource" or ext == ".csv":
-            return CSVDataSource(fp, display)
+            ds = CSVDataSource(fp, display)
         else:
-            return ExcelDataSource(fp, display)
+            ds = ExcelDataSource(fp, display)
     except Exception:
         return None
+    # Verify the rebuilt source actually has at least one queryable table —
+    # a file can exist on disk yet be empty/corrupt.
+    try:
+        if not ds.list_tables():
+            return None
+    except Exception:
+        return None
+    return ds
 
 
 def _list_files() -> list[dict]:
@@ -108,6 +137,8 @@ def save_session(sid: str):
     ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = SAVE_DIR / f"{stem}_{ts}.json"
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Note: chart HTML is already persisted by _ChartStore (outputs/charts/),
+    # and history now carries chart_ids — nothing extra to write here.
 
     return jsonify({"ok": True, "filename": path.name, "name": name})
 
@@ -129,10 +160,19 @@ def load_session(sid: str):
 
     sess = session_manager.get_or_create(sid)
     sess.history              = data.get("history", [])
-    sess.model_provider       = data.get("model_provider", "")
+    # 前端可以通过请求体传入 keep_provider=true 保留当前 session 已设的模型；
+    # 否则从存档中恢复（兼容旧行为）。
+    keep_provider = (request.json or {}).get("keep_provider", False)
+    if not keep_provider:
+        sess.model_provider = data.get("model_provider", "")
     sess.total_input_tokens   = data.get("total_input_tokens", 0)
     sess.total_output_tokens  = data.get("total_output_tokens", 0)
     sess.last_prompt_tokens   = 0
+
+    # Chart HTML lives in outputs/charts/<cid>.html (written through by
+    # _ChartStore) so /api/chart/<id> already works after a restart. We only
+    # keep sess.chart_ids in sync here (used by export).
+    sess.chart_ids = _collect_chart_ids(sess.history)
 
     ds_info  = data.get("data_source")
     ds       = _restore_ds(ds_info)
@@ -142,7 +182,8 @@ def load_session(sid: str):
         "ok":              True,
         "name":            data.get("name", ""),
         "history":         sess.history,
-        "model_provider":  sess.model_provider,
+        "model_provider":  sess.model_provider,   # 实际生效的模型（keep_provider 时为原值）
+        "saved_provider":  data.get("model_provider", ""),  # 存档中记录的模型（仅供参考）
         "total_input":     sess.total_input_tokens,
         "total_output":    sess.total_output_tokens,
         "ds_connected":    ds is not None,
@@ -157,4 +198,6 @@ def delete_session(filename: str):
     if not path.exists() or path.suffix != ".json":
         return jsonify({"error": "文件不存在"}), 404
     path.unlink()
+    # Chart HTML in outputs/charts/ is intentionally NOT deleted — it is shared
+    # storage and may still be referenced by other saved conversations.
     return jsonify({"ok": True})

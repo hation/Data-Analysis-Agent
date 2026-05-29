@@ -70,7 +70,7 @@ def _build_system_prompt() -> str:
     return _SYSTEM_PROMPT_TEMPLATE + kb_section
 
 
-_SYSTEM_PROMPT_TEMPLATE = f"""You are a professional business analyst assistant embedded in a data analytics platform.
+_SYSTEM_PROMPT_TEMPLATE = """You are a professional business analyst assistant embedded in a data analytics platform.
 Your job: help users understand and derive insights from their business data through conversation.
 
 Behaviour rules:
@@ -111,8 +111,8 @@ Chart generation workflow — MANDATORY STEPS (do NOT skip):
 
 field_mapping rules — CRITICAL:
 - Use EXACTLY the required_roles keys returned by select_chart as your field_mapping keys.
-- y can be a list of column names for multi-series: {{"x":"month","y":["rev","cost"]}}
-- Parallel coordinates: dimensions must be a list: {{"dimensions":["col1","col2","col3"]}}
+- y can be a list of column names for multi-series: {"x":"month","y":["rev","cost"]}
+- Parallel coordinates: dimensions must be a list: {"dimensions":["col1","col2","col3"]}
 - If a required role column is missing from the SQL result, the chart will fail — ensure SQL SELECTs all needed columns.
 
 9. OUTPUT TOOLS — SLASH COMMANDS ONLY (STRICT):
@@ -482,15 +482,19 @@ COMMAND_HINTS: Dict[str, str] = {
         "  Each widget MUST have a valid SQL query using ONLY real table/column names from the schema.\n"
         "  NEVER fabricate column names or table names — only use what get_schema returned.\n"
         "  Choose appropriate chart types:\n"
+        "    KPI_Card: for a single headline metric (SQL returns 1 row; col1=value, col2=subtitle, col3=trend%).\n"
+        "      Use 1–4 KPI cards at the top for key business numbers. Recommended grid: w=3, h=2.\n"
+        "      Example SQL: SELECT COUNT(*) AS 总订单数 FROM orders\n"
         "    Bar_Chart / Line_Chart: for comparisons or trends (field_mapping: x, y)\n"
-        "    Grouped_Bar_Chart: for multi-series comparisons (field_mapping: x, y=[col1,col2,...])\n"
+        "    Grouped_Bar_Chart: for multi-series comparisons (field_mapping: x, value_cols=[col1,col2,...])\n"
         "    Stacked_Bar_Chart: for part-to-whole comparisons (field_mapping: x, y=[col1,col2,...])\n"
         "    Pie_Chart: for proportions (field_mapping: label, value)\n"
         "    Scatter_Plot: for correlations (field_mapping: x, y, [color])\n"
         "    Area_Chart: for cumulative trends (field_mapping: x, y)\n"
         "    Heatmap: for matrix/correlation data (field_mapping: x, y, value)\n"
+        "  Layout recommendation: place KPI cards in a row at y=0 (w=3,h=2 each), then charts below (y=2+).\n"
         "  Assign grid positions so widgets tile neatly (total width = 12 units):\n"
-        "    e.g. two widgets side-by-side: {x:0,y:0,w:6,h:4} and {x:6,y:0,w:6,h:4}\n"
+        "    e.g. two charts side-by-side: {x:0,y:2,w:6,h:4} and {x:6,y:2,w:6,h:4}\n"
         "  Then call propose_dashboard_outline(name=..., widgets=[...]).\n"
         "  Output NOTHING after the tool call — the UI handles user confirmation."
     ),

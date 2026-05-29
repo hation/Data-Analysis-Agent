@@ -645,15 +645,19 @@ AGENT_TOOLS = [
                                     "enum": [
                                         "Bar_Chart", "Line_Chart", "Pie_Chart",
                                         "Scatter_Plot", "Area_Chart", "Grouped_Bar_Chart",
-                                        "Heatmap", "Stacked_Bar_Chart",
+                                        "Heatmap", "Stacked_Bar_Chart", "KPI_Card",
                                     ],
+                                    "description": (
+                                        "Chart type. Use KPI_Card for scalar metric display "
+                                        "(SQL must return 1 row: col1=value, col2=subtitle (opt), col3=trend% (opt))."
+                                    ),
                                 },
                                 "sql": {"type": "string"},
                                 "field_mapping": {"type": "object"},
                                 "options": {"type": "object"},
                                 "grid": {
                                     "type": "object",
-                                    "description": "{x, y, w, h} grid position.",
+                                    "description": "{x, y, w, h} grid position. KPI_Card recommended: w=3, h=2.",
                                 },
                             },
                             "required": ["title", "chart_type", "sql", "field_mapping"],

@@ -47,10 +47,12 @@ _CHARTS: List[Dict[str, Any]] = [
     ),
     dict(
         chart_id="Grouped_Bar_Chart", name="分组柱状图", category="对比类 COMPARING",
-        required_roles=["x", "y", "series"], optional_roles=["color"],
-        desc="同类别多分组并排显示，便于对比",
-        data_format="x列(类别) + 分组列 + y列(数值)",
-        constraints="分组数≤5",
+        required_roles=["x", "y", "series"], optional_roles=["color", "value_cols"],
+        desc="同类别多分组并排显示，便于对比。支持两种数据格式：①长格式（x列+分组列+数值列）；②宽格式（x列+多个数值列，自动转换）。"
+             "宽格式时：若要比较多个指标列，请在 field_mapping 中传 value_cols=[\"列A\",\"列B\",...] 明确指定要比较的列（可排除样本数等无关数值列），"
+             "此时 y 和 series 可省略；若只比较单个指标则正常传 x 和 y。",
+        data_format="长格式: x列(类别) + series列(分组) + y列(数值) | 宽格式: x列(类别) + 多个数值列(各列名即为分组)",
+        constraints="分组数≤8；宽格式多指标对比时用 value_cols 排除量纲不同的列（如样本数）",
     ),
     dict(
         chart_id="Stacked_Bar_Chart", name="堆叠柱状图", category="对比类 COMPARING",

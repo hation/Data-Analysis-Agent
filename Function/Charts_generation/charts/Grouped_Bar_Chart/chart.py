@@ -102,41 +102,73 @@ def _auto_col(df: pd.DataFrame, *hints: str) -> Optional[str]:
     return None
 
 
-def _detect_wide_format(df: pd.DataFrame) -> bool:
-    """检测是否为宽格式数据（1个字符串列 + 多个数值列）"""
+def _detect_wide_format(df: pd.DataFrame, mapping: dict) -> bool:
+    """判断是否需要将宽格式数据 melt 为长格式。
+
+    走宽格式路径的条件（全部满足）：
+    1. 只有 1 个字符串列（作为行标签 / x 轴）
+    2. 有 2 个以上数值列
+    3. df 中不存在可用的 color/series 列（mapping 里写的列名必须在 df 中实际存在）
+    4. mapping 里明确指定的 y 列不存在于 df（若 y 列存在，说明 Agent 想画单指标柱状图）
+
+    额外支持：mapping 里可传 value_cols 列表，显式指定要 melt 的列，此时直接走宽格式。
+    """
+    # 显式指定了要比较的列 → 直接走宽格式
+    if mapping.get("value_cols"):
+        return True
+
     strs = [c for c in df.columns if df[c].dtype == object or df[c].dtype == 'string']
     nums = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    
-    # 宽格式特征：恰好1个字符串列，2个以上数值列
+
+    # 存在真实的 color/series 列 → 已经是长格式
+    color_hint = mapping.get("color") or mapping.get("series") or ""
+    if color_hint and color_hint in df.columns:
+        return False
+
+    # y 列真实存在 → Agent 指定了单一指标，不需要 melt
+    y_hint = mapping.get("y") or ""
+    if y_hint and y_hint in df.columns:
+        return False
+
+    # 2个以上字符串列 → 长格式（其中一列可做分组）
+    if len(strs) >= 2:
+        return False
+
     return len(strs) == 1 and len(nums) >= 2
 
 
-def _convert_wide_to_long(df: pd.DataFrame, id_col: str) -> pd.DataFrame:
-    """将宽格式转换为长格式
-    
-    输入：
-        行标签  15    16    17    18    19
-        标签二  36.39 31.97 29.03 28.11 25.46
-        标签三  49.72 44.48 35.79 35.32 30.22
-    
-    输出：
-        行标签  周期  数值
-        标签二  15   36.39
-        标签二  16   31.97
-        ...
+def _convert_wide_to_long(df: pd.DataFrame, id_col: str, value_cols: list = None):
+    """将宽格式转换为长格式。
+
+    Parameters
+    ----------
+    df        : 原始宽格式 DataFrame
+    id_col    : 行标签列（作为 x 轴）
+    value_cols: 要 melt 的列名列表；为 None 时取所有数值列（排除 id_col）
+
+    Returns
+    -------
+    (df_long, val_name)
     """
-    # 获取所有数值列（按原始顺序）
-    value_cols = [c for c in df.columns if c != id_col and pd.api.types.is_numeric_dtype(df[c])]
-    
-    # melt：将宽格式转为长格式
+    if value_cols is None:
+        value_cols = [c for c in df.columns
+                      if c != id_col and pd.api.types.is_numeric_dtype(df[c])]
+
+    # 动态选取不与现有列名冲突的 value_name
+    existing = set(df.columns)
+    val_name = "_value_"
+    for candidate in ("数值", "value", "_value_", "_val_", "__val__"):
+        if candidate not in existing:
+            val_name = candidate
+            break
+
     df_long = df.melt(
         id_vars=[id_col],
         value_vars=value_cols,
-        var_name="周期",
-        value_name="数值"
+        var_name="指标",
+        value_name=val_name,
     )
-    
-    return df_long
+    return df_long, val_name
 
 
 def _build_html(title: str, chart_name: str, library: str,
@@ -191,32 +223,59 @@ def generate(
     title = options.get("title", title)
 
     # ── 检测并转换宽格式数据 ──────────────────────────────
-    if _detect_wide_format(df):
-        # 找到字符串列作为 id_col
-        id_col = [c for c in df.columns if df[c].dtype == object or df[c].dtype == 'string'][0]
-        df = _convert_wide_to_long(df, id_col)
-        
-        # 转换后的长格式：id_col, 周期, 数值
-        _x = id_col  # 行标签作为 x
-        _y = "数值"  # 数值列
-        _color = "周期"  # 周期作为分组
-        
-        warnings.append(f"自动转换宽格式数据：{id_col} (x) × 周期 (color) × 数值 (y)")
+    if _detect_wide_format(df, mapping):
+        # 找到字符串列作为 id_col（x 轴行标签）
+        x_hint = mapping.get("x") or x_col
+        strs = [c for c in df.columns if df[c].dtype == object or df[c].dtype == 'string']
+        if x_hint and x_hint in df.columns:
+            id_col = x_hint
+        else:
+            id_col = strs[0] if strs else df.columns[0]
+
+        # mapping 里可显式指定 value_cols 来控制 melt 哪些列
+        # 未指定时取全部数值列（排除 id_col）
+        explicit_cols = mapping.get("value_cols")
+        if explicit_cols:
+            value_cols = [c for c in explicit_cols if c in df.columns]
+        else:
+            value_cols = None   # _convert_wide_to_long 内部自动取全部数值列
+
+        df, val_name = _convert_wide_to_long(df, id_col, value_cols)
+
+        _x = id_col
+        _y = val_name
+        _color = "指标"   # melt 后的分组列名
+
+        warnings.append(f"自动转换宽格式数据：{id_col} (x) × 指标 (color) × {val_name} (y)")
     else:
         # 长格式数据：正常处理
         _x = _auto_col(df, x_col, "x", "季度", "时间", "类别", "行标签")
         _y = _auto_col(df, y_col, "y", "销售额", "销量", "value", "amount", "数值")
         _color = _auto_col(df, color_col, "color", "产品", "区域", "group", "category", "周期")
 
+        # ── 回退：y 列存在但无 color 列，且还有其他数值列 → 多指标宽格式 ──────
+        # 场景：Agent 传了 x='银行类型', y='ESG总分', series='指标'（不存在），
+        # 数据实际是宽格式（还有环境/社会/治理等列）。
+        # 此时把 y 列和其余同量纲数值列一起 melt，自动做分组柱图。
+        if _x and _x in df.columns and (_color is None or _color not in df.columns):
+            other_nums = [c for c in df.columns
+                          if c != _x and pd.api.types.is_numeric_dtype(df[c])]
+            if len(other_nums) >= 2:
+                # 将所有数值列（含 _y）一起 melt
+                df, val_name = _convert_wide_to_long(df, _x, other_nums)
+                _y = val_name
+                _color = "指标"
+                warnings.append(f"检测到多数值列，自动转换为分组柱图：{_x} × 指标 × {val_name}")
+
     for role, col_ in [("x", _x), ("y", _y)]:
         if col_ is None or col_ not in df.columns:
             warnings.append(f"找不到必填字段 [{role}]")
 
     if _x is None or _x not in df.columns:
-        warnings.append(f"找不到必填字段 [x]")
+        warnings.append("找不到必填字段 [x]")
         return ChartResult(warnings=warnings)
     if _y is None or _y not in df.columns:
-        warnings.append(f"找不到必填字段 [y]")
+        warnings.append("找不到必填字段 [y]")
         return ChartResult(warnings=warnings)
 
     if _color and _color not in df.columns:
@@ -245,6 +304,14 @@ def generate(
     **kwargs
 )
 
+    # 根据分组数量自动计算合理的 bargap / bargroupgap，
+    # 让柱子不过细：类别数越多越适当收窄，但始终保持足够宽度。
+    n_categories = df[_x].nunique() if _x else 1
+    n_groups = df[_color].nunique() if (_color and _color in df.columns) else 1
+    # bargap: 类别间距；bargroupgap: 同类别内各组间距
+    bargap = max(0.10, min(0.35, 0.15 + n_categories * 0.005))
+    bargroupgap = max(0.02, min(0.10, 0.04 + n_groups * 0.005))
+
     fig.update_layout(
         font_family="Arial, Helvetica, sans-serif",
         plot_bgcolor="white",
@@ -253,6 +320,8 @@ def generate(
         xaxis_title=_x,
         yaxis_title=_y,
         legend_title=_color if _color else "",
+        bargap=bargap,
+        bargroupgap=bargroupgap,
     )
     fig.update_xaxes(showgrid=False, linecolor="#D9D9D9")
     fig.update_yaxes(showgrid=True, gridcolor="#E6E9EF", zeroline=False)
@@ -262,7 +331,7 @@ def generate(
     else:
         fig.update_yaxes(tickformat=None)
 
-    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
     html = _build_html(title, "grouped_bar", "plotly", _DATA_FMT, _DESC, chart_html)
 
 

@@ -1,4 +1,4 @@
-/* MCP Settings UI — loaded before agent_chat.js */
+/* MCP Settings UI — loaded after modules/overlay.js (depends on window.openOverlay / closeOverlay / toast) */
 
 const MCP_STATUS_ICON = {
   connected:    "🟢",
@@ -104,17 +104,19 @@ function _updateMcpSidebarStatus(servers) {
   const hintEl   = document.getElementById("mcp-status-hint");
   if (!dot) return;
   const connected = servers.filter(s => s.status === "connected");
+  // Only toggle the .on modifier so the dot keeps its base class (.sb-status-dot
+  // in the new sidebar; was .source-dot in the legacy layout).
   if (connected.length > 0) {
-    dot.className = "source-dot on";
+    dot.classList.add("on");
     textEl.textContent = `${connected.length} 个服务器已连接`;
     const toolCount = connected.reduce((n, s) => n + (s.tool_count || 0), 0);
     hintEl.textContent = toolCount ? `共 ${toolCount} 个工具可用` : "点击管理 MCP 工具服务器";
   } else if (servers.length > 0) {
-    dot.className = "source-dot";
+    dot.classList.remove("on");
     textEl.textContent = `${servers.length} 个服务器未连接`;
     hintEl.textContent = "点击管理 MCP 工具服务器";
   } else {
-    dot.className = "source-dot";
+    dot.classList.remove("on");
     textEl.textContent = "未配置";
     hintEl.textContent = "点击管理 MCP 工具服务器";
   }

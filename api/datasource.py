@@ -31,6 +31,57 @@ def _allowed(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_EXTS
 
 
+def _friendly_conn_error(exc: Exception, service: str) -> str:
+    """Translate a low-level connection exception into a user-readable message.
+
+    `service` is a short label like 'Google Sheets' / '外部 API' / '数据库'.
+    Falls back to the raw message when the error is not a known network case.
+    """
+    # Walk the exception cause chain so a wrapped error is still recognised.
+    chain = []
+    cur: BaseException | None = exc
+    seen = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        chain.append(cur)
+        cur = cur.__cause__ or cur.__context__
+    text = "  ".join(f"{type(c).__name__}: {c}" for c in chain).lower()
+
+    # — Network unreachable / connection reset (proxy, GFW, offline) —
+    if any(k in text for k in (
+        "10054", "connection aborted", "connection reset", "connectionreseterror",
+        "connection refused", "10061", "max retries", "failed to establish",
+        "name or service not known", "getaddrinfo failed", "11001",
+        "transporterror", "ssl", "handshake", "timed out", "timeout",
+        "remotedisconnected", "connectionerror",
+    )):
+        return (
+            f"无法连接「{service}」：网络请求被中断或超时。"
+            f"请检查网络是否可正常访问目标服务"
+            + ("（Google 服务在部分网络下需要代理）" if "google" in service.lower() else "")
+            + "，确认代理 / VPN 已开启且 Python 进程已走代理后重试。"
+        )
+    # — Authentication / authorization —
+    if any(k in text for k in (
+        "401", "403", "unauthorized", "forbidden", "permission",
+        "invalid_grant", "invalid_client", "authentication",
+        "access_denied", "credential",
+    )):
+        return (
+            f"{service} 认证失败：凭证无效或没有访问权限。"
+            "请检查服务账号 / 密钥是否正确，以及该账号是否已被授权访问目标资源。"
+        )
+    # — Not found —
+    if any(k in text for k in ("404", "not found", "does not exist")):
+        return f"{service} 目标资源不存在：请检查 URL / ID / 表名是否正确。"
+
+    # — Unknown — keep the raw message but keep it short —
+    raw = str(exc).strip() or type(exc).__name__
+    if len(raw) > 200:
+        raw = raw[:200] + "…"
+    return f"{service} 连接失败：{raw}"
+
+
 def _encode_db_password(conn_str: str) -> str:
     """对连接字符串中的密码部分做 URL 编码，处理 @ # 等特殊字符。"""
     # 匹配 scheme://user:password@host 格式，密码可能含多个 @
@@ -105,7 +156,8 @@ def connect_db(sid: str):
         return jsonify({"ok": True, "source_name": source.name,
                         "schema_preview": source.get_schema()})
     except Exception as exc:
-        return jsonify({"error": f"数据库连接失败: {exc}"}), 400
+        log.error("[connect-db] FAILED: %s\n%s", exc, traceback.format_exc())
+        return jsonify({"error": _friendly_conn_error(exc, "数据库")}), 400
 
 
 @bp.get("/api/session/<sid>/preview")
@@ -177,7 +229,7 @@ def connect_gsheets(sid: str):
                         "schema_preview": source.get_schema()})
     except Exception as exc:
         log.error("[connect-gsheets] FAILED: %s\n%s", exc, traceback.format_exc())
-        return jsonify({"error": f"Google Sheets 连接失败: {exc}"}), 400
+        return jsonify({"error": _friendly_conn_error(exc, "Google Sheets")}), 400
 
 
 @bp.post("/api/session/<sid>/connect-api")
@@ -213,7 +265,7 @@ def connect_api(sid: str):
                         "schema_preview": source.get_schema()})
     except Exception as exc:
         log.error("[connect-api] FAILED: %s\n%s", exc, traceback.format_exc())
-        return jsonify({"error": f"API 连接失败: {exc}"}), 400
+        return jsonify({"error": _friendly_conn_error(exc, "外部 API")}), 400
 
 
 @bp.get("/api/datasource-configs")
