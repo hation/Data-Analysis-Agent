@@ -307,6 +307,27 @@
 .msg-bubble p { margin: 4px 0; }
 .msg-bubble p:first-child { margin-top: 0; }
 .msg-bubble p:last-child  { margin-bottom: 0; }
+
+/* ── 聊天气泡内图片 ──────────────────────────────────────────── */
+.msg-bubble img {
+  max-width: 100%;          /* 不超出气泡宽度 */
+  max-height: 480px;        /* 限制最大高度，避免超长图撑开页面 */
+  width: auto;
+  height: auto;
+  border-radius: var(--radius-md);
+  display: block;
+  margin: 8px 0;
+  object-fit: contain;
+  cursor: pointer;          /* 提示可点击查看大图 */
+  transition: opacity 0.2s;
+}
+.msg-bubble img:hover { opacity: 0.9; }
+/* 加载失败时显示 alt 文字兜底 */
+.msg-bubble img[data-error] {
+  display: inline;
+  font-size: 12px;
+  color: var(--color-text-dim);
+}
 .msg-bubble h1, .msg-bubble h2, .msg-bubble h3,
 .msg-bubble h4, .msg-bubble h5, .msg-bubble h6 {
   margin: 10px 0 4px;

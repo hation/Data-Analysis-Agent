@@ -1,0 +1,20 @@
+{
+  "servers": {
+    "atlascloud_mcp": {
+      "server_id": "atlascloud_mcp",
+      "label": "Atlascloud",
+      "transport": "stdio",
+      "enabled": true,
+      "description": "MCP server for Atlas Cloud - AI API aggregation platform for image/video generation and LLM",
+      "command": "node",
+      "args": [
+        "D:\\傻猪\\Business_Analytics_Agent\\MCP\\AtlasCloud\\dist\\index.js"
+      ],
+      "env": {
+        "ATLASCLOUD_API_KEY": "apikey-a8f6115339f04f1199c7c4bb6f44a0d4"
+      },
+      "url": "",
+      "headers": {}
+    }
+  }
+}

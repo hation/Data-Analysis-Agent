@@ -25,6 +25,7 @@
 
 # Table of Contents
 
+- [🙏 Sponsors](#-sponsors)
 - [✨ Project Highlights](#-project-highlights)
 - [🧠 Core Capabilities](#-core-capabilities)
 - [⚙️ Installation](#️-installation)
@@ -34,9 +35,47 @@
 - [🗺️ Project Milestones](#️-project-milestones)
 - [❓ FAQ](#-faq)
 - [🚀 Looking for Contributors](#-looking-for-contributors)
-- [🙏 Sponsors](#-sponsors)
 - [📄 License](#-license)
 - [⭐ Project Goal](#-project-goal)
+
+---
+
+# 🙏 Sponsors
+
+Thank you to the following sponsors for supporting this project!
+
+<table>
+<tr>
+<td width="50%" align="center" valign="top">
+<a href="https://doloffer.com/">
+<img src="./Images/DolOffer.png" alt="DolOffer Logo" height="70">
+</a>
+<br>
+<br>
+<a href="https://doloffer.com/"><strong>DolOffer</strong></a>
+<br>
+<br>
+<p align="left">
+Thank you to DolOffer for supporting this project! DolOffer is a platform focused on digital product recommendations and deal sharing, helping users quickly discover useful tools, services, and limited-time offers. The platform provides popular subscription services such as YouTube Premium, Claude, ChatGPT Plus, Spotify, Apple Music, and more, with prices as low as 30% of the official price or even lower. All services are genuine, stable, and backed by reliable after-sales support. Register through our exclusive link and use the coupon code <strong>AI8888</strong> when topping up to enjoy an additional 10% discount.
+</p>
+<a href="https://github.com/Doloffer-g/guide">Learn more →</a>
+</td>
+<td width="50%" align="center" valign="top">
+<a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=data-analysis-agent">
+<img src="./Images/ATLAS%20CLOUD.png" alt="Atlas Cloud Logo" height="70">
+</a>
+<br>
+<br>
+<a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=data-analysis-agent"><strong>Atlas Cloud</strong></a>
+<br>
+<br>
+<p align="left">
+Thank you to Atlas Cloud for supporting this project! Atlas Cloud is an all-modal AI inference platform that provides developers with a unified AI API interface, covering video generation, image generation, and large language model APIs. Instead of integrating multiple providers separately, you can connect once and access more than 300 carefully selected all-modal models through a single interface. Check out Atlas Cloud’s newly launched coding plan promotion to get more cost-effective API access.
+</p>
+<a href="https://www.atlascloud.ai/console/coding-plan">Learn more →</a>
+</td>
+</tr>
+</table>
 
 ---
 
@@ -128,16 +167,16 @@ Supports the following model providers:
 
 - DeepSeek
 - OpenAI
-- Claude
+- AtlasCloud
 - Any OpenAI SDK-compatible API
 
 Supports custom `base_url`, `model`, and `api_key`. Default configurations:
 
 | Provider | Default Model |
 |---|---|
-| DeepSeek | `deepseek-chat` |
+| DeepSeek | `deepseek-v4-flash` |
 | OpenAI | `gpt-4o-mini` |
-| Anthropic | `claude-3-5-haiku-20241022` |
+| AtlasCloud | `deepseek-v4-pro` |
 
 ## 6️⃣ Data Analysis
 
@@ -563,26 +602,6 @@ We've hit a few deeply challenging, high-value problems. If you love solving har
 
 - Open a **Pull Request** directly — we review within 24 hours
 - Or contact us at: `rusboldtshanti34@gmail.com` (please note "Contributor + area of expertise")
-
----
-
-# 🙏 Sponsors
-
-Thank you to the following sponsors for their support of this project!
-
-<table>
-  <tr>
-    <td align="center" width="400">
-      <a href="https://doloffer.com/" target="_blank">
-        <img src="Images/DolOffer.png" alt="DolOffer Logo" width="120" /><br/>
-        <b>DolOffer</b>
-      </a>
-      <br/>
-      Thank you to DolOffer for supporting this project! DolOffer is a platform focused on digital product recommendations and deal sharing, helping users quickly discover noteworthy tools, services, and limited-time offers. The platform provides popular subscription services including YouTube Premium, Claude, ChatGPT Plus, Spotify, and Apple Music at prices as low as 30% of the official rate or even less — genuine licenses with reliable after-sales support. Register via our exclusive link and enter promo code <b>AI8888</b> when topping up to enjoy an additional 10% off.<br/>
-      <a href="https://github.com/Doloffer-g/guide">Learn more →</a>
-    </td>
-  </tr>
-</table>
 
 ---
 

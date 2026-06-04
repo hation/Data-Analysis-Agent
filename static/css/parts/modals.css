@@ -182,6 +182,17 @@
 .modal-title { font-size: var(--fs-xl); font-weight: 700; color: var(--color-text);
   margin-bottom: 20px; }
 
+/* ── 模型设置弹窗：更宽 + 可拖拽调整大小 ──────────────────────── */
+#ov-settings .modal {
+  width: 680px;
+  max-width: 96vw;
+  min-width: 420px;
+  min-height: 300px;
+  max-height: 90vh;
+  resize: both;
+  overflow: auto;
+}
+
 /* settings sections */
 .settings-sec { margin-bottom: 22px; }
 .settings-sec-title { font-size: var(--fs-sm); font-weight: 700; text-transform: uppercase;

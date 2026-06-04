@@ -27,6 +27,7 @@ class LLMConfig:
     api_key: str
     base_url: Optional[str] = None
     model: Optional[str] = None
+    name: Optional[str] = None               # 自定义模型的供应商显示名称（如 "DeepSeek"）
     enabled: bool = True
     is_custom: bool = False
     context_window: Optional[int] = None    # 上下文窗口（tokens）
@@ -134,6 +135,7 @@ class LLMConfigManager:
             api_key=api_key.strip(),
             base_url=base_url.strip(),
             model=model_name.strip(),
+            name=name.strip(),               # 供应商显示名称（用户填写的 ac-name）
             enabled=True,
             is_custom=True,
             context_window=context_window,
@@ -223,6 +225,7 @@ class LLMConfigManager:
             api_key=new_key,
             base_url=base_url.strip(),
             model=model_name.strip(),
+            name=cfg.name,                   # 保留原有供应商显示名称
             enabled=cfg.enabled,
             is_custom=True,
             context_window=context_window,
@@ -286,6 +289,7 @@ class LLMConfigManager:
                 "provider": config.provider,
                 "base_url": config.base_url,
                 "model": config.model,
+                "name": config.name,          # 自定义模型的供应商显示名称
                 "enabled": config.enabled,
                 "is_custom": config.is_custom,
                 "has_api_key": bool(config.api_key),

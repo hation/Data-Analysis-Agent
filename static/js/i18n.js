@@ -127,9 +127,9 @@
       'settings.test_ok_with_model': '连接成功 · {model}',
       'settings.test_fail': '连接失败（详情见弹窗）',
       // ── Add custom form ──────────────────────────────────────────
-      'add_custom.name_ph': '模型名称（显示用）',
+      'add_custom.name_ph': '供应商名称（显示用），例如 DeepSeek',
       'add_custom.url_ph': 'API Base URL，例如 https://api.deepseek.com',
-      'add_custom.model_ph': 'Model ID，例如 deepseek-chat',
+      'add_custom.model_ph': 'Model ID（传入 API 的模型名），例如 deepseek-chat',
       'add_custom.key_ph': 'API Key',
       'add_custom.ctx_ph': '上下文窗口（tokens，选填）',
       'add_custom.out_ph': '最大输出（tokens，选填）',
@@ -365,9 +365,9 @@
       'settings.test_ok_with_model': 'Connected · {model}',
       'settings.test_fail': 'Connection failed (see dialog)',
       // ── Add custom form ──────────────────────────────────────────
-      'add_custom.name_ph': 'Model name (display label)',
+      'add_custom.name_ph': 'Provider name (display label), e.g. DeepSeek',
       'add_custom.url_ph': 'API Base URL, e.g. https://api.deepseek.com',
-      'add_custom.model_ph': 'Model ID, e.g. deepseek-chat',
+      'add_custom.model_ph': 'Model ID (sent to API), e.g. deepseek-chat',
       'add_custom.key_ph': 'API Key',
       'add_custom.ctx_ph': 'Context window (tokens, optional)',
       'add_custom.out_ph': 'Max output (tokens, optional)',

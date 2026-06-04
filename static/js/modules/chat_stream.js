@@ -240,6 +240,10 @@
     // Attach hover-revealed action bar (copy) to the assistant message body.
     // The body persists across the bubble innerHTML rewrite, so we attach there.
     _ensureMsgActions(ctx.bubbleEl, md);
+    // 绑定气泡内图片：点击新标签打开原图、加载失败时标注
+    if (window.BAA.msg && window.BAA.msg.bindBubbleImages) {
+      window.BAA.msg.bindBubbleImages(ctx.bubbleEl);
+    }
     scrollBottom();
   }
 

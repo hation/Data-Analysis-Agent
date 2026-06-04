@@ -3,6 +3,60 @@
   const { $, esc, scrollBottom } = window.BAA.dom;
   const state = window.BAA.state;
 
+  // ── 气泡内图片：no-referrer 策略绕过 OSS 防盗链 ─────────────────
+  // OSS referer 白名单通常允许「空 Referer」，浏览器加 referrerpolicy="no-referrer"
+  // 后发出的图片请求不带 Referer 头，多数情况下可以通过防盗链。
+  // 同时准备 blob 兜底：若直连仍失败，用 fetch(no-cors) 拿 blob 本地显示。
+
+  function _bindBubbleImages(bubbleEl) {
+    bubbleEl.querySelectorAll("img").forEach(img => {
+      if (img.dataset.bound) return;
+      img.dataset.bound = "1";
+
+      const originalSrc = img.getAttribute("src") || "";
+      if (!originalSrc.startsWith("http")) return;
+
+      // Step 1: 加 no-referrer，浏览器不发 Referer 头
+      img.referrerPolicy = "no-referrer";
+      img.crossOrigin    = "anonymous";
+
+      // 点击新标签打开
+      img.style.cursor = "pointer";
+      img.addEventListener("click", () => window.open(originalSrc, "_blank", "noopener"));
+
+      // Step 2: 若 no-referrer 仍失败，尝试 fetch blob 兜底
+      img.addEventListener("error", () => {
+        if (img.dataset.blobTried) {
+          _replaceWithLink(img, originalSrc);
+          return;
+        }
+        img.dataset.blobTried = "1";
+        // fetch with no-cors — 拿到 opaque response，转 blob 作为本地 objectURL
+        fetch(originalSrc, { mode: "no-cors", referrerPolicy: "no-referrer" })
+          .then(r => r.blob())
+          .then(blob => {
+            if (!blob.size) throw new Error("empty blob");
+            const blobUrl = URL.createObjectURL(blob);
+            img.src = blobUrl;
+            // blob URL 用完后在页面卸载时释放
+            window.addEventListener("beforeunload", () => URL.revokeObjectURL(blobUrl), { once: true });
+          })
+          .catch(() => _replaceWithLink(img, originalSrc));
+      });
+    });
+  }
+
+  function _replaceWithLink(img, src) {
+    const link = document.createElement("a");
+    link.href   = src;
+    link.target = "_blank";
+    link.rel    = "noopener";
+    link.textContent = "🖼️ " + (img.alt || "查看图片（点击打开原链接）");
+    link.style.cssText = "display:inline-block;padding:6px 10px;background:#f1f5f9;" +
+      "border-radius:6px;font-size:13px;color:#3b82f6;text-decoration:none;";
+    img.replaceWith(link);
+  }
+
   function appendMsg(role, text) {
     const msgs = $("messages");
     const div  = document.createElement("div");
@@ -17,6 +71,8 @@
         <div class="msg-bubble">${text !== null ? window.renderMd(text) : ""}</div>
       </div>`;
     msgs.appendChild(div);
+    // 绑定气泡内图片交互
+    _bindBubbleImages(div.querySelector(".msg-bubble"));
     scrollBottom();
     return div;
   }
@@ -88,7 +144,7 @@
     scrollBottom();
   }
 
-  window.BAA.msg = { appendMsg, sysMsg, updateTokenBar, showStatus, fmtK };
+  window.BAA.msg = { appendMsg, sysMsg, updateTokenBar, showStatus, fmtK, bindBubbleImages: _bindBubbleImages };
 
   // Backward-compat globals (used by chat_stream / sessions / status command).
   window.appendMsg      = appendMsg;

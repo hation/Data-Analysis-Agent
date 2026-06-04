@@ -24,6 +24,7 @@
 ---
 # 目录
 
+- [🙏 赞助商](#-赞助商)
 - [✨ 项目亮点](#-项目亮点)
 - [🧠 核心能力](#-核心能力)
 - [⚙️ 安装方式](#️-安装方式)
@@ -33,10 +34,50 @@
 - [🗺️ 项目里程碑](#️-项目里程碑)
 - [❓ FAQ](#-faq)
 - [🚀 寻找一起改变世界的 Contributor](#-寻找一起改变世界的-contributor)
-- [🙏 赞助商](#-赞助商)
 - [📄 License](#-license)
 - [⭐ 项目目标](#-项目目标)
 ---
+
+# 🙏 赞助商
+
+感谢以下赞助商对本项目的支持！
+
+<table>
+<tr>
+<td width="50%" align="center" valign="top">
+<a href="https://doloffer.com/">
+<img src="./Images/DolOffer.png" alt="DolOffer Logo" height="70">
+</a>
+<br>
+<br>
+<a href="https://doloffer.com/"><strong>DolOffer</strong></a>
+<br>
+<br>
+<p align="left">
+感谢 DolOffer 对本项目的支持！DolOffer 是一个专注于数字产品推荐与优惠分享的平台，帮助用户快速发现值得关注的工具、服务和限时福利。平台提供 YouTube Premium、Claude、ChatGPT Plus、Spotify、Apple Music 等多种热门订阅服务，价格低至官方价的 3 折甚至更低，正版稳定，售后无忧。现在通过我们的专属链接注册，并在充值时输入优惠码 <strong>AI8888</strong>，即可额外享受 9 折优惠。
+</p>
+<a href="https://github.com/Doloffer-g/guide">了解更多 →</a>
+</td>
+<td width="50%" align="center" valign="top">
+<a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=data-analysis-agent">
+<img src="./Images/ATLAS%20CLOUD.png" alt="Atlas Cloud Logo" height="70">
+</a>
+<br>
+<br>
+<a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=data-analysis-agent"><strong>Atlas Cloud</strong></a>
+<br>
+<br>
+<p align="left">
+感谢 Atlas Cloud 对本项目的支持！Atlas Cloud 是一个全模态 AI 推理平台，为开发者提供统一的 AI API 接口，涵盖视频生成、图像生成和大语言模型 API。您无需分别集成多个供应商，只需一次连接即可统一访问 300 多个精选的全模态模型。快来查看 Atlas Cloud 新推出的编程套餐推广活动，获取更经济实惠的 API 访问。
+</p>
+<a href="https://www.atlascloud.ai/console/coding-plan">了解更多 →</a>
+</td>
+</tr>
+</table>
+
+---
+
+
 # ✨ 项目亮点
 
 Business Analyst Agent 是一个对话式商业数据分析系统，目标是让非技术用户也能像“聊天”一样完成数据分析。
@@ -129,16 +170,16 @@ Business Analyst Agent 是一个对话式商业数据分析系统，目标是让
 
 - DeepSeek
 - OpenAI
-- Claude
+- AtlasCloud
 - 任意 OpenAI SDK Compatible API
 
 并支持自定义 `base_url`、`model`、`api_key`。默认配置如下:
 
 | Provider | Default Model |
 |---|---|
-| DeepSeek | `deepseek-chat` |
+| DeepSeek | `deepseek-v4-flash` |
 | OpenAI | `gpt-4o-mini` |
-| Anthropic | `claude-3-5-haiku-20241022` |
+| AtlasCloud | `deepseek-v4-pro` |
 
 
 ## 6️⃣ 数据分析
@@ -597,25 +638,7 @@ outputs/charts
 - 或联系邮箱：`rusboldtshanti34@gmail.com`（请备注“Contributor+擅长方向”）
 ---
 
-# 🙏 赞助商
 
-感谢以下赞助商对本项目的支持！
-
-<table>
-  <tr>
-    <td align="center" width="400">
-      <a href="https://doloffer.com/" target="_blank">
-        <img src="Images/DolOffer.png" alt="DolOffer Logo" width="150" /><br/>
-        <b>DolOffer</b>
-      </a>
-      <br/>
-      感谢 DolOffer 对本项目的支持！DolOffer 是一个专注于数字产品推荐与优惠分享的平台，帮助用户快速发现值得关注的工具、服务和限时福利。平台提供 YouTube Premium、Claude、ChatGPT Plus、Spotify、Apple Music 等多种热门订阅服务，价格低至官方价的 3 折甚至更低，正版稳定，售后无忧。现在通过我们的专属链接注册，并在充值时输入优惠码 AI8888，即可额外享受 9 折优惠。 <br/>
-      <a href="https://github.com/Doloffer-g/guide">了解更多 →</a>
-    </td>
-  </tr>
-</table>
-
----
 
 # 📄 License
 

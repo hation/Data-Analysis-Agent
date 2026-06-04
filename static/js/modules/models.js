@@ -26,7 +26,11 @@
       if (!cfg.has_api_key) continue;
       const opt = document.createElement("option");
       opt.value = key;
-      opt.textContent = cfg.model || key;
+      // 自定义模型：优先显示供应商名称（ac-name），fallback 到 Model ID，再 fallback 到 key
+      // 内置模型：显示 BUILTIN_META 的 label（DeepSeek / OpenAI 等）
+      opt.textContent = cfg.is_custom
+        ? (cfg.name || cfg.model || key)
+        : (BUILTIN_META[key]?.label || cfg.model || key);
       sel.appendChild(opt);
     }
 
@@ -225,8 +229,8 @@
     }
     list.innerHTML = customs.map(([key, cfg]) => `
       <div class="custom-item">
-        <span class="ci-name">${cfg.model || key}</span>
-        <span class="ci-model">${cfg.base_url || ""}</span>
+        <span class="ci-name">${cfg.name || cfg.model || key}</span>
+        <span class="ci-model">${cfg.model || cfg.base_url || ""}</span>
         <button class="btn-sm btn-sm-ghost"  data-action="testProvider:${key}">${t('settings.test') || '测试'}</button>
         <button class="btn-sm btn-sm-ghost"  data-action="editCustom:${key}">${t('settings.edit_custom') || '编辑'}</button>
         <button class="btn-sm btn-sm-danger" data-action="deleteCustom:${key}">${t('settings.del_custom')}</button>
@@ -241,9 +245,9 @@
     fetch("/api/models").then(r => r.json()).then(configs => {
       const cfg = configs[provider];
       if (!cfg) return;
-      $("ac-name").value   = (cfg.model || "");
+      $("ac-name").value   = (cfg.name || "");    // 供应商名称（显示用）
       $("ac-url").value    = (cfg.base_url || "");
-      $("ac-model").value  = (cfg.model || "");
+      $("ac-model").value  = (cfg.model || "");   // Model ID（传入 API）
       $("ac-key").value    = "";
       $("ac-ctx").value    = cfg.context_window != null ? cfg.context_window : "";
       $("ac-output").value = cfg.max_output_tokens != null ? cfg.max_output_tokens : "";

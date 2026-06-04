@@ -22,5 +22,17 @@
     "max_output_tokens": 384000,
     "enable_thinking": true,
     "thinking_budget": 8000
+  },
+  "AtlasCloud": {
+    "provider": "AtlasCloud",
+    "api_key": "",
+    "base_url": "https://api.atlascloud.ai/v1",
+    "model": "deepseek-ai/deepseek-v4-pro",
+    "enabled": true,
+    "is_custom": true,
+    "context_window": 100000,
+    "max_output_tokens": 100000,
+    "enable_thinking": true,
+    "thinking_budget": 8000
   }
 }

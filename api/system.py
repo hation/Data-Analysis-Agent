@@ -223,6 +223,90 @@ def zip_update():
     })
 
 
+@bp.get("/api/proxy-image")
+def proxy_image():
+    """Proxy an external image URL through the backend.
+
+    Some image hosts (e.g. Aliyun OSS with referer policy) block direct
+    browser access. Fetching through the backend avoids the referer check
+    and streams the image bytes back to the frontend.
+
+    Query params:
+        url  — the full image URL to fetch (must be http/https)
+
+    Security:
+        - Only http/https URLs are accepted
+        - 10 MB size cap to prevent abuse
+        - Timeout of 30 s
+    """
+    from flask import request as _req, Response as _Resp
+    url = (_req.args.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return jsonify({"error": "Invalid URL"}), 400
+
+    _SIZE_CAP = 10 * 1024 * 1024  # 10 MB
+
+    # Infer mimetype from URL extension as fallback
+    def _guess_mime(u: str) -> str:
+        u_lower = u.lower().split("?")[0]
+        if u_lower.endswith(".png"):  return "image/png"
+        if u_lower.endswith(".webp"): return "image/webp"
+        if u_lower.endswith(".gif"):  return "image/gif"
+        if u_lower.endswith(".svg"):  return "image/svg+xml"
+        return "image/jpeg"  # default
+
+    # Try a list of Referer values — some OSS buckets allow no-referer
+    # or require the platform's own domain.
+    _referers = [
+        "https://www.atlascloud.ai/",
+        "https://atlascloud.ai/",
+        "",   # no Referer — some policies allow empty referer
+    ]
+
+    last_exc: Exception | None = None
+    for referer in _referers:
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (compatible; BAA-proxy/1.0)"}
+            if referer:
+                headers["Referer"] = referer
+            req_obj = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req_obj, timeout=30) as resp:
+                ct = resp.headers.get("Content-Type", "") or ""
+                # If OSS returns octet-stream, guess from URL
+                if "octet-stream" in ct or not ct.startswith("image/"):
+                    mimetype = _guess_mime(url)
+                else:
+                    mimetype = ct.split(";")[0].strip()
+                data = resp.read(_SIZE_CAP)
+            log.info("[proxy-image] fetched %d bytes (referer=%r) from %s",
+                     len(data), referer or "(none)", url[:80])
+            return _Resp(
+                data,
+                status=200,
+                mimetype=mimetype,
+                headers={
+                    "Cache-Control": "public, max-age=3600",
+                    # Force browser to display inline, not download
+                    "Content-Disposition": "inline",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+        except urllib.error.HTTPError as exc:
+            log.warning("[proxy-image] HTTP %d (referer=%r) for %s",
+                        exc.code, referer or "(none)", url[:80])
+            last_exc = exc
+            if exc.code != 403:
+                break   # only retry 403 (referer policy); other errors are final
+        except Exception as exc:
+            log.warning("[proxy-image] failed (referer=%r) for %s: %s",
+                        referer or "(none)", url[:80], exc)
+            last_exc = exc
+            break
+
+    code = getattr(last_exc, "code", 502)
+    return jsonify({"error": f"Remote server error: {last_exc}"}), 502
+
+
 @bp.get("/api/instruction")
 def get_instruction():
     """Return the raw Markdown of Instruction.md so the frontend can render it.
