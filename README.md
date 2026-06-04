@@ -70,7 +70,7 @@
 <p align="left">
 感谢 Atlas Cloud 对本项目的支持！Atlas Cloud 是一个全模态 AI 推理平台，为开发者提供统一的 AI API 接口，涵盖视频生成、图像生成和大语言模型 API。您无需分别集成多个供应商，只需一次连接即可统一访问 300 多个精选的全模态模型。快来查看 Atlas Cloud 新推出的编程套餐推广活动，获取更经济实惠的 API 访问。
 </p>
-<a href="https://www.atlascloud.ai/console/coding-plan">了解更多 →</a>
+<a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=data-analysis-agent">了解更多 →</a>
 </td>
 </tr>
 </table>
