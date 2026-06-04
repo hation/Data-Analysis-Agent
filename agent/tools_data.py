@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """Mixin: data-oriented tools (schema, query, analysis, chart, clean, profile)."""
+import logging
 import re
 import sqlite3
+
+log = logging.getLogger(__name__)
 
 
 class DataToolsMixin:
@@ -47,25 +50,94 @@ class DataToolsMixin:
     # ── Basic data access ─────────────────────────────────────────────────────
 
     def _tool_get_schema(self) -> str:
-        if not self.data_source:
+        if not self.data_source and not getattr(self, "_combined_schema", None):
             return "No data source connected."
         if not self._schema_cache:
-            self._schema_cache = self.data_source.get_schema()
+            combined = getattr(self, "_combined_schema", None)
+            self._schema_cache = combined if combined else self.data_source.get_schema()
         return self._schema_cache
 
+    def _tool_get_table_detail(self, table_name: str) -> str:
+        """Return full column list + row count for a single table (SQL databases)."""
+        # Try each active source until one knows the table
+        for src in getattr(self, "_all_sources", [self.data_source]):
+            if src is None:
+                continue
+            fn = getattr(src, "get_table_detail", None)
+            if fn is None:
+                continue
+            try:
+                tables = src.list_tables()
+            except Exception:
+                tables = []
+            if table_name in tables:
+                return fn(table_name)
+        # Fallback: try primary source regardless
+        if self.data_source:
+            fn = getattr(self.data_source, "get_table_detail", None)
+            if fn:
+                return fn(table_name)
+        return f"Table '{table_name}' not found in any connected data source."
+
+    def _route_query(self, sql: str):
+        """Return the DataSource that owns the tables referenced in `sql`.
+
+        With multiple active sources we try each source in turn and return the
+        first one that executes the query without error.  Falls back to the
+        primary (first) source so single-source behaviour is unchanged.
+        """
+        sources = getattr(self, "_all_sources", None)   # list injected by agent.py
+        if not sources or len(sources) == 1:
+            return self.data_source
+        # Quick heuristic: try the source whose table names appear in the SQL
+        sql_upper = sql.upper()
+        best = None
+        for src in sources:
+            try:
+                tables = [t.upper() for t in src.list_tables()]
+            except Exception:
+                tables = []
+            if any(t in sql_upper for t in tables):
+                best = src
+                break
+        if best:
+            return best
+        # Fallback: try each source until one succeeds
+        return self.data_source
+
     def _tool_query_data(self, sql: str) -> str:
-        if not self.data_source:
+        sql_preview = sql.replace("\n", " ")[:120]
+        src = self._route_query(sql)
+        if not src:
+            log.warning("[tools] query_data  no data source  sql=%.80r", sql_preview)
             return "No data source. Please connect a database or upload an Excel file first."
-        df, error = self.data_source.execute_query(sql)
+        df, error = src.execute_query(sql)
         if error:
+            log.warning("[tools] query_data  ERROR  source=%s  sql=%.80r  error=%s",
+                        getattr(src, "name", "?"), sql_preview, error[:200])
+            # If primary source failed and we have alternatives, try them
+            sources = getattr(self, "_all_sources", None) or []
+            for alt in sources:
+                if alt is src:
+                    continue
+                df2, err2 = alt.execute_query(sql)
+                if not err2:
+                    log.info("[tools] query_data  fallback OK  source=%s  rows=%d",
+                             getattr(alt, "name", "?"), len(df2))
+                    return alt.format_result(df2)
             return f"SQL Error: {error}"
-        return self.data_source.format_result(df)
+        log.info("[tools] query_data  OK  source=%s  rows=%d  sql=%.80r",
+                 getattr(src, "name", "?"), len(df), sql_preview)
+        return src.format_result(df)
 
     def _tool_create_analysis_table(self, sql: str, table_name: str = "analysis_data") -> str:
-        if not self.data_source:
+        src = self._route_query(sql)
+        if not src:
             return "No data source connected."
-        result = self.data_source.create_analysis_table(sql, table_name)
+        result = src.create_analysis_table(sql, table_name)
         self._schema_cache = None
+        log.info("[tools] create_analysis_table  table=%s  source=%s",
+                 table_name, getattr(src, "name", "?"))
         return result
 
     # ── DataFrame → DataSource writer (backward-compatible) ──────────────────

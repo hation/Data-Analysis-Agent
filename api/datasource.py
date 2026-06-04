@@ -99,39 +99,51 @@ def _encode_db_password(conn_str: str) -> str:
 
 @bp.post("/api/session/<sid>/upload")
 def upload_file(sid: str):
-    if "file" not in request.files:
+    """Upload one or more files; each is appended as a new data source."""
+    files = request.files.getlist("file")
+    if not files or all(not f.filename for f in files):
         return jsonify({"error": "未选择文件"}), 400
-    f = request.files["file"]
-    if not f.filename or not _allowed(f.filename):
-        return jsonify({"error": "仅支持 .xlsx / .xls / .csv 文件"}), 400
 
-    display_name = f.filename  # keep original (may contain CJK/unicode)
-    ext = Path(f.filename).suffix.lower()
-    safe_stem = secure_filename(f.filename)
-    safe_name = (safe_stem if safe_stem else f"upload_{uuid.uuid4().hex[:8]}{ext}")
-    save_path = UPLOAD_DIR / f"{sid[:8]}_{uuid.uuid4().hex[:6]}_{safe_name}"
-    f.save(str(save_path))
+    sess = session_manager.get_or_create(sid)
+    added = []
+    errors = []
 
-    log.info("[upload] saved → %s  (display: %s)", save_path, display_name)
+    for f in files:
+        if not f.filename or not _allowed(f.filename):
+            errors.append(f"{f.filename}: 仅支持 .xlsx / .xls / .csv 文件")
+            continue
 
-    try:
-        log.info("[upload] building DataSource …")
-        if ext == ".csv":
-            source = CSVDataSource(str(save_path), display_name)
-        else:
-            source = ExcelDataSource(str(save_path), display_name)
+        display_name = f.filename
+        ext = Path(f.filename).suffix.lower()
+        safe_stem = secure_filename(f.filename)
+        safe_name = safe_stem if safe_stem else f"upload_{uuid.uuid4().hex[:8]}{ext}"
+        save_path = UPLOAD_DIR / f"{sid[:8]}_{uuid.uuid4().hex[:6]}_{safe_name}"
+        f.save(str(save_path))
+        log.info("[upload] saved → %s  (display: %s)", save_path, display_name)
 
-        log.info("[upload] DataSource ready, fetching schema …")
-        schema = source.get_schema()
-        log.info("[upload] schema OK:\n%s", schema)
+        try:
+            source = CSVDataSource(str(save_path), display_name) if ext == ".csv" \
+                     else ExcelDataSource(str(save_path), display_name)
+            schema = source.get_schema()
+            source_id = sess.add_source(source)
+            added.append({"source_id": source_id, "source_name": display_name,
+                          "schema_preview": schema})
+        except Exception as exc:
+            log.error("[upload] FAILED %s: %s\n%s", f.filename, exc, traceback.format_exc())
+            errors.append(f"{f.filename}: {exc}")
 
-        sess = session_manager.get_or_create(sid)
-        sess.data_source = source
-        return jsonify({"ok": True, "source_name": display_name,
-                        "schema_preview": schema})
-    except Exception as exc:
-        log.error("[upload] FAILED: %s\n%s", exc, traceback.format_exc())
-        return jsonify({"error": f"文件解析失败: {exc}"}), 400
+    if not added:
+        return jsonify({"error": "; ".join(errors) or "文件解析失败"}), 400
+
+    return jsonify({
+        "ok": True,
+        "added": added,
+        "sources": sess.list_sources(),
+        # convenience: first added file's info (backward-compat for old frontend)
+        "source_name": added[0]["source_name"],
+        "schema_preview": added[0]["schema_preview"],
+        "errors": errors,
+    })
 
 
 @bp.post("/api/session/<sid>/connect-db")
@@ -149,45 +161,108 @@ def connect_db(sid: str):
     try:
         source = SQLDataSource(conn_str, display_name)
         sess = session_manager.get_or_create(sid)
-        sess.data_source = source
+        source_id = sess.add_source(source)
         datasource_config_manager.save("sql", {
             "connection_string": conn_str, "name": display_name
         })
-        return jsonify({"ok": True, "source_name": source.name,
-                        "schema_preview": source.get_schema()})
+        schema = source.get_schema()
+        log.info("[connect-db] OK  sid=%s  source=%s  source_id=%s  tables=%d",
+                 sid, source.name, source_id,
+                 schema.count("Table:"))
+        return jsonify({"ok": True, "source_id": source_id,
+                        "source_name": source.name,
+                        "schema_preview": schema,
+                        "sources": sess.list_sources()})
     except Exception as exc:
-        log.error("[connect-db] FAILED: %s\n%s", exc, traceback.format_exc())
+        log.error("[connect-db] FAILED  sid=%s: %s\n%s", sid, exc, traceback.format_exc())
         return jsonify({"error": _friendly_conn_error(exc, "数据库")}), 400
+
+
+@bp.get("/api/session/<sid>/sources")
+def list_sources(sid: str):
+    """Return the list of all connected data sources for this session."""
+    sess = session_manager.get(sid)
+    if not sess:
+        return jsonify({"sources": []})
+    return jsonify({"sources": sess.list_sources()})
+
+
+@bp.post("/api/session/<sid>/sources/<source_id>/toggle")
+def toggle_source(sid: str, source_id: str):
+    """Toggle a data source active/inactive (multi-select)."""
+    sess = session_manager.get(sid)
+    if not sess:
+        return jsonify({"error": "session not found"}), 404
+    new_state = sess.toggle_source(source_id)
+    return jsonify({"ok": True, "active": new_state, "sources": sess.list_sources()})
+
+
+@bp.delete("/api/session/<sid>/sources/<source_id>")
+def remove_source(sid: str, source_id: str):
+    """Remove one data source from the session."""
+    sess = session_manager.get(sid)
+    if not sess:
+        return jsonify({"error": "session not found"}), 404
+    sess.remove_source(source_id)
+    return jsonify({"ok": True, "sources": sess.list_sources()})
 
 
 @bp.get("/api/session/<sid>/preview")
 def preview_data(sid: str):
-    """Return table metadata only (name / columns / total_rows). No row data — fast."""
+    """Return table metadata for all active sources. No row data — fast."""
     sess = session_manager.get(sid)
-    if not sess or not sess.data_source:
+    if not sess:
         return jsonify({"error": "no data source"}), 404
-    tables = sess.data_source.get_preview()
-    return jsonify({"source_name": sess.data_source.name, "tables": tables})
+    active = sess._active_entries() if hasattr(sess, "_active_entries") else []
+    if not active and sess.data_source:
+        active = [{"source": sess.data_source}]
+    if not active:
+        return jsonify({"error": "no data source"}), 404
+    # Merge tables from all active sources; tag each with source_id + source_name
+    all_tables = []
+    for entry in active:
+        src = entry["source"]
+        for tbl in src.get_preview():
+            tbl["source_id"]   = entry["id"]
+            tbl["source_name"] = getattr(src, "name", "")
+            all_tables.append(tbl)
+    primary = active[0]["source"]
+    return jsonify({"source_name": getattr(primary, "name", ""), "tables": all_tables})
 
 
 @bp.get("/api/session/<sid>/preview-table")
 def preview_table(sid: str):
-    """Return row data for a single table, fetched on demand by the frontend."""
+    """Return row data for a single table. Requires source_id when multi-source."""
     from flask import request as _req
     sess = session_manager.get(sid)
-    if not sess or not sess.data_source:
+    if not sess:
         return jsonify({"error": "no data source"}), 404
     table_name = _req.args.get("table", "")
+    source_id  = _req.args.get("source_id", "")
     if not table_name:
         return jsonify({"error": "missing table parameter"}), 400
-    data = sess.data_source.get_preview_table(table_name, max_rows=100)
+
+    # Find the right source: by source_id if provided, else first active, else any
+    target_src = None
+    if source_id and hasattr(sess, "_sources"):
+        for entry in sess._sources:
+            if entry["id"] == source_id:
+                target_src = entry["source"]
+                break
+    if target_src is None:
+        target_src = sess.data_source   # backward-compat fallback
+    if target_src is None:
+        return jsonify({"error": "no data source"}), 404
+
+    data = target_src.get_preview_table(table_name, max_rows=100)
     return jsonify(data)
 
 
 @bp.delete("/api/session/<sid>/datasource")
 def disconnect_source(sid: str):
+    """Disconnect ALL data sources (clear entire list)."""
     sess = session_manager.get_or_create(sid)
-    sess.data_source = None
+    sess.data_source = None   # setter clears _sources list
     return jsonify({"ok": True})
 
 
@@ -220,13 +295,15 @@ def connect_gsheets(sid: str):
     try:
         source = GoogleSheetsDataSource(creds_dict, spreadsheet, display_name)
         sess = session_manager.get_or_create(sid)
-        sess.data_source = source
+        source_id = sess.add_source(source)
         datasource_config_manager.save("gsheets", {
             "creds_json": creds_raw if isinstance(creds_raw, str) else _json.dumps(creds_raw),
             "spreadsheet": spreadsheet, "name": display_name
         })
-        return jsonify({"ok": True, "source_name": source.name,
-                        "schema_preview": source.get_schema()})
+        return jsonify({"ok": True, "source_id": source_id,
+                        "source_name": source.name,
+                        "schema_preview": source.get_schema(),
+                        "sources": sess.list_sources()})
     except Exception as exc:
         log.error("[connect-gsheets] FAILED: %s\n%s", exc, traceback.format_exc())
         return jsonify({"error": _friendly_conn_error(exc, "Google Sheets")}), 400
@@ -256,13 +333,15 @@ def connect_api(sid: str):
     try:
         source = HTTPAPIDataSource(url, auth_type, auth_value, display_name)
         sess = session_manager.get_or_create(sid)
-        sess.data_source = source
+        source_id = sess.add_source(source)
         datasource_config_manager.save("api", {
             "url": url, "auth_type": auth_type,
             "auth_value": auth_value, "name": display_name
         })
-        return jsonify({"ok": True, "source_name": source.name,
-                        "schema_preview": source.get_schema()})
+        return jsonify({"ok": True, "source_id": source_id,
+                        "source_name": source.name,
+                        "schema_preview": source.get_schema(),
+                        "sources": sess.list_sources()})
     except Exception as exc:
         log.error("[connect-api] FAILED: %s\n%s", exc, traceback.format_exc())
         return jsonify({"error": _friendly_conn_error(exc, "外部 API")}), 400

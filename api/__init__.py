@@ -6,7 +6,21 @@ from flask import Flask, render_template
 from flask_cors import CORS
 
 
+def _start_background_services() -> None:
+    """Start long-lived background services (local only, skipped on Vercel)."""
+    if os.environ.get("VERCEL"):
+        return
+    try:
+        from MCP.flowchart_server import ensure_flowchart_server
+        ensure_flowchart_server()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("[startup] flowchart server: %s", e)
+
+
 def create_app() -> Flask:
+    _start_background_services()
+
     root = Path(__file__).parent.parent
     app = Flask(
         __name__,

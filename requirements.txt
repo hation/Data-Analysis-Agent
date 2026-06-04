@@ -52,6 +52,9 @@ sqlalchemy>=2.0.0
 pymysql>=1.0.0        # MySQL driver
 psycopg2-binary>=2.9  # PostgreSQL driver
 
+# SQL parsing (AST-level validation & table-name extraction)
+sqlglot>=23.0.0
+
 # External data sources
 gspread>=6.0.0
 google-auth>=2.0.0

@@ -37,13 +37,21 @@
     }
     box.innerHTML = list.map(s => {
       const date = s.saved_at ? s.saved_at.slice(0, 16).replace("T", " ") : "";
-      // Encode filename/name in data attributes to avoid quote escaping bugs.
+      // Unified card: same structure for manual and autosave
+      // Only difference: autosave shows a small badge in the meta line
+      const displayName = esc(s.is_autosave ? (date || s.name) : s.name);
+      const badge = s.is_autosave
+        ? `<span class="saved-badge">自动保存</span>`
+        : "";
+      const metaParts = [date, `${s.msg_count} 条`];
+      if (s.ds_name) metaParts.push(esc(s.ds_name));
+      const meta = metaParts.filter(Boolean).join(" · ");
       return `
         <div class="saved-item">
           <div class="saved-info" data-action="loadSession"
                data-filename="${esc(s.filename)}" data-name="${esc(s.name)}">
-            <div class="saved-name">${esc(s.name)}</div>
-            <div class="saved-meta">${date} · ${s.msg_count} 条${s.ds_name ? " · " + esc(s.ds_name) : ""}</div>
+            <div class="saved-name">${displayName}${badge}</div>
+            <div class="saved-meta">${meta}</div>
           </div>
           <button class="saved-del" title="✕" data-action="deleteSession"
                   data-filename="${esc(s.filename)}" data-name="${esc(s.name)}">✕</button>
@@ -66,6 +74,7 @@
     document.querySelectorAll(".msg, .sys-msg").forEach(el => el.remove());
     hideWelcome();
 
+    // Update sidebar datasource status + source list
     if (d.ds_connected) {
       window.setSrc(d.ds_name, 'src.restored', true);
       toast(t('src.restored_toast', { name: d.ds_name }), "ok");
@@ -75,6 +84,27 @@
     } else {
       window.setSrc(null, 'sidebar.hint.noconn', false);
     }
+
+    // Re-fetch the source list from the server and render it.
+    // load_session rebuilds sess.data_source on the backend, so the /sources
+    // endpoint reflects the restored state. Without this, the sidebar source
+    // list stays stale (showing the previous session's sources or nothing).
+    try {
+      const sr = await fetch(`/api/session/${state.SID}/sources`);
+      const sd = await sr.json();
+      const sources = sd.sources || [];
+      window.BAA.datasource.renderSourceList(sources);
+      // If backend restored a source, sync the status bar to match the list.
+      // If the list is empty (e.g. SQL/GSheets can't be auto-restored),
+      // the status bar text set above (setSrc) already reflects ds_lost/none,
+      // so we only override when there actually are sources to show.
+      if (sources.length > 0) {
+        const active = sources.find(s => s.active);
+        if (active) {
+          window.BAA.datasource.setSrc(active.name, 'src.restored', true);
+        }
+      }
+    } catch { /* non-critical — status bar already updated above */ }
 
     // 不再从历史文件恢复模型 — 前端选择与后端 session 均保持不变。
 
@@ -102,6 +132,9 @@
 
     sysMsg(t('sys.loaded', { name: d.name }));
     toast(t('toast.loaded', { name: d.name }), "ok");
+
+    // Tell autosave to overwrite this exact file (not create a new one)
+    if (window.BAA.autosave) window.BAA.autosave.setLoadedName(d.name || name, filename);
   }
 
   async function deleteSavedSession(filename, name) {

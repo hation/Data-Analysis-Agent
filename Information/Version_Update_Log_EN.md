@@ -114,3 +114,63 @@ This upgrade focuses on comprehensive front-end experience refactoring, chart st
 
 ### 4. New Time Series Analysis Module
 - Supports Prophet, SARIMA, ARIMA, VAR, and GRU models
+
+```markdown
+---
+
+## v5.0
+**June 4, 2026**
+
+This is a major release, covering four key areas: **multi-source support, intelligent interaction, stability fixes, and security hardening**.
+
+### 1. Multi-Source Support
+- You can now connect to multiple data sources at the same time — no longer limited to just one
+- A new data source list has been added to the sidebar, with an independent toggle for each source, so you can freely choose which sources are active and included in analysis
+- In multi-source scenarios, the AI can automatically determine which source each query should pull from, and supports joint analysis across sources
+
+### 2. AI Proactive Questions
+- When a request is ambiguous (e.g., it's unclear which dimension to analyze by or which metric to use), the AI will proactively pause and ask a question
+- Option cards appear in the interface — just click an option to continue, or choose "Other" to enter a custom answer
+- The AI won't interrupt arbitrarily — it only asks when different choices would lead to substantially different results
+
+### 3. Automatic Conversation Saving
+- Each conversation is automatically saved after the AI finishes responding, so it won't be lost when you refresh or reopen the page
+- In the saved conversation list, auto-saved and manually saved records now share a unified style, distinguished by a small label — there's no longer a visual "hierarchy" between them
+- Fixed an issue where auto-save would incorrectly create a new record when you continued chatting after loading a saved conversation
+
+### 4. Improved MCP Tool Integration Experience
+- Connected MCP tools can now be expanded to view detailed descriptions, so you can understand each tool's purpose and parameters
+- Added "Smart Fill": paste in a tool's install command or configuration, and the form is automatically parsed and filled — no need to enter each field manually
+- Added "Local Scan": enter the path to a local toolkit, and configuration details are automatically detected
+
+### 5. Data Preview Upgrade
+- The data preview dialog now uses a split-panel layout: the left side lists all tables (with row counts), and the right side shows their contents
+- With multiple sources, the left side groups tables by source, showing how many tables each source contains
+- The divider can be dragged to adjust the panel widths
+
+### 6. Improved SQL Database Connectivity
+
+- After connecting to an external database, tables the AI has queried are automatically cached locally, greatly speeding up repeated queries without having to reconnect to the remote server each time
+- Fixed inaccurate table count detection (previously, large databases might only have some tables recognized; now all tables and views are retrieved)
+- Fixed incorrect table-name quoting formats across database dialects (MySQL, PostgreSQL, etc.)
+- Large tables (over 500,000 rows) are no longer fully pulled to the local machine; queries are executed directly on the remote server to avoid out-of-memory errors
+
+### 7. Preventing AI from Fabricating Data
+
+- Fixed an issue where, across multiple conversation turns, the AI would "remember" numbers from earlier replies and reuse them in the next turn instead of re-querying
+- The AI can now see the complete history of queries and won't treat textual descriptions as known facts
+
+### 8. Knowledge Base Trigger Fix
+
+- Fixed an issue where the business knowledge base often wasn't triggered during conversations — the AI used to skip checking the knowledge base for various reasons
+- Now, for any data analysis request, the AI consults the metric definitions and business rules in the knowledge base first, before starting the analysis
+
+### 9. Other Experience Fixes
+
+- While the AI is responding, scrolling up to review earlier content no longer forces you back to the bottom; the view only auto-scrolls to the latest message when you send a new one
+- Fixed an issue where Google Sheets data sources would sometimes only recognize half of the worksheets
+- Fixed an issue where the grouping field in grouped bar charts would sometimes have no effect, causing the chart to fall back to a regular bar chart
+- Fixed an issue where, after loading a saved conversation, the sidebar data source status wouldn't refresh and would show stale or blank states
+- Enhanced security: all SQL queries run by the AI undergo stricter syntax-level checks, and filesystem and network access have been disabled at the database connection layer
+
+```

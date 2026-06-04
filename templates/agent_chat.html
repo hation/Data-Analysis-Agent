@@ -14,7 +14,7 @@
 
     <!-- ── Brand ─────────────────────────────────────────────── -->
     <header class="sb-brand">
-      <span class="sb-brand-icon">📊</span>
+      <img class="sb-brand-icon" src="/static/Images/icon.png" alt="智析 Agent">
       <div class="sb-brand-text">
         <span class="sb-brand-name"    data-i18n="app.title">智析 Agent</span>
         <span class="sb-brand-tagline" data-i18n="app.subtitle">Intelligent Analysis Agent</span>
@@ -51,6 +51,9 @@
         <span class="sb-status-chev">›</span>
       </button>
       <span id="mcp-status-hint" hidden>点击管理 MCP 工具服务器</span>
+
+      <!-- Auto-save status -->
+      <div class="sb-autosave-row" id="autosave-status" style="display:none"></div>
     </section>
 
     <!-- ── Actions ───────────────────────────────────────────── -->
@@ -73,6 +76,14 @@
                   id="btn-disc" hidden data-action="disconnectSrc"
                   data-i18n="sidebar.disconnect">断开连接</button>
         </div>
+      </div>
+
+      <!-- ── Connected sources list ── -->
+      <div id="source-list-wrap" hidden>
+        <div class="source-list-header">
+          <span data-i18n="sidebar.sources_connected">已连接数据源</span>
+        </div>
+        <ul id="source-list" class="source-list"></ul>
       </div>
 
       <div class="sb-actions-row">
@@ -100,7 +111,7 @@
 
     <!-- ── Footer ────────────────────────────────────────────── -->
     <footer class="sb-footer">
-      <div class="sb-footer-meta">v4.0 · Zafer_Liu</div>
+      <div class="sb-footer-meta">v5.0 · Zafer_Liu</div>
       <div class="sb-footer-actions">
         <button class="sb-iconbtn" id="theme-toggle" data-action="toggleTheme" title="Dark mode">🌙</button>
         <button class="sb-iconbtn" id="lang-toggle"  data-action="toggleLang">EN</button>
@@ -207,7 +218,7 @@
     <div class="modal-title" data-i18n="modal.excel.title">📂 上传 Excel / CSV 文件</div>
     <div class="f-row">
       <label data-i18n="modal.excel.label">选择文件</label>
-      <input type="file" id="xl-file" accept=".xlsx,.xls,.csv">
+      <input type="file" id="xl-file" accept=".xlsx,.xls,.csv" multiple>
       <div class="f-hint" data-i18n="modal.excel.hint">支持 .xlsx / .xls / .csv</div>
     </div>
     <div class="upload-progress" id="xl-progress" style="display:none">
@@ -338,12 +349,24 @@
 <!-- Data preview modal -->
 <div class="overlay" id="ov-schema">
   <div class="modal preview-modal">
-    <div class="modal-title" id="preview-title" data-i18n="modal.preview.title">数据预览</div>
-    <div class="preview-tabs" id="preview-tabs"></div>
-    <div class="preview-table-wrap" id="preview-table-wrap">
-      <div class="preview-loading" data-i18n="preview.loading">加载中…</div>
+    <div class="preview-modal-header">
+      <div class="modal-title" id="preview-title" data-i18n="modal.preview.title">数据预览</div>
+      <div class="preview-footer" id="preview-footer"></div>
     </div>
-    <div class="preview-footer" id="preview-footer"></div>
+    <div class="preview-body">
+      <!-- Left: sheet tabs list -->
+      <div class="preview-sidebar" id="preview-sidebar">
+        <div class="preview-tabs" id="preview-tabs"></div>
+      </div>
+      <!-- Drag handle -->
+      <div class="preview-resize-handle" id="preview-resize-handle"></div>
+      <!-- Right: table content -->
+      <div class="preview-content">
+        <div class="preview-table-wrap" id="preview-table-wrap">
+          <div class="preview-loading" data-i18n="preview.loading">加载中…</div>
+        </div>
+      </div>
+    </div>
     <div class="modal-footer">
       <button class="btn-sm btn-sm-ghost" data-action="closeOverlay:ov-schema" data-i18n="modal.close">关闭</button>
     </div>
@@ -440,6 +463,43 @@
       <div class="add-custom-form" id="mcp-add-form" style="display:none">
         <div style="font-size:13px;font-weight:600;color:#1e293b;margin-bottom:4px" id="mcp-form-title">添加服务器</div>
 
+        <!-- Unified smart-fill area -->
+        <div class="mcp-smart-area">
+          <div class="mcp-smart-label">✨ 智能填充</div>
+
+          <!-- Tab bar -->
+          <div class="mcp-fill-tabs">
+            <button class="mcp-fill-tab active" id="mcp-tab-local"  onclick="switchMcpTab('local')">📁 本地包目录</button>
+            <button class="mcp-fill-tab"        id="mcp-tab-paste"  onclick="switchMcpTab('paste')">📋 粘贴内容</button>
+          </div>
+
+          <!-- Tab: local path -->
+          <div id="mcp-panel-local" class="mcp-fill-panel">
+            <div class="mcp-smart-hint" style="margin-bottom:6px">填入已安装的 MCP 包目录路径，自动读取 package.json 并配置</div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <input type="text" id="mcp-scan-path" style="flex:1;margin:0"
+                placeholder="例如：C:\Users\you\MCP\playwright">
+              <button class="btn-sm btn-sm-primary" id="mcp-scan-btn" onclick="scanLocalMcp()">扫描</button>
+            </div>
+            <span id="mcp-scan-status"   style="font-size:11px;color:#64748b;margin-top:5px;display:block;min-height:16px"></span>
+            <div  id="mcp-scan-warnings" style="display:none;margin-top:4px;font-size:11px;color:#f59e0b;background:#fef3c7;border-radius:6px;padding:6px 10px;line-height:1.6"></div>
+          </div>
+
+          <!-- Tab: paste -->
+          <div id="mcp-panel-paste" class="mcp-fill-panel" style="display:none">
+            <div class="mcp-smart-hint" style="margin-bottom:6px">粘贴安装命令、JSON 配置或文档片段，LLM 自动识别并填写</div>
+            <textarea id="mcp-smart-input" class="mcp-smart-input"
+              placeholder="例如：npx -y @modelcontextprotocol/server-filesystem /your/path&#10;或粘贴 JSON 配置、README 片段、curl 示例…"></textarea>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+              <button class="btn-sm btn-sm-primary" id="mcp-smart-btn" onclick="parseMcpConfig()">解析并填充</button>
+              <span id="mcp-smart-status" style="font-size:11px;color:#64748b"></span>
+            </div>
+            <div id="mcp-smart-warnings" style="display:none;margin-top:6px;font-size:11px;color:#f59e0b;background:#fef3c7;border-radius:6px;padding:6px 10px;line-height:1.6"></div>
+            <div id="mcp-smart-llm-hint" style="display:none;font-size:11px;color:#94a3b8;margin-top:4px"></div>
+          </div>
+        </div>
+        <div class="mcp-smart-divider"><span>或手动填写</span></div>
+
         <input type="text" id="mcp-label"   placeholder="服务器名称（显示用）">
         <div id="mcp-id-row">
           <input type="text" id="mcp-id"    placeholder="服务器 ID（字母/数字/下划线，唯一）" style="width:100%">
@@ -461,9 +521,13 @@
           <div style="font-size:11px;color:#f59e0b;background:#fef3c7;border-radius:6px;padding:6px 10px">
             ⚠️ 安全提示：仅允许运行 uvx / uv / npx / node / python / python3 / deno 命令。args 和 env 中不得含有 Shell 元字符或危险环境变量。
           </div>
-          <input type="text" id="mcp-command" placeholder="命令，例如 npx 或 uvx">
-          <input type="text" id="mcp-args"    placeholder="参数（空格分隔），例如 -y @modelcontextprotocol/server-filesystem /tmp">
+          <input type="text" id="mcp-command" placeholder="命令，例如 npx 或 uvx" oninput="updateMcpCmdPreview()">
+          <input type="text" id="mcp-args"    placeholder="参数（空格分隔），例如 -y @modelcontextprotocol/server-filesystem /tmp" oninput="updateMcpCmdPreview()">
           <input type="text" id="mcp-env"     placeholder="环境变量（KEY=VALUE，逗号分隔，可选）">
+          <div id="mcp-cmd-preview" class="mcp-cmd-preview" style="display:none">
+            <div class="cmd-label">命令预览</div>
+            <span id="mcp-cmd-preview-text"></span>
+          </div>
         </div>
 
         <!-- SSE fields -->
@@ -748,6 +812,7 @@
 <script src="{{ url_for('static', filename='js/modules/preview.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/chat_stream.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/sessions.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/autosave.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/update.js') }}"></script>
 
 <!-- ── External panels (decorate window.openOverlay; must come AFTER overlay.js) -->

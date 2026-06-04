@@ -239,12 +239,51 @@
   // ── Bootstrap ─────────────────────────────────────────────────────
   (async () => {
     window.BAA.slash.buildSlashPopup();
-    const r = await fetch("/api/session/new", { method: "POST" });
-    state.SID = (await r.json()).session_id;
-    sessionStorage.setItem("baa_session_id", state.SID);
+
+    // Try to reuse the previous session (so autosave + in-memory history survive refresh)
+    const prevSID = localStorage.getItem("baa_session_id");
+    let sessionRestored = false;
+    if (prevSID) {
+      try {
+        const ping = await fetch(`/api/session/${prevSID}/ping`);
+        if (ping.ok) {
+          const { alive } = await ping.json();
+          if (alive) {
+            state.SID = prevSID;
+            sessionRestored = true;
+          }
+        }
+      } catch (_) { /* session gone — fall through to new */ }
+    }
+
+    if (!sessionRestored) {
+      const r = await fetch("/api/session/new", { method: "POST" });
+      state.SID = (await r.json()).session_id;
+    }
+    localStorage.setItem("baa_session_id", state.SID);
     await window.BAA.models.loadModels();
     await window.BAA.models.loadBuiltinProviders();
     await window.BAA.sessions.loadSavedList();
     await window.BAA.datasource.loadDatasourceConfigs();
+    // Restore any sources that survived a page reload (new session = empty, that's fine)
+    try {
+      const sr = await fetch(`/api/session/${state.SID}/sources`);
+      const sd = await sr.json();
+      if (sd.sources && sd.sources.length > 0) {
+        // Always render the list, regardless of active state
+        window.BAA.datasource.renderSourceList(sd.sources);
+        const active = sd.sources.find(s => s.active);
+        if (active) {
+          // At least one source is active → connected
+          window.BAA.datasource.setSrc(active.name, 'src.hint.file', true);
+        } else {
+          // Sources exist but none active → still show list, connected=false
+          window.BAA.datasource.setSrc(sd.sources[0].name, 'src.hint.file', false);
+        }
+      }
+    } catch { /* non-critical */ }
+
+    // Check for a resumable auto-save from the previous session
+    if (window.BAA.autosave) window.BAA.autosave.checkAutosaveOnLoad();
   })();
 })();

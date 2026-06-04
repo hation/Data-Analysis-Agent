@@ -1,8 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""SQLDataSource — any SQLAlchemy-supported DB + DuckDB analysis cache."""
+"""SQLDataSource — SQLAlchemy connector with on-demand DuckDB caching.
+
+Design
+------
+- On connect: only schema metadata is fetched (no data pulled).
+- On first query of a table: the full table is loaded into DuckDB once,
+  then all subsequent queries against that table run entirely in DuckDB
+  (fast, no round-trips to the remote DB).
+- Analysis/derived tables (create_analysis_table) also live in DuckDB.
+- The remote DB is only contacted again when a table has not yet been cached.
+
+This gives the best of both worlds:
+  • Large databases: only tables actually queried are loaded (lazy).
+  • Repeated queries: zero remote round-trips after first load.
+  • Full SQL power of DuckDB (window functions, JSON, etc.) on remote data.
+"""
 import logging
-from typing import List, Optional, Tuple
+import os
+import re
+from typing import List, Optional, Set, Tuple
 
 import duckdb
 import pandas as pd
@@ -12,9 +29,15 @@ from .base import DataSource
 
 log = logging.getLogger(__name__)
 
+# Maximum rows to pull from a remote table into DuckDB in one shot.
+# Tables larger than this are flagged as "large" and queries against them are
+# routed directly to the remote DB (no full-table pull).
+# Override via env var: BAA_LAZY_LOAD_LIMIT=200000
+_LAZY_LOAD_ROW_LIMIT = int(os.getenv("BAA_LAZY_LOAD_LIMIT", "500000"))
+
 
 class SQLDataSource(DataSource):
-    """Connect to any SQLAlchemy-supported database."""
+    """Connect to any SQLAlchemy-supported database with on-demand DuckDB caching."""
 
     def __init__(self, connection_string: str, display_name: str = ""):
         from sqlalchemy import create_engine, text, inspect as sa_inspect
@@ -33,103 +56,367 @@ class SQLDataSource(DataSource):
                 self.name = "SQL Database"
 
         self._inspect = sa_inspect(self._engine)
-        # DuckDB cache for materialised analysis tables
-        self._cache_conn: Optional[duckdb.DuckDBPyConnection] = None
-        self._cache_tables: set = set()
 
-    def get_schema(self) -> str:
-        parts: List[str] = []
+        # Single DuckDB connection for ALL cached data (source tables + analysis tables)
+        self._duck: duckdb.DuckDBPyConnection = _new_conn()
+        # Tables already loaded into DuckDB from the remote DB
+        self._loaded: Set[str] = set()
+        # Tables that exceeded _LAZY_LOAD_ROW_LIMIT — queries are routed to remote DB
+        self._large_tables: Set[str] = set()
+        # Analysis/derived tables created by create_analysis_table
+        self._cache_tables: Set[str] = set()
+
+    # ── Schema helpers ────────────────────────────────────────────────────────
+
+    def _all_table_names(self) -> List[str]:
+        """Return all tables + views from the source DB, no artificial cap."""
         try:
-            tables = self._inspect.get_table_names()[:50]
+            self._inspect.clear_cache()
+        except Exception:
+            pass
+        try:
+            tables = self._inspect.get_table_names()
         except Exception:
             tables = []
-        for table in tables:
+        try:
+            views = self._inspect.get_view_names()
+        except Exception:
+            views = []
+        seen = set(tables)
+        return tables + [v for v in views if v not in seen]
+
+    def _quote(self, name: str) -> str:
+        """Dialect-aware SQL identifier quoting for the remote DB."""
+        try:
+            dialect = self._engine.dialect.name
+        except Exception:
+            dialect = ""
+        return f"`{name}`" if dialect in ("mysql", "mariadb") else f'"{name}"'
+
+    # ── On-demand table loading ───────────────────────────────────────────────
+
+    def _ensure_loaded(self, table_name: str) -> bool:
+        """Load `table_name` from remote DB into DuckDB if not already cached.
+
+        Row-count gate: if the table has more than _LAZY_LOAD_ROW_LIMIT rows it
+        is flagged as a "large table" and NOT pulled into DuckDB.  Queries
+        against large tables are routed to the remote DB in execute_query().
+
+        Returns True if the table is available in DuckDB after this call,
+        False if it is a large table (remote-only) or if loading failed.
+        """
+        if table_name in self._loaded or table_name in self._cache_tables:
+            return True
+        if table_name in self._large_tables:
+            return False  # already decided: remote-only
+
+        q = self._quote(table_name)
+        # ── Row count check ────────────────────────────────────────────────────
+        row_count: Optional[int] = None
+        try:
+            from sqlalchemy import text as _text
+            with self._engine.connect() as _c:
+                row_count = _c.execute(_text(f"SELECT COUNT(*) FROM {q}")).scalar()
+        except Exception as exc:
+            log.warning("[SQLDataSource] row count check failed for %r: %s", table_name, exc)
+
+        if row_count is not None and row_count > _LAZY_LOAD_ROW_LIMIT:
+            self._large_tables.add(table_name)
+            log.warning(
+                "[SQLDataSource] table %r has %d rows (> limit %d) — "
+                "marked as large table, queries will run on remote DB",
+                table_name, row_count, _LAZY_LOAD_ROW_LIMIT,
+            )
+            return False
+
+        # ── Pull into DuckDB ───────────────────────────────────────────────────
+        log.info("[SQLDataSource] loading table %r into DuckDB …", table_name)
+        try:
+            from sqlalchemy import text as _text
+            with self._engine.connect() as conn:
+                df = pd.read_sql(_text(f"SELECT * FROM {q}"), conn)
+            # Register directly without _sanitize_df — SQL types are already correct
+            # and _sanitize_df's float→datetime heuristic is for Excel files only.
+            self._duck.register("_tmp_sql_", df)
+            self._duck.execute(
+                f'CREATE OR REPLACE TABLE "{table_name}" AS SELECT * FROM _tmp_sql_'
+            )
+            self._duck.unregister("_tmp_sql_")
+            self._loaded.add(table_name)
+            log.info("[SQLDataSource] loaded %r → %d rows into DuckDB", table_name, len(df))
+            return True
+        except Exception as exc:
+            log.warning("[SQLDataSource] failed to load %r: %s", table_name, exc)
+            return False
+
+    def _tables_in_sql(self, sql: str) -> List[str]:
+        """Extract table names referenced in a SQL string via sqlglot AST.
+
+        Falls back to the old substring-match heuristic when sqlglot is not
+        installed or fails to parse, so existing behaviour is preserved.
+        """
+        known = set(self._all_table_names())
+        if not known:
+            return []
+
+        # ── sqlglot AST path ───────────────────────────────────────────────────
+        try:
+            import sqlglot
+            import sqlglot.expressions as exp
+
+            parsed = sqlglot.parse(sql, dialect="duckdb", error_level=sqlglot.ErrorLevel.WARN)
+            found: Set[str] = set()
+            for stmt in parsed:
+                if stmt is None:
+                    continue
+                for tbl_node in stmt.find_all(exp.Table):
+                    tbl_name = tbl_node.name
+                    if tbl_name:
+                        found.add(tbl_name)
+                        found.add(tbl_name.lower())
+                        found.add(tbl_name.upper())
+
+            result = [t for t in known if t in found or t.lower() in found or t.upper() in found]
+            if result:
+                return result
+            # If AST found nothing (e.g. all CTEs), fall through to heuristic
+        except Exception as exc:
+            log.debug("[SQLDataSource] sqlglot table extraction failed (%s), using heuristic", exc)
+
+        # ── Fallback: substring match on known table names ─────────────────────
+        sql_upper = sql.upper()
+        return [t for t in known if t.upper() in sql_upper]
+
+    def _ensure_sql_tables_loaded(self, sql: str) -> None:
+        """Load any tables mentioned in `sql` that aren't in DuckDB yet."""
+        for table in self._tables_in_sql(sql):
+            if table not in self._loaded and table not in self._cache_tables:
+                self._ensure_loaded(table)
+
+    # ── DataSource interface ──────────────────────────────────────────────────
+
+    def get_schema(self) -> str:
+        all_tables = self._all_table_names()
+        n = len(all_tables)
+        MAX_FULL = 20
+        parts: List[str] = []
+
+        if n > MAX_FULL:
+            loaded_note = f" ({len(self._loaded)} 张已缓存到 DuckDB)" if self._loaded else ""
+            parts.append(
+                f"[Database schema — {n} tables total{loaded_note}. "
+                f"Full column details shown for first {MAX_FULL} tables. "
+                f"Use get_table_detail(table_name) for any other table.]\n"
+                f"All tables: {', '.join(all_tables)}"
+            )
+            detail_tables = all_tables[:MAX_FULL]
+        else:
+            detail_tables = all_tables
+
+        for table in detail_tables:
+            cached = " [已缓存]" if table in self._loaded else ""
             try:
                 cols = self._inspect.get_columns(table)
-                col_lines = [f"  {c['name']}  {c['type']}" for c in cols]
-                parts.append(f"Table: {table}\n" + "\n".join(col_lines))
+                col_str = ", ".join(f"{c['name']} ({c['type']})" for c in cols)
+                parts.append(f"Table: {table}{cached}  [{col_str}]")
             except Exception:
-                parts.append(f"Table: {table}  (schema unavailable)")
+                parts.append(f"Table: {table}{cached}  (schema unavailable)")
+
+        # Analysis cache tables always shown in full
         for t in sorted(self._cache_tables):
-            rows = self._cache_conn.execute(
-                f'SELECT COUNT(*) FROM "{t}"'
-            ).fetchone()[0]
-            parts.append(_table_schema_str(self._cache_conn, t, rows))
+            try:
+                rows = self._duck.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+                parts.append(_table_schema_str(self._duck, t, rows))
+            except Exception:
+                parts.append(f"Table: {t}  (analysis cache)")
+
         return "\n\n".join(parts) if parts else "No tables found."
 
-    def execute_query(self, sql: str) -> Tuple[pd.DataFrame, str]:
-        if self._cache_conn and any(t in sql for t in self._cache_tables):
-            return _query(self._cache_conn, sql)
-        from sqlalchemy import text
+    def get_table_detail(self, table_name: str) -> str:
+        """Full column list + row count for a single table."""
         try:
+            self._inspect.clear_cache()
+        except Exception:
+            pass
+
+        # If already in DuckDB, get row count from there (fast)
+        row_hint = ""
+        if table_name in self._loaded:
+            try:
+                total = self._duck.execute(
+                    f'SELECT COUNT(*) FROM "{table_name}"'
+                ).fetchone()[0]
+                row_hint = f"  ({total:,} rows — cached in DuckDB)"
+            except Exception:
+                pass
+        else:
+            try:
+                from sqlalchemy import text as _text
+                q = self._quote(table_name)
+                with self._engine.connect() as _c:
+                    total = _c.execute(_text(f"SELECT COUNT(*) FROM {q}")).scalar()
+                row_hint = f"  ({total:,} rows)"
+            except Exception:
+                pass
+
+        try:
+            cols = self._inspect.get_columns(table_name)
+            col_lines = [f"  {c['name']}  {c['type']}" for c in cols]
+            return f"Table: {table_name}{row_hint}\n" + "\n".join(col_lines)
+        except Exception as exc:
+            return f"Table: {table_name}  — error: {exc}"
+
+    def execute_query(self, sql: str) -> Tuple[pd.DataFrame, str]:
+        """Execute SQL — automatically loads referenced tables into DuckDB first.
+
+        Large-table routing: if any table referenced in `sql` was flagged as
+        too big to pull into DuckDB, the query is sent to the remote DB instead.
+        The result is then registered as a temporary view in DuckDB so that
+        subsequent analysis tables can JOIN against it.
+        """
+        # Identify which known tables this SQL references
+        referenced = self._tables_in_sql(sql)
+
+        # Separate large tables (remote-only) from small ones (pull into DuckDB)
+        large_refs = [t for t in referenced if t in self._large_tables]
+        for t in referenced:
+            if t not in self._large_tables and t not in self._loaded and t not in self._cache_tables:
+                self._ensure_loaded(t)
+
+        # If any large table is involved, run the whole query on the remote DB
+        if large_refs:
+            log.info(
+                "[SQLDataSource] large table(s) %s in query — routing to remote DB",
+                large_refs,
+            )
+            try:
+                from sqlalchemy import text as _text
+                with self._engine.connect() as conn:
+                    df = pd.read_sql(_text(sql), conn)
+                # Register result as a temporary view so downstream analysis can use it
+                _view_name = "_large_query_result_"
+                self._duck.register(_view_name, df)
+                return df, ""
+            except Exception as exc:
+                return pd.DataFrame(), str(exc)
+
+        # All referenced tables are in DuckDB — run locally
+        df, err = _query(self._duck, sql)
+        if not err:
+            return df, ""
+
+        # DuckDB failed — fall back to remote DB for safety
+        log.warning("[SQLDataSource] DuckDB query failed (%s), trying remote DB", err)
+        try:
+            from sqlalchemy import text as _text
             with self._engine.connect() as conn:
-                df = pd.read_sql(text(sql), conn)
+                df = pd.read_sql(_text(sql), conn)
             return df, ""
         except Exception as exc:
             return pd.DataFrame(), str(exc)
 
-    def create_analysis_table(self, sql: str, table_name: str = "analysis_data", _df=None) -> str:
-        if self._cache_conn is None:
-            self._cache_conn = _new_conn()
+    def create_analysis_table(self, sql: str, table_name: str = "analysis_data",
+                              _df=None) -> str:
+        """Create a derived/analysis table in DuckDB."""
         if _df is not None:
-            _register(self._cache_conn, table_name, _df)
+            _register(self._duck, table_name, _df)
             rows = len(_df)
         else:
-            df, err = self.execute_query(sql)
-            if err:
-                return f"Error building analysis table: {err}"
-            _register(self._cache_conn, table_name, df)
-            rows = len(df)
+            # Ensure source tables in this SQL are loaded first
+            self._ensure_sql_tables_loaded(sql)
+            try:
+                self._duck.execute(
+                    f'CREATE OR REPLACE TABLE "{table_name}" AS ({sql})'
+                )
+                rows = self._duck.execute(
+                    f'SELECT COUNT(*) FROM "{table_name}"'
+                ).fetchone()[0]
+            except Exception as exc:
+                return f"Error building analysis table: {exc}"
+
         self._cache_tables.add(table_name)
-        return _table_schema_str(self._cache_conn, table_name, rows)
+        return _table_schema_str(self._duck, table_name, rows)
 
     def list_tables(self) -> List[str]:
-        # Source DB tables + runtime analysis cache tables.
-        try:
-            tables = list(self._inspect.get_table_names())
-        except Exception:
-            tables = []
+        """All source tables + analysis cache tables."""
+        tables = self._all_table_names()
         for t in sorted(self._cache_tables):
             if t not in tables:
                 tables.append(t)
         return tables
 
     def get_preview(self) -> List[dict]:
+        from sqlalchemy import text as _text
         result = []
-        # Analysis cache tables
-        if self._cache_conn:
-            for t in sorted(self._cache_tables):
-                try:
-                    cols = [r[0] for r in self._cache_conn.execute(f'DESCRIBE "{t}"').fetchall()]
-                    total = self._cache_conn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
-                    result.append({"name": f"[分析表] {t}", "columns": cols, "total_rows": total})
-                except Exception:
-                    continue
-        # Source DB tables — just names + columns, no row data
-        try:
-            tables = self._inspect.get_table_names()[:20]
-        except Exception:
-            tables = []
-        for t in tables:
+
+        # Analysis cache tables (DuckDB)
+        for t in sorted(self._cache_tables):
             try:
-                from sqlalchemy import text as _text
-                with self._engine.connect() as _c:
-                    col_rows = _c.execute(_text(f"SELECT * FROM `{t}` LIMIT 0")).keys()
-                    cols = list(col_rows)
-                result.append({"name": t, "columns": cols, "total_rows": None})
+                cols  = [r[0] for r in self._duck.execute(f'DESCRIBE "{t}"').fetchall()]
+                total = self._duck.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+                result.append({"name": f"[分析表] {t}", "columns": cols, "total_rows": total})
             except Exception:
-                result.append({"name": t, "columns": [], "total_rows": None})
+                continue
+
+        # Source tables — use DuckDB if cached, else remote
+        for t in self._all_table_names():
+            if t in self._loaded:
+                try:
+                    cols  = [r[0] for r in self._duck.execute(f'DESCRIBE "{t}"').fetchall()]
+                    total = self._duck.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+                    result.append({"name": t, "columns": cols, "total_rows": total})
+                except Exception:
+                    result.append({"name": t, "columns": [], "total_rows": None})
+            else:
+                try:
+                    q = self._quote(t)
+                    with self._engine.connect() as _c:
+                        cols = list(_c.execute(_text(f"SELECT * FROM {q} LIMIT 0")).keys())
+                    try:
+                        with self._engine.connect() as _c:
+                            total = _c.execute(_text(f"SELECT COUNT(*) FROM {q}")).scalar()
+                    except Exception:
+                        total = None
+                    result.append({"name": t, "columns": cols, "total_rows": total})
+                except Exception:
+                    result.append({"name": t, "columns": [], "total_rows": None})
+
         return result
 
     def get_preview_table(self, table_name: str, max_rows: int = 100) -> dict:
-        # Check analysis cache first (DuckDB-backed)
-        if self._cache_conn and table_name.startswith("[分析表] "):
+        # Analysis cache
+        if table_name.startswith("[分析表] "):
             real = table_name[len("[分析表] "):]
-            return _preview_table_dict(self._cache_conn, real, table_name, max_rows)
-        # Source DB table — goes through SQLAlchemy
-        df, err = self.execute_query(f"SELECT * FROM `{table_name}` LIMIT {max_rows}")
-        if err:
-            return {"name": table_name, "columns": [], "rows": [], "total_rows": None, "error": err}
+            return _preview_table_dict(self._duck, real, table_name, max_rows)
+
+        # Load into DuckDB if needed, then preview from DuckDB
+        self._ensure_loaded(table_name)
+        if table_name in self._loaded:
+            return _preview_table_dict(self._duck, table_name, table_name, max_rows)
+
+        # Fallback: remote DB
+        q   = self._quote(table_name)
+        sql = f"SELECT * FROM {q} LIMIT {max_rows}"
+        try:
+            from sqlalchemy import text as _text
+            with self._engine.connect() as conn:
+                df = pd.read_sql(_text(sql), conn)
+        except Exception as exc:
+            return {"name": table_name, "columns": [], "rows": [], "total_rows": None,
+                    "error": str(exc)}
+
         rows = [["" if v is None else str(v) for v in row] for row in df.itertuples(index=False)]
         return {"name": table_name, "columns": list(df.columns),
                 "rows": rows, "total_rows": None}
+
+    # ── Cache inspection ──────────────────────────────────────────────────────
+
+    def cache_status(self) -> dict:
+        """Return info about what's currently cached in DuckDB."""
+        return {
+            "loaded_tables": sorted(self._loaded),
+            "large_tables": sorted(self._large_tables),
+            "analysis_tables": sorted(self._cache_tables),
+            "total_cached": len(self._loaded) + len(self._cache_tables),
+            "row_limit": _LAZY_LOAD_ROW_LIMIT,
+        }

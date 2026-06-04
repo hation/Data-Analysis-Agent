@@ -18,7 +18,10 @@ from .tools_schema import AGENT_TOOLS, get_tools_with_mcp
 from .tools_data   import DataToolsMixin
 from .tools_export import ExportToolsMixin
 from .mcp_manager  import get_mcp_manager
-from .compaction   import should_compact_history, compact_history
+from .compaction   import (
+    should_compact_history, compact_history,
+    should_trim_history, trim_oversized_tool_results,
+)
 from .retry        import call_with_retry as _call_with_retry, is_retryable as _is_retryable
 from .validate     import validate_tool_args as _validate_tool_args
 
@@ -32,7 +35,7 @@ _PROPOSE_CMDS = (
 
 
 class BusinessAgent(DataToolsMixin, ExportToolsMixin):
-    MAX_ITERATIONS = 100
+    MAX_ITERATIONS = 80
 
     # Approximate chars-per-token ratio for fast estimation (conservative)
     _CHARS_PER_TOKEN = 3.5
@@ -54,6 +57,8 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         client,
         model: str,
         data_source=None,
+        combined_schema: Optional[str] = None,
+        all_sources: Optional[List] = None,
         enable_thinking: bool = False,
         thinking_budget: int = 8000,
         chart_store: Optional[dict] = None,
@@ -61,10 +66,15 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         color_scheme: str = "mckinsey",
         session_id: str = "",
         context_window: Optional[int] = None,
+        max_output_tokens: Optional[int] = None,
     ):
         self.client = client
         self.model = model
         self.data_source = data_source
+        # All active DataSource objects — used by _route_query for multi-source routing
+        self._all_sources: List = all_sources if all_sources else ([data_source] if data_source else [])
+        # Pre-computed merged schema (multi-source); takes priority over single-source schema
+        self._combined_schema: Optional[str] = combined_schema
         self.enable_thinking = enable_thinking
         self.thinking_budget = thinking_budget
         # User-configured context window (from the model config). When set, it
@@ -78,6 +88,9 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         self._session_chart_ids: List[str] = session_chart_ids if session_chart_ids is not None else []
         self.ppt_color_scheme: str = color_scheme
         self._session_id: str = session_id
+        # Cap for a single LLM response. Defaults to 131072 (safe upper bound);
+        # caller should pass cfg.max_output_tokens so it matches the model's limit.
+        self._max_output_tokens: int = max_output_tokens if max_output_tokens and max_output_tokens > 0 else 131072
         self._mcp_manager = get_mcp_manager()
 
     # ── Context helpers ───────────────────────────────────────────────────────
@@ -142,9 +155,17 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
     def _get_context_window(self) -> int:
         """Context window for the current model.
 
-        Prefers the user-configured value (passed from the model config) so the
-        compaction trigger matches the frontend context bar exactly. Falls back
-        to a model-name heuristic when no value is configured.
+        Priority:
+          1. User-configured value (cfg.context_window, set in 「模型设置」).
+             This is the recommended path — it matches the frontend context bar
+             exactly and requires no inference from the model name.
+          2. Model-name heuristic (fallback only).
+             These values may become stale as providers release new versions.
+             If you add a model whose context window differs from the heuristic,
+             set it explicitly in the model config instead of updating the code.
+
+        Recommendation: always fill in the context window field when adding a
+        custom model, so compaction triggers at the correct threshold.
         """
         if self._configured_context_window:
             return self._configured_context_window
@@ -285,9 +306,23 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         _user_msg = {"role": "user", "content": user_message}
         _ctx_window = self._get_context_window()
 
+        # ── Rule-based trim (60–70% zone, zero LLM cost) ─────────────────────
+        # Before considering semantic compaction, do a cheap pass that truncates
+        # oversized tool result messages (large query outputs etc.).  This alone
+        # is often enough to bring the context back under the compaction threshold.
+        if should_trim_history(
+            history=history,
+            last_prompt_tokens=last_prompt_tokens,
+            context_window=_ctx_window,
+            chars_per_token=self._CHARS_PER_TOKEN,
+        ):
+            history, _n_trimmed = trim_oversized_tool_results(history)
+            if _n_trimmed:
+                log.info("[trim] rule-based trim: shortened %d tool result(s)", _n_trimmed)
+
         # ── Semantic compaction (with frontend animation) ─────────────────────
         # Trigger口径与前端上下文条一致：用上一轮真实 prompt_tokens / context_window，
-        # 达到 80% 即压缩。last_prompt_tokens 由 chat.py 从会话中传入。
+        # 达到 70% 即压缩。last_prompt_tokens 由 chat.py 从会话中传入。
         _needs_compact = should_compact_history(
             history=history,
             last_prompt_tokens=last_prompt_tokens,
@@ -346,6 +381,8 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
             *prior_reasoning_msg,
             _user_msg,
         ]
+        # Track where this turn's new messages start (after system + history + user)
+        _turn_start_idx = len(messages)
 
         pending_charts: List[str] = []
         all_reasoning: List[str] = []
@@ -356,6 +393,27 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
 
         _PROPOSE_FLOW_CMDS = ("ppt", "ppt_revise", "export", "excel_revise",
                               "report", "report_revise", "dashboard", "dashboard_revise")
+
+        # ── Knowledge-base pre-flight state ──────────────────────────────────
+        # Track whether query_knowledge has been called this turn so we don't
+        # inject it more than once per conversation turn.
+        _kb_checked_this_turn = False
+
+        # Check once whether the KB has any active content worth querying.
+        # If the KB is empty we skip the enforcement entirely.
+        def _kb_has_content() -> bool:
+            try:
+                from Function.Knowledge.knowledge_base import KnowledgeBase
+                kb = KnowledgeBase()
+                return bool(
+                    kb.list_metrics() and any(m["enabled"] for m in kb.list_metrics())
+                    or any(r["enabled"] for r in kb.list_rules())
+                    or any(n["enabled"] for n in kb.list_notes())
+                )
+            except Exception:
+                return False
+
+        _kb_active = _kb_has_content()
 
         _force_propose = False
         for _ in range(self.MAX_ITERATIONS):
@@ -406,9 +464,9 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                     )
                 messages.append({"role": "user", "content": nudge})
                 _force_propose = False
-                _max_tokens = 131072
+                _max_tokens = self._max_output_tokens
             else:
-                _max_tokens = 131072
+                _max_tokens = self._max_output_tokens
 
             call_kwargs: Dict[str, Any] = dict(
                 model=self.model,
@@ -610,6 +668,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                     display_map = {
                         "query_knowledge":       f"查询知识库: {args.get('question', '')}",
                         "get_schema":            "读取数据结构",
+                        "get_table_detail":      f"查看表结构: {args.get('table_name', '?')}",
                         "create_analysis_table": f"提取字段 → {args.get('table_name', 'analysis_data')}",
                         "select_chart":          f"查询图表注册表: {args.get('user_intent', '?')[:40]}",
                         "query_data":            f"执行查询: {args.get('sql', '')}",
@@ -626,6 +685,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                         "set_ppt_color_scheme":  f"切换配色方案 → {args.get('scheme', '?')}",
                         "propose_dashboard_outline": f"生成看板大纲：{args.get('name', '?')} ({len(args.get('widgets', []))} 个)",
                         "generate_dashboard":    f"生成看板：{args.get('name', '?')} ({len(args.get('widgets', []))} 个组件)",
+                        "ask_user":              f"向用户提问：{args.get('question', '?')[:40]}",
                     }
                     full_display = display_map.get(name, name)
                     yield {
@@ -636,10 +696,59 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                     }
                     _parsed_tools.append((tc, name, args))
 
+                # ── KB pre-flight interception ────────────────────────────────
+                # If the model skipped query_knowledge and is about to run a
+                # data-access tool, inject a forced query_knowledge call first.
+                # This is a hard enforcement that runs regardless of model choice.
+                _DATA_TOOLS = {"get_schema", "query_data", "create_analysis_table",
+                               "run_analysis", "profile_data"}
+                _tool_names_in_batch = {name for _, name, _ in _parsed_tools}
+                _needs_kb_check = (
+                    _kb_active
+                    and not _kb_checked_this_turn
+                    and bool(_tool_names_in_batch & _DATA_TOOLS)
+                    and "query_knowledge" not in _tool_names_in_batch
+                )
+                if _needs_kb_check:
+                    _kb_checked_this_turn = True
+                    # Use user_message as the search query for broadest match
+                    kb_question = user_message[:200]
+                    log.info("[tool] KB pre-flight: querying knowledge base for %r", kb_question[:60])
+                    yield {"type": "tool_start", "tool": "query_knowledge",
+                           "display": f"查询知识库: {kb_question[:40]}",
+                           "detail":  f"查询知识库: {kb_question}"}
+                    kb_result = self._tool_query_knowledge(kb_question)
+                    yield {"type": "tool_end", "tool": "query_knowledge"}
+
+                    if kb_result and kb_result != "No relevant knowledge found.":
+                        # Inject KB context as a system message so the model sees
+                        # it before executing data tools. Using role:system avoids
+                        # the tool_call_id pairing requirement that synthetic
+                        # assistant→tool exchanges carry — some providers (e.g.
+                        # Azure OpenAI, Anthropic native) reject tool messages
+                        # whose IDs were never returned in a real LLM response.
+                        messages.append({
+                            "role": "system",
+                            "content": (
+                                "[Business Knowledge Base — retrieved for this query]\n"
+                                f"{kb_result}\n"
+                                "[End of knowledge base context. Apply these metric "
+                                "definitions and business rules when writing SQL and "
+                                "interpreting results. Do not contradict them.]"
+                            ),
+                        })
+                        log.info("[tool] KB pre-flight injected as system msg (%d chars)", len(kb_result))
+                    else:
+                        log.info("[tool] KB pre-flight: no relevant knowledge found")
+
                 for tc, name, args in _parsed_tools:
                     _args_preview = {k: str(v)[:80] for k, v in args.items() if k != "slides"}
                     log.info("[tool] %s  args=%s", name, _args_preview)
                     _tool_t0 = time.monotonic()
+
+                    # Mark KB as checked if the model explicitly called it
+                    if name == "query_knowledge":
+                        _kb_checked_this_turn = True
 
                     try:
                         if name == "select_chart":
@@ -653,6 +762,10 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                             )
                         elif name == "get_schema":
                             tool_result = self._tool_get_schema()
+                        elif name == "get_table_detail":
+                            tool_result = self._tool_get_table_detail(
+                                table_name=args.get("table_name", "")
+                            )
                         elif name == "create_analysis_table":
                             tool_result = self._tool_create_analysis_table(
                                 sql=args.get("sql", ""),
@@ -859,6 +972,15 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                 widgets=args.get("widgets", []),
                                 color_scheme=args.get("color_scheme", ""),
                             )
+                        elif name == "ask_user":
+                            yield {
+                                "type": "ask_user",
+                                "question": args.get("question", ""),
+                                "options": args.get("options", []),
+                                "multi_select": bool(args.get("multi_select", False)),
+                            }
+                            tool_result = "问题已展示给用户，等待用户回答后继续。请不要输出任何文字。"
+                            _outline_proposed = True
                         elif name.startswith("mcp__"):
                             tool_result = self._mcp_manager.call_tool(name, args)
                         else:
@@ -903,6 +1025,18 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
 
                 yield {"type": "text", "content": full_content}
                 log.info("[run] finished normally  model=%s", self.model)
+
+                # Emit tool messages so chat.py can store them in history.
+                # Only include messages that belong to THIS turn (after _turn_start_idx).
+                # Strip system-injected content that must not re-enter the prompt.
+                _ALLOWED_ROLES = {"assistant", "tool"}
+                _turn_msgs = [
+                    m for m in messages[_turn_start_idx:]
+                    if m.get("role") in _ALLOWED_ROLES
+                ]
+                if _turn_msgs:
+                    yield {"type": "tool_history", "messages": _turn_msgs}
+
                 yield {"type": "done"}
                 return
 

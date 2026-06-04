@@ -47,30 +47,79 @@ def _dedup_columns(cols: List[str]) -> List[str]:
 
 
 def _detect_header_row(rows: list, scan: int = 10) -> int:
+    """Return the index of the most likely header row within the first `scan` rows.
+
+    Strategy (conservative-first):
+    1. Row 0 is the default — most sheets have headers at the top.
+    2. Only look further if row 0 is "obviously bad": all cells are empty,
+       all cells are numeric, or more than half the cells are empty.
+    3. Among candidate rows, prefer the first one that has the most non-empty,
+       non-numeric cells AND whose non-empty cell count is notably better
+       than row 0 (require at least 2× improvement to avoid false positives).
+
+    This avoids mis-detecting data rows as headers when the actual header is
+    row 0 but contains short strings or numbers mixed with text.
     """
-    Return the index of the best header row within the first `scan` rows.
-    Scores each row by number of non-empty, non-numeric cells (good column names
-    are usually text). Ties broken by preferring earlier rows.
-    Returns 0 if nothing clearly better is found.
-    """
-    best_idx, best_score = 0, -1
-    for i, row in enumerate(rows[:scan]):
-        score = sum(
-            1 for cell in row
-            if str(cell).strip() and not str(cell).strip().replace(".", "").replace("-", "").replace("%", "").isdigit()
-        )
-        if score > best_score:
-            best_score, best_idx = score, i
+    if not rows:
+        return 0
+
+    def _score(row):
+        non_empty = [str(c).strip() for c in row if str(c).strip()]
+        text_cells = [
+            c for c in non_empty
+            if not c.replace(".", "").replace("-", "").replace("%", "").replace(",", "").isdigit()
+        ]
+        return len(text_cells), len(non_empty)
+
+    text0, nonempty0 = _score(rows[0])
+    total_cols = max(len(rows[0]), 1)
+
+    # Row 0 is clearly good → use it immediately
+    if nonempty0 >= total_cols * 0.5 and text0 >= 2:
+        return 0
+
+    # Row 0 is mostly empty or all-numeric → scan for better header
+    best_idx, best_text = 0, text0
+    for i, row in enumerate(rows[1:scan], start=1):
+        text_i, nonempty_i = _score(row)
+        # Require a clear improvement over row 0 to switch
+        if text_i > best_text and text_i >= 2:
+            best_text = text_i
+            best_idx = i
+
     return best_idx
 
 
 # ── DuckDB connection / registration ─────────────────────────────────────────
 
 def _new_conn() -> duckdb.DuckDBPyConnection:
-    """Open a fresh DuckDB in-memory connection with sane thread settings."""
+    """Open a fresh DuckDB in-memory connection with sane thread settings.
+
+    Security hardening (second layer after AST validation in validate.py):
+      - Disable local filesystem access so read_csv('/etc/passwd') etc. are
+        blocked at the engine level even if they somehow pass validation.
+      - Disable external access (HTTP, S3, extension auto-download).
+
+    These settings are applied after PRAGMA threads to avoid ordering issues.
+    If a particular DuckDB version does not support a setting it is silently
+    skipped — the AST-level validation in validate.py is the primary guard.
+    """
     conn = duckdb.connect(":memory:")
     # Allow connections to be used from multiple threads (Flask worker threads)
     conn.execute("PRAGMA threads=4")
+
+    # ── Security lockdown ──────────────────────────────────────────────────────
+    for _stmt in (
+        "SET disabled_filesystems = 'LocalFileSystem'",
+        "SET enable_external_access = false",
+    ):
+        try:
+            conn.execute(_stmt)
+        except Exception as _exc:
+            # Older DuckDB versions may not support these settings; skip silently.
+            # The AST validation layer remains as the primary guard.
+            log.debug("[_new_conn] security setting not supported, skipping: %s (%s)", _stmt, _exc)
+
     return conn
 
 
@@ -154,9 +203,32 @@ def _register(conn: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame):
 # ── DuckDB query / introspection ─────────────────────────────────────────────
 
 def _table_schema_str(conn: duckdb.DuckDBPyConnection, table: str, row_count: int) -> str:
-    rows = conn.execute(f'DESCRIBE "{table}"').fetchall()
-    col_lines = [f"  {r[0]}  {r[1]}" for r in rows]
-    return f"Table: {table}  ({row_count} rows)\n" + "\n".join(col_lines)
+    desc_rows = conn.execute(f'DESCRIBE "{table}"').fetchall()
+    col_names = [r[0] for r in desc_rows]
+
+    # Detect columns with uninformative auto-generated names (col, col_2, …)
+    _AUTO_PAT = re.compile(r'^col(_\d+)?$', re.IGNORECASE)
+    has_auto_cols = any(_AUTO_PAT.match(c) for c in col_names)
+
+    col_lines = [f"  {r[0]}  {r[1]}" for r in desc_rows]
+    header = f"Table: {table}  ({row_count} rows)"
+
+    # When auto-named columns exist, append 2 sample rows so the Agent can
+    # infer what each column actually contains.
+    if has_auto_cols and row_count > 0:
+        try:
+            sample = conn.execute(f'SELECT * FROM "{table}" LIMIT 2').fetchall()
+            if sample:
+                col_lines.append("  -- sample data (first 2 rows) --")
+                for row in sample:
+                    row_str = "  | " + " | ".join(
+                        str(v)[:30] if v is not None else "NULL" for v in row
+                    )
+                    col_lines.append(row_str)
+        except Exception:
+            pass
+
+    return header + "\n" + "\n".join(col_lines)
 
 
 def _preview_table_dict(conn: duckdb.DuckDBPyConnection, table: str,

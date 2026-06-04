@@ -657,6 +657,42 @@
 .ppt-cancelled-note { font-size: var(--fs-sm); color: var(--color-text-dim);
   padding: 4px 16px 12px; font-style: italic; }
 
+/* ── ask_user clarification card ─────────────────────────────── */
+.ask-user-card { background: var(--color-surface-2); border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg); padding: 16px; margin: 8px 0; max-width: 600px; }
+.ask-user-question { font-size: var(--fs-md); font-weight: 600;
+  color: var(--color-text); margin-bottom: 14px; line-height: 1.4; }
+.ask-user-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.ask-user-chip { border: 1.5px solid var(--color-border); border-radius: var(--radius-pill);
+  background: var(--color-surface); color: var(--color-text-soft);
+  padding: 6px 16px; font-size: var(--fs-md); cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast); }
+.ask-user-chip:hover:not(:disabled) { background: var(--color-primary-soft); border-color: #1e3a5f; color: var(--color-text); }
+.ask-user-chip.selected { background: #1e3a5f; border-color: #1e3a5f; color: #fff; }
+.ask-user-chip:disabled { cursor: default; opacity: .5; }
+.ask-user-other-wrap { display: flex; gap: 8px; margin-top: 6px; margin-bottom: 4px; }
+.ask-user-other-input { flex: 1; border: 1px solid var(--color-border); border-radius: var(--radius-md);
+  padding: 6px 12px; font-size: var(--fs-md); background: var(--color-surface);
+  color: var(--color-text); outline: none; }
+.ask-user-other-input:focus { border-color: #1e3a5f; }
+.ask-user-other-btn { border: none; border-radius: var(--radius-md); background: #1e3a5f;
+  color: #fff; padding: 6px 16px; font-size: var(--fs-md); font-weight: 600; cursor: pointer; }
+.ask-user-other-btn:hover:not(:disabled) { background: #162d4a; }
+.ask-user-other-btn:disabled { opacity: .5; cursor: default; }
+.ask-user-submit-btn { margin-top: 10px; border: none; border-radius: var(--radius-pill);
+  background: #1e3a5f; color: #fff; padding: 7px 20px;
+  font-size: var(--fs-md); font-weight: 600; cursor: pointer; }
+.ask-user-submit-btn:hover:not(:disabled) { background: #162d4a; }
+.ask-user-submit-btn:disabled { opacity: .5; cursor: default; }
+
+[data-theme="dark"] .ask-user-chip:hover:not(:disabled) { border-color: #4a90e2; }
+[data-theme="dark"] .ask-user-chip.selected { background: #4a90e2; border-color: #4a90e2; }
+[data-theme="dark"] .ask-user-other-input:focus { border-color: #4a90e2; }
+[data-theme="dark"] .ask-user-other-btn { background: #4a90e2; }
+[data-theme="dark"] .ask-user-other-btn:hover:not(:disabled) { background: #357abd; }
+[data-theme="dark"] .ask-user-submit-btn { background: #4a90e2; }
+[data-theme="dark"] .ask-user-submit-btn:hover:not(:disabled) { background: #357abd; }
+
 /* (Legacy .cmd-badge rules removed — new composer card defines them above.) */
 
 /* ── Slash command popup ──────────────────────────────────────── */

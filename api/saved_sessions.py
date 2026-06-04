@@ -1,5 +1,6 @@
 """Blueprint: save / load / delete persistent sessions."""
 import json
+import logging
 import os
 import re
 from datetime import datetime
@@ -10,6 +11,8 @@ from flask import Blueprint, request, jsonify
 from .state import session_manager, config_manager
 from data.connector import ExcelDataSource, CSVDataSource
 
+log = logging.getLogger(__name__)
+
 bp = Blueprint("saved_sessions", __name__)
 
 if os.environ.get("VERCEL"):
@@ -18,6 +21,21 @@ else:
     SAVE_DIR = Path(__file__).parent.parent / "outputs" / "Session"
 
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _visible_msg_count(history: list) -> int:
+    """Count only user + assistant-with-text messages (exclude tool calls/results).
+
+    sess.history now contains tool call chains (role=assistant with tool_calls,
+    role=tool), but the user-facing "条数" should reflect actual conversation
+    exchanges, not internal tool round-trips.
+    """
+    return sum(
+        1 for m in history
+        if m.get("role") in ("user", "assistant")
+        and m.get("content")                       # has visible text content
+        and not m.get("tool_calls")                # not an intermediate tool-call entry
+    )
 
 
 def _collect_chart_ids(history: list) -> list[str]:
@@ -87,17 +105,21 @@ def _restore_ds(info: dict):
 
 
 def _list_files() -> list[dict]:
+    # Include both manual saves and autosave files; autosaves are flagged is_autosave=True
     files = sorted(SAVE_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     result = []
     for f in files:
         try:
             meta = json.loads(f.read_text(encoding="utf-8"))
+            is_autosave = bool(meta.get("autosave")) or f.stem.startswith("autosave_")
             result.append({
-                "filename": f.name,
-                "name":     meta.get("name", f.stem),
-                "saved_at": meta.get("saved_at", ""),
-                "msg_count": len(meta.get("history", [])),
-                "ds_name":  (meta.get("data_source") or {}).get("display_name", ""),
+                "filename":    f.name,
+                "name":        meta.get("name", f.stem),
+                "saved_at":    meta.get("saved_at", ""),
+                "msg_count":   _visible_msg_count(meta.get("history", [])),
+                "ds_name":     (meta.get("data_source") or {}).get("display_name", ""),
+                "is_autosave": is_autosave,
+                "session_id":  meta.get("session_id", ""),
             })
         except Exception:
             continue
@@ -111,10 +133,77 @@ def list_sessions():
     return jsonify(_list_files())
 
 
+@bp.post("/api/session/<sid>/autosave")
+def autosave_session(sid: str):
+    """Silent auto-save — overwrites a single per-session autosave file.
+
+    Unlike /save, this never returns an error for empty history (just skips)
+    and uses a fixed filename so old autosaves are replaced rather than
+    accumulated.
+    """
+    sess = session_manager.get(sid)
+    if not sess or not sess.history:
+        return jsonify({"ok": False, "reason": "empty"})
+
+    body = request.json or {}
+    req_name     = body.get("name", "").strip()
+    target_file  = body.get("target_file", "").strip()   # filename to overwrite when loaded from a save
+
+    ts_label  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    auto_name = req_name if req_name else f"自动保存_{ts_label}"
+
+    payload = {
+        "name":               auto_name,
+        "saved_at":           datetime.now().isoformat(timespec="seconds"),
+        "autosave":           True,
+        "session_id":         sid,
+        "model_provider":     sess.model_provider,
+        "history":            sess.history,
+        "total_input_tokens": sess.total_input_tokens,
+        "total_output_tokens":sess.total_output_tokens,
+        "data_source":        _ds_info(sess),
+    }
+
+    # If the user loaded from an existing file, overwrite that file directly
+    # so no new entry appears in the list.
+    # Otherwise fall back to the per-session autosave file.
+    if target_file:
+        safe = Path(target_file).name          # strip any path traversal
+        path = SAVE_DIR / safe
+        if not path.exists():                  # guard: don't create arbitrary files
+            path = SAVE_DIR / f"autosave_{sid}.json"
+    else:
+        path = SAVE_DIR / f"autosave_{sid}.json"
+
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    log.debug("[session] autosave  sid=%s  file=%s  msg_count=%d",
+              sid, path.name, _visible_msg_count(sess.history))
+    return jsonify({"ok": True, "saved_at": payload["saved_at"], "filename": path.name})
+
+
+@bp.get("/api/session/<sid>/autosave")
+def get_autosave(sid: str):
+    """Check whether an autosave exists for this session."""
+    path = SAVE_DIR / f"autosave_{sid}.json"
+    if not path.exists():
+        return jsonify({"exists": False})
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+        return jsonify({
+            "exists":    True,
+            "saved_at":  meta.get("saved_at", ""),
+            "msg_count": _visible_msg_count(meta.get("history", [])),
+            "filename":  path.name,
+        })
+    except Exception:
+        return jsonify({"exists": False})
+
+
 @bp.post("/api/session/<sid>/save")
 def save_session(sid: str):
     sess = session_manager.get(sid)
     if not sess:
+        log.warning("[session] save  sid=%s  error=session not found", sid)
         return jsonify({"error": "会话不存在"}), 404
     if not sess.history:
         return jsonify({"error": "对话为空，无需保存"}), 400
@@ -137,9 +226,9 @@ def save_session(sid: str):
     ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = SAVE_DIR / f"{stem}_{ts}.json"
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    # Note: chart HTML is already persisted by _ChartStore (outputs/charts/),
-    # and history now carries chart_ids — nothing extra to write here.
 
+    log.info("[session] saved  sid=%s  name=%r  file=%s  msg_count=%d",
+             sid, name, path.name, _visible_msg_count(sess.history))
     return jsonify({"ok": True, "filename": path.name, "name": name})
 
 
@@ -160,8 +249,6 @@ def load_session(sid: str):
 
     sess = session_manager.get_or_create(sid)
     sess.history              = data.get("history", [])
-    # 前端可以通过请求体传入 keep_provider=true 保留当前 session 已设的模型；
-    # 否则从存档中恢复（兼容旧行为）。
     keep_provider = (request.json or {}).get("keep_provider", False)
     if not keep_provider:
         sess.model_provider = data.get("model_provider", "")
@@ -169,14 +256,17 @@ def load_session(sid: str):
     sess.total_output_tokens  = data.get("total_output_tokens", 0)
     sess.last_prompt_tokens   = 0
 
-    # Chart HTML lives in outputs/charts/<cid>.html (written through by
-    # _ChartStore) so /api/chart/<id> already works after a restart. We only
-    # keep sess.chart_ids in sync here (used by export).
     sess.chart_ids = _collect_chart_ids(sess.history)
 
-    ds_info  = data.get("data_source")
-    ds       = _restore_ds(ds_info)
+    ds_info = data.get("data_source")
+    ds      = _restore_ds(ds_info)
     sess.data_source = ds
+
+    ds_status = "connected" if ds else ("lost" if ds_info else "none")
+    log.info("[session] loaded  sid=%s  file=%s  name=%r  msg_count=%d  ds=%s  "
+             "in_tokens=%d  out_tokens=%d",
+             sid, filename, data.get("name", ""), _visible_msg_count(sess.history),
+             ds_status, sess.total_input_tokens, sess.total_output_tokens)
 
     return jsonify({
         "ok":              True,

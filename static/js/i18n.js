@@ -162,6 +162,10 @@
       'toast.gsheets_ok': 'Google Sheets 连接成功 ✓',
       'toast.api_ok': 'API 连接成功 ✓',
       'toast.disconnected': '数据源已断开',
+      'toast.source_activated': '已激活数据源 ✓',
+      'toast.source_deactivated': '已取消激活',
+      'toast.source_removed': '已移除数据源',
+      'sidebar.sources_connected': '已连接数据源',
       'toast.loaded': '已加载「{name}」',
       'toast.saved': '已保存「{name}」✓',
       'toast.deleted': '已删除「{name}」',
@@ -233,6 +237,11 @@
       'cmd.ppt.desc':       '生成麦肯锡风格 PowerPoint（两阶段：大纲确认 → 生成）',
       'cmd.dashboard.desc': '生成可交互数据看板（多图表 · 可拖拽 · 可刷新）',
       'cmd.status.desc': '查看模型、数据源与 Token 用量',
+      // ── ask_user card ────────────────────────────────────────────
+      'ask_user.other':       '其他…',
+      'ask_user.other_placeholder': '请输入您的回答…',
+      'ask_user.submit':      '提交',
+      'ask_user.confirm':     '确认选择',
       // ── Lang toggle ──────────────────────────────────────────────
       'lang.toggle': 'EN',
       // ── Theme toggle ─────────────────────────────────────────────
@@ -391,6 +400,10 @@
       'toast.gsheets_ok': 'Google Sheets connected ✓',
       'toast.api_ok': 'API connected ✓',
       'toast.disconnected': 'Data source disconnected',
+      'toast.source_activated': 'Data source activated ✓',
+      'toast.source_deactivated': 'Data source deactivated',
+      'toast.source_removed': 'Data source removed',
+      'sidebar.sources_connected': 'Connected sources',
       'toast.loaded': 'Loaded "{name}"',
       'toast.saved': 'Saved "{name}" ✓',
       'toast.deleted': 'Deleted "{name}"',
@@ -462,6 +475,11 @@
       'cmd.ppt.desc':       'Generate McKinsey-style PowerPoint (outline → confirm → generate)',
       'cmd.dashboard.desc': 'Generate interactive dashboard (multi-chart · drag-and-drop · refreshable)',
       'cmd.status.desc': 'View model, data source, and token usage',
+      // ── ask_user card ────────────────────────────────────────────
+      'ask_user.other':       'Other…',
+      'ask_user.other_placeholder': 'Type your answer…',
+      'ask_user.submit':      'Submit',
+      'ask_user.confirm':     'Confirm Selection',
       // ── Lang toggle ──────────────────────────────────────────────
       'lang.toggle': '中文',
       // ── Theme toggle ─────────────────────────────────────────────

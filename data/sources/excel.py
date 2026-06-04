@@ -16,13 +16,142 @@ from .base import DataSource
 log = logging.getLogger(__name__)
 
 
+def _is_wide_pivoted(raw: pd.DataFrame) -> bool:
+    """Detect if this sheet is a wide/pivoted table where:
+    - The first column contains metric/row labels (text)
+    - The remaining columns contain time-series or category values (mostly numeric)
+    - Most column headers are Unnamed or blank (pandas default)
+
+    Heuristic: if >60% of column headers are Unnamed/blank AND the first column
+    has text values in most rows → this is a wide pivoted table that needs
+    to be read with the first column as the index and then transposed.
+    """
+    if raw.shape[1] < 5:
+        return False
+
+    # Count blank/Unnamed column headers (from pandas default header=0 read)
+    # Use the raw values since we read with header=None; check the row that
+    # pandas *would* use as header (row 0) for blanks.
+    top_row = [str(v).strip() for v in raw.iloc[0]]
+    blank_cols = sum(1 for v in top_row if not v or v == 'nan')
+    blank_ratio = blank_cols / len(top_row)
+
+    # Check if first column has text labels in most rows (metric names)
+    first_col = raw.iloc[:, 0].dropna().astype(str)
+    text_in_first = sum(
+        1 for v in first_col
+        if v.strip() and not v.strip().replace('.', '').replace('-', '').isdigit()
+    )
+    text_ratio = text_in_first / max(len(first_col), 1)
+
+    # Wide pivoted: mostly blank column headers AND first col is mostly text labels
+    return blank_ratio > 0.6 and text_ratio > 0.5
+
+
+def _pivot_to_long(raw: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """Convert a wide pivoted table (metrics × dates) to long format (dates × metrics).
+
+    Strategy:
+    1. Find the row that contains the most date-like values → use as column headers
+    2. Find rows where the first cell is a metric name → use as data rows
+    3. Transpose: rows become columns (metric names), columns become rows (dates/periods)
+    """
+    import re
+
+    DATE_PAT = re.compile(r'\d{4}[-/]\d{1,2}[-/]\d{1,2}')
+
+    n_rows, n_cols = raw.shape
+
+    # Step 1: Find the best "header row" — the one with the most date-like values
+    best_header_row = 0
+    best_date_count = 0
+    for i in range(min(n_rows, 10)):
+        row_vals = [str(v) for v in raw.iloc[i]]
+        date_count = sum(1 for v in row_vals if DATE_PAT.search(v))
+        if date_count > best_date_count:
+            best_date_count = date_count
+            best_header_row = i
+
+    # Step 2: Find data rows — rows where the first cell is a non-blank text label
+    header_row_vals = [str(v).strip() for v in raw.iloc[best_header_row]]
+
+    data_rows = []
+    row_labels = []
+    for i in range(n_rows):
+        if i == best_header_row:
+            continue
+        first_cell = str(raw.iloc[i, 0]).strip()
+        if not first_cell or first_cell == 'nan':
+            continue
+        # Must have some numeric data in the row (at least 30% of non-blank cells)
+        row_vals = raw.iloc[i, 1:]
+        numeric = sum(1 for v in row_vals
+                      if str(v).strip() and str(v).strip() != 'nan'
+                      and str(v).strip().replace('.', '').replace('-', '').replace('%', '').lstrip('-').isdigit())
+        non_blank = sum(1 for v in row_vals if str(v).strip() and str(v).strip() != 'nan')
+        if non_blank > 0 and numeric / non_blank > 0.3:
+            data_rows.append(i)
+            row_labels.append(first_cell)
+
+    if not data_rows or best_date_count < 3:
+        return None  # Not recognizable as a wide pivoted table
+
+    # Step 3: Build the transposed DataFrame
+    # Columns = metric names (from first column of data rows)
+    # Rows = dates/periods (from the header row we found)
+    col_headers = header_row_vals[1:]   # skip the first cell (it's the row-label column)
+    data_matrix = []
+    for i in data_rows:
+        data_matrix.append([str(v).strip() if str(v).strip() != 'nan' else None
+                            for v in raw.iloc[i, 1:]])
+
+    # Transpose: data_matrix[metric][date] → df[date][metric]
+    df = pd.DataFrame(data_matrix, index=row_labels, columns=col_headers).T
+    df.index.name = 'period'
+    df = df.reset_index()
+
+    # Clean column names
+    df.columns = _dedup_columns([_clean_identifier(str(c)) for c in df.columns])
+
+    # Drop all-null rows and columns
+    df = df.dropna(how='all').dropna(axis=1, how='all')
+
+    # Keep only rows where the period column looks like a real date/period value
+    # (filter out metadata rows like "City", "DeltaDo7D", etc.)
+    period_col = df.columns[0]
+    DATE_PAT2 = re.compile(r'\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[Ww]\d{2}|\w+\s+\d{4}')
+    mask = df[period_col].astype(str).str.strip().apply(
+        lambda v: bool(DATE_PAT2.search(v)) or v.replace('.', '').replace('-', '').isdigit()
+    )
+    df = df[mask].reset_index(drop=True)
+
+    log.info(
+        "[ExcelDS] wide-pivoted sheet: %d metric cols × %d period rows (header at row %d)",
+        len(data_rows), len(df), best_header_row,
+    )
+    return df if not df.empty else None
+
+
 def _parse_sheet(path: str, sheet: str, engine: str) -> Tuple[str, Optional[pd.DataFrame]]:
-    """Parse a single Excel sheet, auto-detecting the header row."""
+    """Parse a single Excel sheet, auto-detecting the header row.
+
+    Also handles wide/pivoted tables (metrics × dates) by transposing them
+    into a tidy long format (dates × metrics) that SQL can query cleanly.
+    """
     try:
-        # Read without header first to detect the best header row
+        # Read without header first to detect structure
         raw = pd.read_excel(path, sheet_name=sheet, engine=engine, header=None)
         if raw.empty:
             return sheet, None
+
+        # Detect wide pivoted format before normal header detection
+        if _is_wide_pivoted(raw):
+            df = _pivot_to_long(raw)
+            if df is not None:
+                log.info("[ExcelDS] sheet %r: transposed wide-pivoted format → %d rows", sheet, len(df))
+                return sheet, df
+            # Fall through to normal parsing if pivot detection failed
+
         header_idx = _detect_header_row(raw.values.tolist())
         df = pd.read_excel(path, sheet_name=sheet, engine=engine,
                            header=header_idx, skiprows=range(header_idx) if header_idx else None)
@@ -55,6 +184,10 @@ class ExcelDataSource(DataSource):
             import python_calamine  # noqa: F401
             engine = "calamine"
         except ImportError:
+            log.warning(
+                "[ExcelDS] python_calamine not installed, falling back to openpyxl "
+                "(significantly slower for large files — run: pip install python-calamine)"
+            )
             engine = "openpyxl"
 
         # Read sheet names only (fast metadata call)

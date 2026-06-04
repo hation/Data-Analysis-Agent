@@ -1,26 +1,93 @@
-// Data source: Excel/CSV upload, SQL DB, Google Sheets, Custom REST API + disconnect.
+// Data source: Excel/CSV upload, SQL DB, Google Sheets, Custom REST API + multi-source management.
 (function () {
   const { $ } = window.BAA.dom;
   const { closeOverlay, toast } = window.BAA.overlay;
   const state = window.BAA.state;
 
+  // ── Type icon map ──────────────────────────────────────────────────────────
+  const TYPE_ICON = {
+    excel: "📊", csv: "📄", sql: "🗄️", gsheets: "📋", http: "🔗",
+  };
+  const TYPE_LABEL = {
+    excel: "Excel", csv: "CSV", sql: "SQL", gsheets: "Sheets", http: "API",
+  };
+
+  // ── Render the source list in the sidebar ─────────────────────────────────
+  function renderSourceList(sources) {
+    state.sources = sources || [];
+    const wrap = $("source-list-wrap");
+    const ul   = $("source-list");
+    if (!wrap || !ul) return;
+
+    if (!sources || sources.length === 0) {
+      wrap.hidden = true;
+      ul.innerHTML = "";
+      return;
+    }
+
+    wrap.hidden = false;
+    ul.innerHTML = sources.map(src => {
+      const icon  = TYPE_ICON[src.type] || "📁";
+      const label = TYPE_LABEL[src.type] || src.type;
+      const activeClass = src.active ? " source-item--active" : "";
+      const toggleTitle = src.active ? "点击取消激活" : "点击激活此数据源";
+      return `
+        <li class="source-item${activeClass}" data-source-id="${src.id}">
+          <button class="source-item-toggle" data-sid="${src.id}" title="${toggleTitle}" aria-pressed="${src.active}">
+            <span class="source-toggle-track">
+              <span class="source-toggle-thumb"></span>
+            </span>
+          </button>
+          <span class="source-item-icon">${icon}</span>
+          <span class="source-item-info">
+            <span class="source-item-name" title="${src.name}">${src.name}</span>
+            <span class="source-item-type">${label}${src.active ? " · 已激活" : " · 未激活"}</span>
+          </span>
+          <button class="source-item-btn source-item-btn--remove" data-sid="${src.id}" title="移除此数据源">✕</button>
+        </li>`;
+    }).join("");
+
+    // Toggle active state
+    ul.querySelectorAll(".source-item-toggle").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleSource(btn.dataset.sid);
+      });
+    });
+    // Remove
+    ul.querySelectorAll(".source-item-btn--remove").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        removeSource(btn.dataset.sid);
+      });
+    });
+  }
+
+  // ── Update sidebar status row ──────────────────────────────────────────────
   function setSrc(name, hintKey, connected) {
     state.srcConnected = connected;
     state.srcName      = connected ? (name || "") : "";
     state.srcHintKey   = connected ? hintKey : 'sidebar.hint.noconn';
 
-    // Invalidate preview cache whenever data source changes.
     if (window.BAA.preview) window.BAA.preview.invalidate();
 
-    // Status dot — toggle the modifier class (works for both old .source-dot
-    // and new .sb-status-dot selectors thanks to the alias in layout.css).
     const dot = $("src-dot");
     if (dot) dot.classList.toggle("on", connected);
-    $("src-name").textContent = connected ? name : t('sidebar.disconnected');
+
+    // Status text: show active count
+    const total = state.sources.length;
+    const activeCount = state.sources.filter(s => s.active).length;
+    let displayName = name || "";
+    if (total > 1) {
+      displayName = activeCount > 0
+        ? `${activeCount}/${total} 个数据源已激活`
+        : `${total} 个数据源（均未激活）`;
+    }
+    $("src-name").textContent = connected ? displayName : t('sidebar.disconnected');
+
     const hint = $("src-hint");
     if (hint) hint.textContent = t(hintKey);
 
-    // Disconnect button — lives inside the dropdown menu now.
     const disc = $("btn-disc");
     if (disc) {
       disc.hidden = !connected;
@@ -29,15 +96,62 @@
     }
 
     $("btn-schema").style.display = connected ? "" : "none";
-    $("hdr-sub").textContent      = connected ? t('connected_to', { name }) : t('header.subtitle');
+    $("hdr-sub").textContent = connected
+      ? t('connected_to', { name: displayName })
+      : t('header.subtitle');
 
-    // Sidebar gets .has-source — used to dim the "Add data source" CTA pulse
-    // when the user already connected something.
     document.querySelector(".sidebar")?.classList.toggle("has-source", connected);
-
     if (connected) window.BAA.dom.hideWelcome();
   }
 
+  // ── After any connect/add operation ───────────────────────────────────────
+  function onSourcesUpdated(sources, newSourceName, hintKey) {
+    renderSourceList(sources);
+    const active = sources.find(s => s.active);
+    const displayName = active ? active.name : (newSourceName || "");
+    setSrc(displayName, hintKey || 'src.hint.file', sources.length > 0);
+  }
+
+  // ── Toggle a source active/inactive ───────────────────────────────────────
+  async function toggleSource(sourceId) {
+    const r = await fetch(`/api/session/${state.SID}/sources/${sourceId}/toggle`, { method: "POST" });
+    const d = await r.json();
+    if (d.error) { toast(d.error, "err"); return; }
+    state.schemaText = "";
+    onSourcesUpdated(d.sources, null, 'src.hint.file');
+    const msg = d.active
+      ? (t('toast.source_activated') || "已激活数据源")
+      : (t('toast.source_deactivated') || "已取消激活");
+    toast(msg, "ok");
+  }
+
+  // ── Remove one source ──────────────────────────────────────────────────────
+  async function removeSource(sourceId) {
+    const r = await fetch(`/api/session/${state.SID}/sources/${sourceId}`, { method: "DELETE" });
+    const d = await r.json();
+    if (d.error) { toast(d.error, "err"); return; }
+    state.schemaText = "";
+    if (d.sources.length === 0) {
+      setSrc(null, 'sidebar.hint.noconn', false);
+      renderSourceList([]);
+      toast(t('toast.disconnected'));
+    } else {
+      onSourcesUpdated(d.sources, null, 'src.hint.file');
+      toast(t('toast.source_removed') || "已移除数据源");
+    }
+  }
+
+  // ── Disconnect ALL sources ─────────────────────────────────────────────────
+  async function disconnectSrc() {
+    await fetch(`/api/session/${state.SID}/datasource`, { method: "DELETE" });
+    state.schemaText = "";
+    state.sources = [];
+    setSrc(null, 'sidebar.hint.noconn', false);
+    renderSourceList([]);
+    toast(t('toast.disconnected'));
+  }
+
+  // ── Load saved datasource configs (autofill forms) ────────────────────────
   function _showDsStatus(elId, name) {
     const el = $(elId);
     if (el) { el.textContent = t('ds.configured', { name }); el.style.display = ""; }
@@ -83,23 +197,25 @@
     }
   }
 
-  async function disconnectSrc() {
-    await fetch(`/api/session/${state.SID}/datasource`, { method: "DELETE" });
-    state.schemaText = "";
-    setSrc(null, 'sidebar.hint.noconn', false);
-    toast(t('toast.disconnected'));
-  }
-
+  // ── File upload (multi-file) ───────────────────────────────────────────────
   function onXlFile() {
-    const f = $("xl-file").files[0];
-    $("xl-btn").disabled        = !f;
+    const files = $("xl-file").files;
+    $("xl-btn").disabled        = files.length === 0;
     $("xl-err").textContent     = "";
     $("xl-schema").style.display = "none";
+    // Show selected file names
+    const label = $("xl-file-label");
+    if (label) {
+      label.textContent = files.length === 0 ? ""
+        : files.length === 1 ? files[0].name
+        : `${files.length} 个文件`;
+    }
   }
 
   async function uploadXl() {
-    const f = $("xl-file").files[0];
-    if (!f) return;
+    const files = $("xl-file").files;
+    if (!files || files.length === 0) return;
+
     const btn           = $("xl-btn");
     const cancelBtn     = $("xl-cancel-btn");
     const progressWrap  = $("xl-progress");
@@ -114,7 +230,7 @@
     progressBar.style.width    = "0%";
 
     const form = new FormData();
-    form.append("file", f);
+    for (const f of files) form.append("file", f);
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `/api/session/${state.SID}/upload`);
@@ -149,15 +265,30 @@
     cancelBtn.disabled = false;
 
     if (d.error) { errEl.textContent = d.error; return; }
-    state.schemaText = d.schema_preview || "";
-    $("xl-schema").textContent  = state.schemaText;
-    $("xl-schema").style.display = "block";
-    setSrc(d.source_name, 'src.hint.file', true);
+
+    // Show partial errors if any
+    if (d.errors && d.errors.length) {
+      errEl.textContent = "部分文件失败: " + d.errors.join("; ");
+    }
+
+    // Update schema display (first added file)
+    if (d.added && d.added.length > 0) {
+      state.schemaText = d.added[0].schema_preview || "";
+      $("xl-schema").textContent  = state.schemaText;
+      $("xl-schema").style.display = "block";
+    }
+
+    onSourcesUpdated(d.sources || [], d.source_name, 'src.hint.file');
     closeOverlay("ov-excel");
-    toast(t('toast.upload_ok'), "ok");
+
+    const msg = d.added && d.added.length > 1
+      ? `已上传 ${d.added.length} 个文件`
+      : t('toast.upload_ok');
+    toast(msg, "ok");
     window.sysMsg(t('sys.connected', { name: d.source_name }));
   }
 
+  // ── SQL DB ─────────────────────────────────────────────────────────────────
   async function connectDB() {
     const conn = $("db-conn").value.trim();
     const name = $("db-name").value.trim();
@@ -182,12 +313,13 @@
     state.schemaText = d.schema_preview || "";
     $("db-schema").textContent  = state.schemaText;
     $("db-schema").style.display = "block";
-    setSrc(d.source_name, 'src.hint.db', true);
+    onSourcesUpdated(d.sources || [], d.source_name, 'src.hint.db');
     closeOverlay("ov-db");
     toast(t('toast.db_ok'), "ok");
     window.sysMsg(t('sys.connected', { name: d.source_name }));
   }
 
+  // ── Google Sheets ──────────────────────────────────────────────────────────
   async function connectGSheets() {
     const creds = $("gsheets-creds").value.trim();
     const sheet = $("gsheets-sheet").value.trim();
@@ -215,12 +347,13 @@
     state.schemaText = d.schema_preview || "";
     $("gsheets-schema").textContent  = state.schemaText;
     $("gsheets-schema").style.display = "block";
-    setSrc(d.source_name, 'src.hint.gsheets', true);
+    onSourcesUpdated(d.sources || [], d.source_name, 'src.hint.gsheets');
     closeOverlay("ov-gsheets");
     toast(t('toast.gsheets_ok'), "ok");
     window.sysMsg(t('sys.connected', { name: d.source_name }));
   }
 
+  // ── Custom API ─────────────────────────────────────────────────────────────
   function toggleApiAuthValue() {
     const type = $("api-auth-type").value;
     $("api-auth-row").style.display = type === "none" ? "none" : "";
@@ -252,14 +385,15 @@
     state.schemaText = d.schema_preview || "";
     $("api-schema").textContent  = state.schemaText;
     $("api-schema").style.display = "block";
-    setSrc(d.source_name, 'src.hint.api', true);
+    onSourcesUpdated(d.sources || [], d.source_name, 'src.hint.api');
     closeOverlay("ov-api");
     toast(t('toast.api_ok'), "ok");
     window.sysMsg(t('sys.connected', { name: d.source_name }));
   }
 
   window.BAA.datasource = {
-    setSrc, loadDatasourceConfigs, disconnectSrc,
+    setSrc, renderSourceList, onSourcesUpdated,
+    loadDatasourceConfigs, disconnectSrc,
     onXlFile, uploadXl, connectDB, connectGSheets, connectAPI, toggleApiAuthValue,
   };
 

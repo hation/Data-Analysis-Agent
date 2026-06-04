@@ -30,21 +30,29 @@ log = logging.getLogger(__name__)
 # ── Thresholds ────────────────────────────────────────────────────────────────
 
 # Trigger compaction when the previous turn's real prompt tokens reach this
-# fraction of the context window. Matches the frontend context-bar semantics.
-_COMPACT_TRIGGER_RATIO = 0.80
+# fraction of the context window. Lower = trigger earlier, keeping history leaner.
+_COMPACT_TRIGGER_RATIO = 0.70   # was 0.80 — trigger earlier before history gets huge
 
-# Keep this many recent turns verbatim (never summarized)
-_KEEP_RECENT_TURNS = 6
+# Rule-based trim kicks in at this lower ratio, BEFORE semantic compaction.
+# In the 60–70% zone we just drop oversized tool results without an LLM call.
+_TRIM_TRIGGER_RATIO = 0.60
 
-# Hard cap on chars fed to the summarizer to keep the compaction call cheap
-_MAX_SUMMARY_INPUT_CHARS = 40_000
+# Tool result messages longer than this are truncated during rule-based trim.
+_TRIM_TOOL_RESULT_CAP = 2000   # chars
 
-# Max tokens the summary itself may use
-_SUMMARY_MAX_TOKENS = 1200
+# Keep this many recent turns verbatim (never summarized).
+# Increased so more recent analysis context survives intact.
+_KEEP_RECENT_TURNS = 8   # was 6
 
-# Minimum history messages before compaction is worthwhile. Kept low so that
-# small context windows (where a single turn can already exceed the limit)
-# still get compacted — the trigger is the token ratio, not the turn count.
+# Hard cap on chars fed to the summarizer.
+# Reduced so the compaction prompt focuses on conclusions, not raw data dumps.
+_MAX_SUMMARY_INPUT_CHARS = 24_000   # was 40_000
+
+# Max tokens the summary itself may use.
+# Increased to allow richer retention of key numbers and findings.
+_SUMMARY_MAX_TOKENS = 2500   # was 1200
+
+# Minimum history messages before compaction is worthwhile.
 _MIN_TURNS_FOR_COMPACT = 4
 
 # Marker used to tag the injected summary message so downstream pruning logic
@@ -60,62 +68,87 @@ _COMPACT_SYSTEM = (
 
 _COMPACT_PROMPT_TEMPLATE = """\
 Below is a segment of a business-analytics conversation that needs to be summarized.
-The user is interacting with an AI analytics agent that can query data, generate charts,
-and produce reports.
+The user is working with an AI data-analytics agent (queries data, generates charts, produces reports).
+
+CRITICAL INSTRUCTIONS:
+- PRESERVE ALL SPECIFIC NUMBERS: revenue figures, percentages, counts, rankings, dates, thresholds.
+  A summary that says "sales were high" is USELESS. Write "sales were ¥1,234,567 (+12.3% YoY)".
+- PRESERVE COLUMN NAMES AND TABLE NAMES exactly as used, so future queries can reference them.
+- Be thorough in sections 3 and 4 — these are the most important for continuity.
 
 <conversation_to_summarize>
 {conversation_text}
 </conversation_to_summarize>
 
-Write a structured summary covering ALL of the following sections.
-Use the exact headings shown. Omit a section only if there is truly nothing to report.
+Write a structured summary using the exact headings below.
+Omit a section only if there is truly nothing to report.
 
 ## 1. User Goals
-What the user explicitly asked for or is trying to accomplish.
+What the user explicitly asked for. Be specific — include metric names, dimensions, time ranges.
 
 ## 2. Data & Schema
-Tables, columns, and data sources that were discussed or queried.
-Include key facts: row counts, date ranges, important fields.
+Data sources connected. Table names, key column names, row counts, date ranges.
+List the exact column names that were queried or mentioned.
 
-## 3. Queries & Results
-SQL queries that were run and their key results (top values, totals, trends).
-Preserve actual numbers where they matter.
+## 3. Key Query Results  ← MOST IMPORTANT: preserve all specific numbers
+For each query that was run:
+- What was asked (intent)
+- The SQL or tool used (brief)
+- The actual result: top values, totals, breakdowns, rankings — with EXACT numbers
+Example: "Top 3 cities by revenue: BJ ¥2.1M, SH ¥1.8M, GZ ¥1.2M"
 
 ## 4. Analysis & Charts
-Analyses that were executed and charts that were generated.
-Note the chart type, axes, and key insight shown.
+Analyses executed (type, target column, key finding with numbers).
+Charts generated (type, x/y axes, key insight).
 
-## 5. Outputs Produced
-Reports, PPT files, Excel exports, or dashboards that were created.
-Include filenames if mentioned.
+## 5. Conclusions & Insights
+Business conclusions the user or agent drew from the data.
+Include any comparisons, anomalies, or recommendations made.
 
-## 6. Errors & Fixes
-Any errors encountered and how they were resolved.
+## 6. Outputs Produced
+Reports / PPT / Excel / dashboards created. Include filenames.
 
-## 7. Pending / In-Progress
-Tasks explicitly requested by the user that have NOT been completed yet.
+## 7. Errors & Fixes
+Errors encountered and how they were resolved.
 
-## 8. Current State
-Precise description of where the conversation left off — what was the last thing done,
-what tool was called last, what the agent was about to do next.
+## 8. Pending / Next Steps
+Tasks requested but NOT yet completed. What should happen next.
+
+## 9. Current State
+Exactly where the conversation left off — last action taken, what the user asked most recently.
 """
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _strip_heavy_content(msg: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a copy of msg with images and oversized tool results stripped."""
+    """Return a copy of msg with images stripped and large content truncated.
+
+    Tool results are aggressively truncated — the summarizer only needs to
+    know *what* was queried and *key values*, not the full raw data table.
+    """
+    # Tight cap for tool results: keep enough to show key numbers/structure,
+    # but drop the bulk of raw data rows that add noise to the summary.
+    _TOOL_RESULT_CAP = 600   # chars — ~170 tokens per tool result
+    _TEXT_CAP        = 2000  # chars for regular assistant/user messages
+
     content = msg.get("content")
     if content is None:
         return msg
 
-    # String content: truncate very long tool results
-    if isinstance(content, str):
-        if len(content) > 3000:
-            content = content[:2800] + "\n…[truncated]"
+    # role=tool: always apply the tight cap
+    if msg.get("role") == "tool":
+        if isinstance(content, str) and len(content) > _TOOL_RESULT_CAP:
+            content = content[:_TOOL_RESULT_CAP] + "\n…[data truncated]"
         return {**msg, "content": content}
 
-    # List content (multimodal): remove image blocks, truncate text blocks
+    # String content (assistant / user text)
+    if isinstance(content, str):
+        if len(content) > _TEXT_CAP:
+            content = content[:_TEXT_CAP] + "\n…[truncated]"
+        return {**msg, "content": content}
+
+    # List content (multimodal)
     if isinstance(content, list):
         cleaned = []
         for block in content:
@@ -124,8 +157,8 @@ def _strip_heavy_content(msg: Dict[str, Any]) -> Dict[str, Any]:
                     cleaned.append({"type": "text", "text": "[image removed]"})
                 elif block.get("type") == "text":
                     text = block.get("text", "")
-                    if len(text) > 3000:
-                        text = text[:2800] + "\n…[truncated]"
+                    if len(text) > _TEXT_CAP:
+                        text = text[:_TEXT_CAP] + "\n…[truncated]"
                     cleaned.append({**block, "text": text})
                 else:
                     cleaned.append(block)
@@ -300,6 +333,65 @@ def _estimate_history_tokens(history: List[Dict], chars_per_token: float = 3.5) 
         except Exception:
             total_chars += len(str(m))
     return max(1, int(total_chars / chars_per_token))
+
+
+def trim_oversized_tool_results(history: List[Dict]) -> Tuple[List[Dict], int]:
+    """Rule-based trim: truncate tool result messages that exceed _TRIM_TOOL_RESULT_CAP.
+
+    This is a cheap, zero-LLM operation that runs in the 60–70% context zone
+    BEFORE semantic compaction is considered.  It only shrinks bulky tool
+    results (large query outputs, profile text) and leaves all other messages
+    intact, so the agent retains full structural context.
+
+    Returns:
+        (trimmed_history, n_trimmed) — n_trimmed is the number of messages that
+        were actually shortened (useful for logging).
+    """
+    trimmed = []
+    n_trimmed = 0
+    for msg in history:
+        if msg.get("role") == "tool":
+            raw = msg.get("content", "")
+            if isinstance(raw, str) and len(raw) > _TRIM_TOOL_RESULT_CAP:
+                msg = {
+                    **msg,
+                    "content": (
+                        raw[:_TRIM_TOOL_RESULT_CAP]
+                        + f"\n…[rule-trim: {len(raw):,} chars → {_TRIM_TOOL_RESULT_CAP}]"
+                    ),
+                }
+                n_trimmed += 1
+        trimmed.append(msg)
+    return trimmed, n_trimmed
+
+
+def should_trim_history(
+    history: List[Dict],
+    last_prompt_tokens: int,
+    context_window: int,
+    chars_per_token: float = 3.5,
+) -> bool:
+    """Return True when the context is in the 60–70% zone (trim range).
+
+    Used to gate trim_oversized_tool_results() — avoids unnecessary iteration
+    when the context is comfortably below the trim threshold.
+    """
+    if len(history) < _MIN_TURNS_FOR_COMPACT:
+        return False
+    if not context_window or context_window <= 0:
+        return False
+
+    lo = context_window * _TRIM_TRIGGER_RATIO
+    hi = context_window * _COMPACT_TRIGGER_RATIO
+
+    # Signal 1: real token usage from previous turn
+    if last_prompt_tokens:
+        if lo <= last_prompt_tokens < hi:
+            return True
+
+    # Signal 2: estimated history size
+    est = _estimate_history_tokens(history, chars_per_token)
+    return lo <= est < hi
 
 
 def should_compact_history(

@@ -7,6 +7,8 @@
     srcName: "",
     srcHintKey: 'sidebar.hint.noconn',
     schemaText: "",
+    // Multi-source: [{id, name, type, active}]
+    sources: [],
     isStreaming: false,
     activeCommand: "",
     slashPopupIndex: 0,

@@ -12,12 +12,14 @@ AGENT_TOOLS = [
         "function": {
             "name": "query_knowledge",
             "description": (
-                "Search the business knowledge base for canonical metric definitions, "
-                "business rules, and context notes. Call this before writing SQL for "
-                "any named business metric (DAU, LTV, retention, ARPU, etc.) to check "
-                "if a canonical definition or SQL template already exists. "
-                "If a result is returned, follow its definition and sql_template exactly. "
-                "Skip this call for ad-hoc exploratory queries with no named metric."
+                "Search the business knowledge base for metric definitions, business rules, "
+                "and context notes. ALWAYS call this at the start of any data analysis "
+                "request BEFORE writing SQL — the knowledge base may contain canonical "
+                "definitions, pre-built SQL templates, or business rules that must be "
+                "followed. Search by the user's exact keywords (Chinese or English). "
+                "If results are returned, follow the sql_template and definition exactly. "
+                "Only skip this call for schema exploration (get_schema) or "
+                "purely structural questions that have no business metric involved."
             ),
             "parameters": {
                 "type": "object",
@@ -25,8 +27,9 @@ AGENT_TOOLS = [
                     "question": {
                         "type": "string",
                         "description": (
-                            "The metric name or business concept to look up, "
-                            "e.g. 'DAU', '次日留存', 'LTV', '付费渗透率'."
+                            "The user's question, metric name, or business concept to look up. "
+                            "Use the original user wording — e.g. '日活', 'DAU', '次日留存率', "
+                            "'客户流失', 'LTV', '复购率'. Both Chinese and English are supported."
                         ),
                     }
                 },
@@ -39,11 +42,36 @@ AGENT_TOOLS = [
         "function": {
             "name": "get_schema",
             "description": (
-                "Get the full schema of the connected data source — tables, columns, "
-                "types, and row counts. Always call this first when the user asks "
-                "about data you haven't seen yet."
+                "Get the schema of the connected data source — table names and columns. "
+                "For large databases (>20 tables) only the table inventory and the first "
+                "20 tables' columns are returned in full; use get_table_detail for any "
+                "specific table you need to query. Always call this first when the user "
+                "asks about data you haven't seen yet. The schema is always fetched fresh "
+                "from the database — never cached between turns."
             ),
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_table_detail",
+            "description": (
+                "Get the full column list and row count for a single table. "
+                "Use this when get_schema returned only a summary for a table "
+                "(i.e. the database has more than 20 tables) and you need to know "
+                "the exact column names before writing a SQL query."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table_name": {
+                        "type": "string",
+                        "description": "Exact table name as returned by get_schema.",
+                    }
+                },
+                "required": ["table_name"],
+            },
         },
     },
     {
@@ -670,6 +698,49 @@ AGENT_TOOLS = [
                     },
                 },
                 "required": ["name", "widgets"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_user",
+            "description": (
+                "Ask the user a clarifying question when their request is ambiguous or "
+                "underspecified. Present a short question and 2–6 predefined options the "
+                "user can click. Always include a catch-all option so the user can type "
+                "a custom answer. Use this ONLY when proceeding without clarification "
+                "would likely produce the wrong analysis — do NOT use it for every message. "
+                "Example: unsure whether to group by day/week/month, which metric to use as "
+                "KPI, or which columns to treat as dimensions vs. measures."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The clarifying question to show the user (one sentence, ≤120 chars).",
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "2–6 predefined answer options. Keep each option short (≤40 chars). "
+                            "Do NOT include an 'Other' option — it is added automatically."
+                        ),
+                        "minItems": 2,
+                        "maxItems": 6,
+                    },
+                    "multi_select": {
+                        "type": "boolean",
+                        "description": (
+                            "If true, the user may select multiple options before submitting. "
+                            "Use for questions like 'which dimensions to include'. "
+                            "Defaults to false (single-select)."
+                        ),
+                    },
+                },
+                "required": ["question", "options"],
             },
         },
     },

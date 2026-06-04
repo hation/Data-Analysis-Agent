@@ -1,6 +1,6 @@
 // Chat send / stop + SSE stream + handleEvent (object-table dispatch).
 (function () {
-  const { $, esc, scrollBottom, hideWelcome, showWelcome } = window.BAA.dom;
+  const { $, esc, scrollBottom, scrollReset, hideWelcome, showWelcome } = window.BAA.dom;
   const state = window.BAA.state;
   const { appendMsg, sysMsg, updateTokenBar, showStatus } = window.BAA.msg;
   const { clearCmd } = window.BAA.slash;
@@ -56,6 +56,7 @@
 
     state.isStreaming = true;
     _setSendBtnStopping(true);
+    scrollReset();   // reset "user scrolled up" flag; jump to bottom for new message
 
     const payload = { message: text };
     if (state.activeCommand) payload.command = state.activeCommand;
@@ -81,6 +82,7 @@
 
     state.isStreaming = true;
     _setSendBtnStopping(true);
+    scrollReset();   // reset scroll state for confirm stream
 
     await _streamChat(payload, stepsEl, bubbleEl, typing);
   }
@@ -114,7 +116,9 @@
       state._streamReader = null;
       state.isStreaming   = false;
       _setSendBtnStopping(false);
-      scrollBottom();
+      scrollBottom(true);   // force-scroll once stream ends regardless of user position
+      // Trigger auto-save after every completed AI reply
+      if (window.BAA.autosave) window.BAA.autosave.scheduleAutosave();
     }
   }
 
@@ -389,6 +393,121 @@
     });
   }
 
+  function _onAskUser(ev, ctx) {
+    if (ctx.typing.parentNode) ctx.typing.remove();
+    _tickAllSteps(ctx.stepsEl);
+
+    const multiSelect = !!ev.multi_select;
+    const options = Array.isArray(ev.options) ? ev.options : [];
+
+    const card = document.createElement("div");
+    card.className = "ask-user-card";
+
+    const qEl = document.createElement("div");
+    qEl.className = "ask-user-question";
+    qEl.textContent = ev.question || "";
+    card.appendChild(qEl);
+
+    const chipsEl = document.createElement("div");
+    chipsEl.className = "ask-user-chips";
+    card.appendChild(chipsEl);
+
+    const selected = new Set();
+
+    function _renderChips() {
+      chipsEl.innerHTML = "";
+      [...options, "__other__"].forEach(opt => {
+        const chip = document.createElement("button");
+        chip.className = "ask-user-chip";
+        chip.type = "button";
+        if (opt === "__other__") {
+          chip.textContent = t('ask_user.other') || "其他…";
+          chip.dataset.other = "1";
+        } else {
+          chip.textContent = opt;
+          chip.dataset.value = opt;
+        }
+        if (selected.has(opt)) chip.classList.add("selected");
+        chip.addEventListener("click", () => {
+          if (locked) return;
+          if (chip.dataset.other) {
+            otherWrap.style.display = otherWrap.style.display === "none" ? "" : "none";
+            if (otherWrap.style.display !== "none") otherInput.focus();
+            return;
+          }
+          if (multiSelect) {
+            if (selected.has(opt)) selected.delete(opt);
+            else selected.add(opt);
+            chip.classList.toggle("selected", selected.has(opt));
+          } else {
+            _submit(opt);
+          }
+        });
+        chipsEl.appendChild(chip);
+      });
+    }
+
+    const otherWrap = document.createElement("div");
+    otherWrap.className = "ask-user-other-wrap";
+    otherWrap.style.display = "none";
+    const otherInput = document.createElement("input");
+    otherInput.type = "text";
+    otherInput.className = "ask-user-other-input";
+    otherInput.placeholder = t('ask_user.other_placeholder') || "请输入您的回答…";
+    const otherBtn = document.createElement("button");
+    otherBtn.type = "button";
+    otherBtn.className = "ask-user-other-btn";
+    otherBtn.textContent = t('ask_user.submit') || "提交";
+    otherWrap.appendChild(otherInput);
+    otherWrap.appendChild(otherBtn);
+    card.appendChild(otherWrap);
+
+    let submitBtn = null;
+    if (multiSelect) {
+      submitBtn = document.createElement("button");
+      submitBtn.type = "button";
+      submitBtn.className = "ask-user-submit-btn";
+      submitBtn.textContent = t('ask_user.confirm') || "确认选择";
+      card.appendChild(submitBtn);
+    }
+
+    ctx.bubbleEl.appendChild(card);
+    scrollBottom();
+
+    let locked = false;
+    function _lock() {
+      locked = true;
+      card.querySelectorAll("button, input").forEach(el => { el.disabled = true; });
+    }
+
+    function _submit(answer) {
+      _lock();
+      sendConfirmStream({ message: answer });
+    }
+
+    otherBtn.addEventListener("click", () => {
+      if (locked) return;
+      const val = otherInput.value.trim();
+      if (val) _submit(val);
+    });
+    otherInput.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); otherBtn.click(); }
+    });
+
+    if (submitBtn) {
+      submitBtn.addEventListener("click", () => {
+        if (locked) return;
+        const vals = [...selected];
+        const otherVal = otherWrap.style.display !== "none" ? otherInput.value.trim() : "";
+        if (otherVal) vals.push(otherVal);
+        if (!vals.length) return;
+        _submit(vals.join("、"));
+      });
+    }
+
+    _renderChips();
+  }
+
   const SSE_HANDLERS = {
     tool_start:         _onToolStart,
     tool_end:           _onToolEnd,
@@ -404,6 +523,7 @@
     excel_outline:      _onOutline,
     report_outline:     _onOutline,
     dashboard_outline:  _onOutline,
+    ask_user:           _onAskUser,
   };
 
   function handleEvent(ev, stepsEl, bubbleEl, typing) {

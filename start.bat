@@ -145,10 +145,14 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr /r /c:":%PORT% .*LISTENING"')
 )
 
 rem =========================================================
-rem  Start app
+rem  Start app and open browser
 rem =========================================================
 echo [INFO] Starting application...
 echo [INFO] Open: http://127.0.0.1:%PORT%
+
+rem 延迟 2 秒后自动打开浏览器
+start "" cmd /c "timeout /t 2 /nobreak >nul && start "" http://127.0.0.1:%PORT%"
+
 %PY_CMD% "%APP_FILE%"
 set "RET=%ERRORLEVEL%"
 
