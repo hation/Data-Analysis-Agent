@@ -108,7 +108,15 @@ def delete_model():
 @bp.post("/api/models/test")
 def test_model():
     d = request.json or {}
-    return jsonify(config_manager.test_config(d.get("provider", "")))
+    provider  = d.get("provider", "").strip()
+    # 前端可传入输入框中尚未保存的临时值，优先用于测试
+    tmp_key   = (d.get("api_key")  or "").strip() or None
+    tmp_url   = (d.get("base_url") or "").strip() or None
+    tmp_model = (d.get("model")    or "").strip() or None
+    return jsonify(config_manager.test_config(
+        provider,
+        api_key=tmp_key, base_url=tmp_url, model=tmp_model,
+    ))
 
 
 @bp.post("/api/session/<sid>/model")

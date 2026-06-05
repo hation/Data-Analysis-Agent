@@ -307,22 +307,49 @@ class LLMConfigManager:
             }
         return result
 
-    def test_config(self, provider: str) -> Dict[str, Any]:
+    def test_config(
+        self, provider: str,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """测试 provider 连通性。
+
+        优先使用传入的临时参数（对应前端输入框中尚未保存的值），
+        未传入时退回到已保存配置。这样用户可以「先测后存」。
+        """
         config = self.get_config(provider)
+
+        # 若没有已保存配置，但传入了临时 key，则用默认值补全其余字段
         if not config:
-            return {"success": False, "message": f"未找到 {provider} 的配置", "provider": provider}
+            defaults = self.DEFAULT_CONFIGS.get(provider, {})
+            if api_key:
+                # 用传入参数 + 默认值组成临时配置
+                effective_key   = api_key
+                effective_url   = base_url or defaults.get("base_url")
+                effective_model = model    or defaults.get("model")
+            else:
+                return {"success": False, "message": f"未找到 {provider} 的配置", "provider": provider}
+        else:
+            # 有已保存配置：临时参数覆盖对应字段
+            effective_key   = api_key   or config.api_key
+            effective_url   = base_url  or config.base_url
+            effective_model = model     or config.model
+
+        if not effective_key:
+            return {"success": False, "message": "API Key 不能为空", "provider": provider}
 
         try:
             from openai import OpenAI
-            client = OpenAI(api_key=config.api_key, base_url=config.base_url)
+            client = OpenAI(api_key=effective_key, base_url=effective_url)
             client.chat.completions.create(
-                model=config.model,
+                model=effective_model,
                 messages=[{"role": "user", "content": "Hello"}],
                 max_tokens=10
             )
-            return {"success": True, "message": "配置有效", "provider": provider, "model": config.model}
+            return {"success": True, "message": "配置有效", "provider": provider, "model": effective_model}
         except Exception as e:
-            return {"success": False, "message": f"测试失败: {str(e)}", "provider": provider, "model": config.model}
+            return {"success": False, "message": f"测试失败: {str(e)}", "provider": provider, "model": effective_model}
 
 
 _config_manager = None

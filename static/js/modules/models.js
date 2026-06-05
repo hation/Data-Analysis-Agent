@@ -113,11 +113,21 @@
     _setDotState(provider, "testing");
     _setProviderRowState(provider, "testing");
 
+    // 优先使用输入框中当前填写的值（未保存状态也能测试）；
+    // 输入框不存在（如从侧边栏触发）时退回到已保存配置。
+    const body = { provider };
+    const pkEl  = $(`pk-${provider}`);
+    const puEl  = $(`pu-${provider}`);
+    const pmEl  = $(`pm-${provider}`);
+    if (pkEl?.value.trim())  body.api_key  = pkEl.value.trim();
+    if (puEl?.value.trim())  body.base_url = puEl.value.trim();
+    if (pmEl?.value.trim())  body.model    = pmEl.value.trim();
+
     let data;
     try {
       const r = await fetch("/api/models/test", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider }),
+        body: JSON.stringify(body),
       });
       data = await r.json();
     } catch (e) {
