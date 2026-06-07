@@ -8,22 +8,85 @@ import os
 from pathlib import Path
 import sys
 
-# Workaround: Python 3.14 regression — some codec modules (e.g. mac_turkish,
-# mac_roman) are missing IncrementalDecoder, causing charset-normalizer to
-# crash at import time. Patch importlib so broken encodings return a stub that
-# satisfies the hasattr check without raising AttributeError.
-def _patch_broken_encodings():
+# -------------------------------
+# 自动检测并安装缺失依赖（仅本地环境）
+# -------------------------------
+def ensure_requirements():
     import importlib
-    _real_import = importlib.import_module
-    def _safe_import(name, *args, **kwargs):
-        mod = _real_import(name, *args, **kwargs)
-        if name.startswith("encodings.") and not hasattr(mod, "IncrementalDecoder"):
-            class _StubDecoder:
-                def __init__(self, *a, **k): pass
-            mod.IncrementalDecoder = _StubDecoder
-        return mod
-    importlib.import_module = _safe_import
-_patch_broken_encodings()
+    import subprocess
+
+    req_file = Path(__file__).parent / "requirements.txt"
+    if not req_file.exists():
+        print("[WARN] requirements.txt not found, skipping dependency check.")
+        return
+
+    # ✅ 标记文件：记录上次安装时的 requirements.txt 修改时间
+    stamp_file = Path(__file__).parent / ".deps_installed"
+    req_mtime = req_file.stat().st_mtime
+    if stamp_file.exists():
+        try:
+            if float(stamp_file.read_text()) >= req_mtime:
+                return  # ✅ 未变动，直接跳过，耗时 <1ms
+        except ValueError:
+            pass  # 标记文件损坏，继续检测
+
+    # pip包名 → import名 映射
+    name_map = {
+        "python-dotenv": "dotenv",
+        "python-docx": "docx",
+        "python-pptx": "pptx",
+        "pillow": "PIL",
+        "scikit-learn": "sklearn",
+        "beautifulsoup4": "bs4",
+        "opencv-python": "cv2",
+        "psycopg2-binary": "psycopg2",
+    }
+
+    missing = []
+    with open(req_file, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            pip_name = line.split("==")[0].split(">=")[0].split("<=")[0]\
+                           .split("~=")[0].split("!=")[0].split("[")[0].strip()
+            import_name = name_map.get(pip_name.lower(), pip_name.replace("-", "_"))
+            try:
+                importlib.import_module(import_name)
+            except ImportError:
+                missing.append(pip_name)
+
+    if missing:
+        print(f"[INFO] Installing missing packages: {missing}")
+        try:
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install"] + missing,
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"[WARN] Some packages failed to install: {e}. Continuing anyway...")
+        print("[INFO] Installation complete. Restarting...")
+        stamp_file.write_text(str(req_mtime))
+        # os.execv 在 Windows 上行为不稳定，改用 subprocess 启动新进程后退出。
+        try:
+            subprocess.Popen([sys.executable] + sys.argv)
+        except Exception as exc:
+            print(f"[WARN] Auto-restart failed ({exc}), please restart manually.")
+        sys.exit(0)
+    else:
+        stamp_file.write_text(str(req_mtime))  # ✅ 写入标记，下次直接跳过
+        print("[INFO] All requirements already satisfied.")
+
+# Vercel 环境依赖由平台管理，只在本地运行
+if os.environ.get("VERCEL") != "1":
+    ensure_requirements()
+
+# -------------------------------
+# 应用本地兼容性补丁
+# -------------------------------
+try:
+    import local_patches; local_patches.apply()
+except ImportError:
+    pass
 
 # -------------------------------
 # 自动判断运行环境
@@ -60,8 +123,6 @@ app = create_app()
 # 启动配置
 # -------------------------------
 if __name__ == "__main__":
-    # Vercel 用 PORT，本地默认 5001
     port = int(os.environ.get("PORT") or os.environ.get("AGENT_PORT", 5001))
     print(f"\n  Business Analyst Agent → http://localhost:{port}\n")
-    # use_reloader=False：关闭 Flask watchdog 文件监视器。
     app.run(host="0.0.0.0", port=port, debug=not is_vercel, use_reloader=False)

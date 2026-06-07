@@ -30,6 +30,12 @@
   <a href="#faq">❓ FAQ</a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest/download/BusinessAnalyticsAgent_Setup.exe">
+    <img src="https://img.shields.io/badge/Download-Windows_Installer_v5.1-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows Installer" />
+  </a>
+</p>
+
 <details>
 <summary><strong>📚 完整目录</strong></summary>
 
@@ -98,7 +104,7 @@
 
 # ✨ 项目亮点
 
-Business Analyst Agent 是一个对话式商业数据分析系统，目标是让非技术用户也能像“聊天”一样完成数据分析。
+智析Agent是一个对话式商业数据分析智能体，目标是让非技术用户也能像“聊天”一样完成数据分析。
 
 上传 Excel / CSV，或连接数据库后，用户可以直接提问：
 
@@ -247,16 +253,32 @@ Business Analyst Agent 是一个对话式商业数据分析系统，目标是让
 ---
 
 
-<a id="install"></a>
+<a id=”install”></a>
 
 # ⚙️ 安装方式
 
-> **前置要求：Python 3.10+**  
-> 还没装？[点此下载](https://www.python.org/downloads/)（Windows 安装时请勾选 **”Add Python to PATH”**）
+---
+
+### 🖥️ 方式 0：Windows 安装包（最简单，推荐）
+
+无需 Python 环境，下载即用，一路点”下一步”完成安装。
+
+<p align=”center”>
+  <a href=”https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest/download/BusinessAnalyticsAgent_Setup.exe”>
+    <img src=”https://img.shields.io/badge/Download-Windows_Installer_v5.1-0078D6?style=for-the-badge&logo=windows&logoColor=white” alt=”Download Windows Installer” />
+  </a>
+</p>
+
+> 文件：`BusinessAnalyticsAgent_Setup.exe`（44 MB）  
+> 系统：Windows 10 / 11 64 位  
+> 安装后在桌面或开始菜单找到 **BusinessAnalyticsAgent** 图标，双击启动即可。
 
 ---
 
-### 方式 1：下载压缩包（推荐新手）
+### 方式 1：下载压缩包（推荐新手，跨平台）
+
+> **前置要求：Python 3.10+**  
+> 还没装？[点此下载](https://www.python.org/downloads/)（Windows 安装时请勾选 **”Add Python to PATH”**）
 
 **第一步：下载并解压**
 
@@ -682,7 +704,7 @@ Apache License 2.0
 
 # ⭐ 项目目标
 
-让商业分析像聊天一样简单。
+把过程交给“智析”，把时间留给思考。
 
 
 
