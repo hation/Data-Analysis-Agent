@@ -30,12 +30,6 @@
   <a href="#faq">❓ FAQ</a>
 </p>
 
-<p align="center">
-  <a href="https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest/download/BusinessAnalyticsAgent_Setup.exe">
-    <img src="https://img.shields.io/badge/Download-Windows_Installer_v5.1-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows Installer" />
-  </a>
-</p>
-
 <details>
 <summary><strong>📚 完整目录</strong></summary>
 
