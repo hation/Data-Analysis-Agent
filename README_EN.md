@@ -7,7 +7,7 @@
 <p align="right"><a href="./README.md">中文</a></p>
 
 <p align="center">
-  <a href="https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest/download/BusinessAnalyticsAgent_Setup.exe">
+  <a href="https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest/download/BusinessAnalyticsAgent_v5.1.exe">
     <img src="https://img.shields.io/badge/Download-Windows_Installer_v5.1-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows Installer" />
   </a>
 </p>
@@ -233,14 +233,15 @@ Supports uploading business knowledge to help the Agent better understand your d
 No Python required. Download, run the installer, and you're done.
 
 <p align="center">
-  <a href="https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest/download/BusinessAnalyticsAgent_Setup.exe">
+  <a href="https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest/download/BusinessAnalyticsAgent_v5.1.exe">
     <img src="https://img.shields.io/badge/Download-Windows_Installer_v5.1-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows Installer" />
   </a>
 </p>
 
-> File: `BusinessAnalyticsAgent_Setup.exe` (44 MB)  
+> File: `BusinessAnalyticsAgent_v5.1.exe` (44 MB)  
 > Requires: Windows 10 / 11 64-bit  
-> After installation, find **BusinessAnalyticsAgent** on your desktop or Start Menu and double-click to launch.
+> After installation, find **BusinessAnalyticsAgent** on your desktop or Start Menu and double-click to launch.  
+> **Security note:** If Windows shows "Windows protected your PC", click "More info" → "Run anyway". The installer is not code-signed, which is normal for open-source projects.
 
 ---
 
