@@ -24,9 +24,9 @@
 
 <p align="center">
   <a href="#features">✨ 项目亮点</a> ·
-  <a href="#install">⚙️ 快速安装</a> ·
+  <a href="#install">⚙️ 安装方式</a> ·
   <a href="#examples">📈 使用示例</a> ·
-  <a href="#llm-config">🤖 模型配置</a> ·
+  <a href="#llm-config">🤖 LLM配置说明</a> ·
   <a href="#faq">❓ FAQ</a>
 </p>
 
@@ -253,7 +253,7 @@
 
 ---
 
-### 🖥️ 方式 0：Windows 安装包（最简单，推荐）
+### 🖥️ 方式 1：Windows 安装包（最简单，推荐）
 
 无需 Python 环境，下载即用，一路点”下一步”完成安装。
 
@@ -269,7 +269,7 @@
 
 ---
 
-### 方式 1：下载压缩包（推荐新手，跨平台）
+### 方式 2：下载压缩包（推荐新手，跨平台）
 
 > **前置要求：Python 3.10+**  
 > 还没装？[点此下载](https://www.python.org/downloads/)（Windows 安装时请勾选 **”Add Python to PATH”**）
@@ -317,7 +317,7 @@ xattr -d com.apple.quarantine ~/Downloads/Data-Analysis-Agent/start.command
 
 ---
 
-### 方式 2：一键在线安装
+### 方式 3：一键在线安装
 
 **Windows（在 PowerShell 中运行）：**
 
@@ -350,7 +350,7 @@ export PATH=”$HOME/.local/bin:$PATH”
 
 ---
 
-### 方式 3：通过 GitHub Clone
+### 方式 4：通过 GitHub Clone
 
 ```bash
 git clone https://github.com/Zafer-Liu/Data-Analysis-Agent.git
