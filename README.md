@@ -24,6 +24,7 @@
 
 <p align="center">
   <a href="#features">✨ 项目亮点</a> ·
+  <a href="#agent-manager">🧩 推荐管理</a> ·
   <a href="#install">⚙️ 快速安装</a> ·
   <a href="#examples">📈 使用示例</a> ·
   <a href="#llm-config">🤖 LLM配置说明</a> ·
@@ -118,6 +119,38 @@
 6. 输出业务洞察
 
 并通过 **SSE（Server-Sent Events）流式输出**，实时展示分析过程。
+
+---
+<a id="agent-manager"></a>
+
+# 🧩 推荐管理方式：智管-Agent Manager
+
+智能商业分析 Agent 可以独立运行，也可以搭配 **智管-Agent Manager** 使用，获得更方便的桌面端管理体验。
+
+<details>
+<summary><strong>了解智管-Agent Manager 如何管理本项目</strong></summary>
+
+<br>
+
+**智管-Agent Manager** 是一个本地 AI Agent 的统一管理中心，适合管理多个本地 Agent 项目。
+将智能商业分析 Agent 添加到智管后，你可以：
+
+* 一键启动 / 停止智能商业分析 Agent
+* 实时查看运行日志与端口状态
+* 在桌面应用内直接打开 Web 分析界面
+* 使用 Manager Agent 通过自然语言启动或打开本项目
+* 开会演示时一键生成临时公网分享链接
+
+```text
+示例：
+帮我启动智能商业分析 Agent，并打开它的界面
+```
+
+这对于需要频繁演示、调试或同时运行多个 Agent 的用户尤其有用。
+
+👉 项目地址：[智管-Agent Manager](https://github.com/Zafer-Liu/Agent_Manager)
+
+</details>
 
 ---
 
