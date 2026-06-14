@@ -24,7 +24,9 @@ from agent.mcp_manager import STDIO_ALLOWED_COMMANDS
 
 
 def _validate_stdio(command: str, args: list, env: dict) -> tuple[bool, str]:
-    basename = os.path.basename(command or "")
+    # Strip directory and extension so both a bare "node" and a full
+    # "C:\Program Files\nodejs\node.exe" validate against the whitelist.
+    basename = os.path.splitext(os.path.basename(command or ""))[0]
     if basename not in STDIO_ALLOWED_COMMANDS:
         return False, f"命令 '{command}' 不在安全白名单中（允许: {', '.join(sorted(STDIO_ALLOWED_COMMANDS))}）"
     for arg in args:
@@ -249,7 +251,7 @@ Rules:
 
 _PARSE_USER_TMPL = "Parse this MCP server configuration:\n\n{text}"
 
-_ALLOWED_COMMANDS = frozenset({"npx", "uvx", "node", "python", "python3", "uv", "deno"})
+_ALLOWED_COMMANDS = frozenset({"npx", "npm", "uvx", "node", "python", "python3", "uv", "deno"})
 _SHELL_META = re.compile(r'[;&|`$<>()\n]|\|\||&&')
 
 
@@ -267,7 +269,7 @@ def _sanitize_parsed(data: dict) -> tuple[dict, list[str]]:
 
     if transport == "stdio":
         command = str(data.get("command") or "").strip()
-        basename = os.path.basename(command)
+        basename = os.path.splitext(os.path.basename(command))[0]
         if basename not in _ALLOWED_COMMANDS:
             warnings.append(f"命令 '{command}' 不在安全白名单，已清空 — 请手动填写")
             command = ""

@@ -56,9 +56,9 @@ _CHARTS: List[Dict[str, Any]] = [
     ),
     dict(
         chart_id="Stacked_Bar_Chart", name="堆叠柱状图", category="对比类 COMPARING",
-        required_roles=["x", "y", "series"], optional_roles=["color"],
-        desc="堆叠分段比较，展示部分与整体关系",
-        data_format="x列(类别) + 分组列 + y列(数值)",
+        required_roles=["x", "y", "series"], optional_roles=["color", "value_cols"],
+        desc="堆叠分段比较，展示部分与整体关系。支持长格式和宽格式。",
+        data_format="长格式: x列 + series列 + y列 | 宽格式: x列 + 多个数值列（用 y=[...] 或 value_cols=[...]）",
         constraints="数值≥0",
     ),
     dict(

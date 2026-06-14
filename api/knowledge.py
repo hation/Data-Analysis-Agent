@@ -282,3 +282,135 @@ def search():
     if not q:
         return jsonify({"metrics": [], "rules": [], "notes": []})
     return jsonify(_kb().search(q))
+
+
+# ── Temporary per-session prompt ──────────────────────────────────────────────
+# A free-form instruction the user sets for a single conversation. When enabled,
+# api/chat.py injects it into the system prompt on every turn of that session.
+# Lives only in the in-memory ChatSession — not persisted to disk.
+
+from agent.prompts import (  # noqa: E402
+    TEMP_PROMPT_MAX_CHARS,
+    strip_temp_prompt_thinking,
+)
+
+# System prompt for the optional LLM "tidy up" pass. Turns a user's colloquial,
+# possibly long description into a clean, imperative instruction block.
+_TEMP_PROMPT_REFINE_SYSTEM = (
+    "你是一个提示词整理助手。用户会给你一段为某次数据分析对话临时设定的指令，"
+    "内容可能口语化、冗长或结构松散。请把它整理成一段清晰、精炼、可直接作为"
+    "系统补充指令使用的中文说明。\n"
+    "要求：\n"
+    "- 保留用户的全部实质意图，不要新增、不要编造需求。\n"
+    "- 用祈使句，必要时用简短的项目符号列表组织。\n"
+    "- 不要写解释、不要加标题、不要用代码块，只输出整理后的指令正文。\n"
+    "- 绝对不要输出思考过程，不要输出 <think>、</think> 或类似推理标签。\n"
+    "- 如果原文已经足够清晰，可原样或仅做轻微润色后返回。"
+)
+
+
+def _refine_temp_prompt(sid: str, provider: str, raw_text: str) -> tuple[str, str]:
+    """Run the LLM tidy-up pass. Returns (refined_text, warning).
+
+    On any failure we degrade gracefully to the raw text so the feature never
+    breaks just because the model misbehaves.
+    """
+    try:
+        client, model = _get_client(sid, provider=provider)
+    except Exception as e:
+        return raw_text, f"未能调用模型整理（已按原文保存）：{e}"
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _TEMP_PROMPT_REFINE_SYSTEM},
+                {"role": "user",   "content": raw_text},
+            ],
+            max_tokens=1024,
+            temperature=0,
+        )
+        refined = strip_temp_prompt_thinking(
+            resp.choices[0].message.content or ""
+        )
+        if not refined:
+            return raw_text, "模型未返回可用正文，已按原文保存。"
+        return refined, ""
+    except Exception as e:
+        log.warning("[temp-prompt] refine failed: %s", e)
+        return raw_text, f"整理失败，已按原文保存：{e}"
+
+
+def _temp_prompt_state(sess) -> dict:
+    # Repair prompts saved before reasoning-tag filtering was added.
+    stored = getattr(sess, "temp_prompt", "")
+    cleaned = strip_temp_prompt_thinking(stored)
+    if cleaned != stored:
+        sess.temp_prompt = cleaned
+        if not cleaned:
+            sess.temp_prompt_enabled = False
+    return {
+        "temp_prompt": cleaned,
+        "enabled":     bool(getattr(sess, "temp_prompt_enabled", False)),
+        "max_chars":   TEMP_PROMPT_MAX_CHARS,
+    }
+
+
+@bp.get("/api/session/<sid>/temp-prompt")
+def get_temp_prompt(sid: str):
+    sess = session_manager.get_or_create(sid)
+    return jsonify(_temp_prompt_state(sess))
+
+
+@bp.post("/api/session/<sid>/temp-prompt")
+def set_temp_prompt(sid: str):
+    """Save the temp prompt. body: {text, raw: bool, provider?: str}
+
+    raw=True  → store the user's text verbatim (after basic trimming).
+    raw=False → run an LLM tidy-up pass first, falling back to raw on failure.
+    Saving non-empty text auto-enables the prompt; clearing it disables it.
+    """
+    body = request.get_json(silent=True) or {}
+    raw_text = strip_temp_prompt_thinking(body.get("text") or "")
+    use_raw  = bool(body.get("raw", True))
+    provider = (body.get("provider") or "").strip()
+
+    if len(raw_text) > TEMP_PROMPT_MAX_CHARS:
+        return jsonify({
+            "error": f"内容过长（超过 {TEMP_PROMPT_MAX_CHARS} 字），请精简后再保存。"
+        }), 400
+
+    sess = session_manager.get_or_create(sid)
+    warning = ""
+
+    if not raw_text:
+        # Empty input clears and disables the prompt.
+        sess.temp_prompt = ""
+        sess.temp_prompt_enabled = False
+        return jsonify({**_temp_prompt_state(sess), "warning": ""})
+
+    if use_raw:
+        final_text = raw_text
+    else:
+        final_text, warning = _refine_temp_prompt(sid, provider, raw_text)
+
+    final_text = strip_temp_prompt_thinking(final_text)
+    if not final_text:
+        return jsonify({"error": "清理思考内容后没有可保存的指令正文。"}), 400
+
+    sess.temp_prompt = final_text
+    sess.temp_prompt_enabled = True
+    log.info("[temp-prompt] set  sid=%s  raw=%s  len=%d", sid, use_raw, len(final_text))
+    return jsonify({**_temp_prompt_state(sess), "warning": warning})
+
+
+@bp.post("/api/session/<sid>/temp-prompt/toggle")
+def toggle_temp_prompt(sid: str):
+    """Flip the enabled switch. Cannot enable when there's no text to inject."""
+    sess = session_manager.get_or_create(sid)
+    if not getattr(sess, "temp_prompt", "").strip():
+        sess.temp_prompt_enabled = False
+        return jsonify({**_temp_prompt_state(sess),
+                        "warning": "临时指令为空，无法启用。"})
+    sess.temp_prompt_enabled = not bool(getattr(sess, "temp_prompt_enabled", False))
+    log.info("[temp-prompt] toggle  sid=%s  enabled=%s", sid, sess.temp_prompt_enabled)
+    return jsonify(_temp_prompt_state(sess))

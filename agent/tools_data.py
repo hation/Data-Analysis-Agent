@@ -79,62 +79,118 @@ class DataToolsMixin:
                 return fn(table_name)
         return f"Table '{table_name}' not found in any connected data source."
 
-    def _route_query(self, sql: str):
-        """Return the DataSource that owns the tables referenced in `sql`.
+    @staticmethod
+    def _strip_src_prefix(sql: str, src_index: int) -> str:
+        """Remove ``src{N}__`` prefixes injected by get_combined_schema.
 
-        With multiple active sources we try each source in turn and return the
-        first one that executes the query without error.  Falls back to the
-        primary (first) source so single-source behaviour is unchanged.
+        Called just before executing SQL against a specific DataSource so the
+        engine sees only bare table names it actually owns.
         """
-        sources = getattr(self, "_all_sources", None)   # list injected by agent.py
+        import re as _re
+        prefix = f"src{src_index}__"
+        # Replace quoted  "src1__tablename"  and bare  src1__tablename
+        sql = _re.sub(
+            rf'"?{_re.escape(prefix)}([^"\s,)]+)"?',
+            lambda m: f'"{m.group(1)}"',
+            sql,
+        )
+        return sql
+
+    def _route_query(self, sql: str):
+        """Return (DataSource, rewritten_sql) for the source that owns the tables
+        referenced in *sql*.
+
+        Routing priority
+        ----------------
+        1. **Cross-source SQL** (SQL contains ``src{N}__`` prefixes from two or
+           more distinct source indices) → execute on ``_merged_source`` as-is.
+           The merged connection already has all tables registered with prefixes.
+        2. **Single-source prefixed SQL** (all ``src{N}__`` prefixes point to the
+           same index N) → strip prefix, execute on ``sources[N-1]`` directly.
+        3. **Bare table names** (no prefix) → heuristic match against each
+           source's table list; first match wins.  Falls back to primary source.
+
+        Returns a (DataSource, sql) tuple.  Callers must use the returned *sql*.
+        """
+        import re as _re
+        sources = getattr(self, "_all_sources", None)
         if not sources or len(sources) == 1:
-            return self.data_source
-        # Quick heuristic: try the source whose table names appear in the SQL
+            return self.data_source, sql
+
+        # ── Detect src{N}__ prefixes in SQL ─────────────────────────────────
+        prefix_pat = _re.compile(r'src(\d+)__', _re.IGNORECASE)
+        prefix_hits = prefix_pat.findall(sql)
+
+        if prefix_hits:
+            unique_indices = set(int(h) for h in prefix_hits)
+
+            # ── Mode 1: cross-source — two or more different src indices ────
+            if len(unique_indices) > 1:
+                merged = getattr(self, "_merged_source", None)
+                if merged is not None:
+                    log.debug("[route] cross-source SQL → MergedDataSource")
+                    return merged, sql
+                # Merged source unavailable — fall through to heuristic as best-effort
+                log.warning("[route] cross-source SQL but _merged_source is None, "
+                            "falling back to primary source")
+                return self.data_source, sql
+
+            # ── Mode 2: single-source prefix — strip and route directly ─────
+            idx = next(iter(unique_indices))   # 1-based
+            if 1 <= idx <= len(sources):
+                src = sources[idx - 1]
+                rewritten = self._strip_src_prefix(sql, idx)
+                log.debug("[route] src%d prefix → source=%s", idx, getattr(src, "name", "?"))
+                return src, rewritten
+            # Index out of range — fall through
+
+        # ── Mode 3: bare table name heuristic ───────────────────────────────
         sql_upper = sql.upper()
-        best = None
         for src in sources:
             try:
                 tables = [t.upper() for t in src.list_tables()]
             except Exception:
                 tables = []
             if any(t in sql_upper for t in tables):
-                best = src
-                break
-        if best:
-            return best
-        # Fallback: try each source until one succeeds
-        return self.data_source
+                log.debug("[route] bare-name heuristic → source=%s", getattr(src, "name", "?"))
+                return src, sql
+
+        # Fallback: primary source, unchanged SQL
+        return self.data_source, sql
 
     def _tool_query_data(self, sql: str) -> str:
         sql_preview = sql.replace("\n", " ")[:120]
-        src = self._route_query(sql)
+        src, rewritten_sql = self._route_query(sql)
         if not src:
             log.warning("[tools] query_data  no data source  sql=%.80r", sql_preview)
             return "No data source. Please connect a database or upload an Excel file first."
-        df, error = src.execute_query(sql)
+        df, error = src.execute_query(rewritten_sql)
         if error:
             log.warning("[tools] query_data  ERROR  source=%s  sql=%.80r  error=%s",
                         getattr(src, "name", "?"), sql_preview, error[:200])
             # If primary source failed and we have alternatives, try them
-            sources = getattr(self, "_all_sources", None) or []
-            for alt in sources:
-                if alt is src:
-                    continue
-                df2, err2 = alt.execute_query(sql)
-                if not err2:
-                    log.info("[tools] query_data  fallback OK  source=%s  rows=%d",
-                             getattr(alt, "name", "?"), len(df2))
-                    return alt.format_result(df2)
+            # (only for bare-name queries — prefixed queries target a specific source)
+            import re as _re
+            if not _re.search(r'src\d+__', sql, _re.IGNORECASE):
+                sources = getattr(self, "_all_sources", None) or []
+                for alt in sources:
+                    if alt is src:
+                        continue
+                    df2, err2 = alt.execute_query(rewritten_sql)
+                    if not err2:
+                        log.info("[tools] query_data  fallback OK  source=%s  rows=%d",
+                                 getattr(alt, "name", "?"), len(df2))
+                        return alt.format_result(df2)
             return f"SQL Error: {error}"
         log.info("[tools] query_data  OK  source=%s  rows=%d  sql=%.80r",
                  getattr(src, "name", "?"), len(df), sql_preview)
         return src.format_result(df)
 
     def _tool_create_analysis_table(self, sql: str, table_name: str = "analysis_data") -> str:
-        src = self._route_query(sql)
+        src, rewritten_sql = self._route_query(sql)
         if not src:
             return "No data source connected."
-        result = src.create_analysis_table(sql, table_name)
+        result = src.create_analysis_table(rewritten_sql, table_name)
         self._schema_cache = None
         log.info("[tools] create_analysis_table  table=%s  source=%s",
                  table_name, getattr(src, "name", "?"))

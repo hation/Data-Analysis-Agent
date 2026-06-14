@@ -174,3 +174,27 @@ This is a major release, covering four key areas: **multi-source support, intell
 - Enhanced security: all SQL queries run by the AI undergo stricter syntax-level checks, and filesystem and network access have been disabled at the database connection layer
 
 ```
+## v5.1
+**June 13, 2026**
+
+This update focuses on multi-data-source federated analysis and data connectivity stability improvements.
+
+### 1. Enhanced Cross-Data-Source Federated Analysis
+- Added a multi-data-source virtual merge layer, supporting direct cross-source `JOIN` and `UNION` operations on tables from different data sources.
+- When multiple Excel or CSV files contain tables with the same name, the system now automatically prefixes table names with their data source identifier, enabling the AI to accurately distinguish and query data from the specified file.
+- Optimized multi-data-source query routing. Both single-source and cross-source queries now automatically select the correct execution method.
+- Data source schema information now includes sample data, helping the AI differentiate between tables with identical structures but different content.
+
+### 2. Excel Data Connectivity Fixes
+- Fixed an issue where Excel columns containing "space-separated number strings" (e.g., bank account numbers, ID numbers, codes) would fail to upload.
+- Standard text columns are now consistently recognized as strings, preventing DuckDB from incorrectly inferring them as numeric and triggering type conversion errors.
+
+### 3. Optimized Data Source Disconnection Prompts
+- Fixed a problem where, after a service restart, the frontend would still show data sources as connected, but queries would not respond.
+- When a data source connection within a session becomes invalid, the system now clearly prompts the user to reconnect, instead of returning blank replies.
+- Added dual frontend-backend checks to prevent the AI from continuing with invalid execution when data structures are missing.
+
+### 4. Improved Model Testing Experience
+- Model settings now support "test before save".
+- After users enter a new API Key, Base URL, or model name, they can directly test the current inputs.
+- If input fields are empty, the system will automatically use the saved configuration, maintaining compatibility with the original testing method.

@@ -176,6 +176,47 @@
     }
   }
 
+  // IntersectionObserver: 统一管理所有图表 iframe 的懒加载。
+  // 浏览器原生 loading="lazy" 的问题是：SSE 流结束时第二个图表可能尚未进入
+  // 视口，浏览器永远不会发起请求，导致空白。改用 IO 可以精确控制触发时机，
+  // 并在 iframe 加载完成后自动断开观察，避免内存泄漏。
+  const _chartObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      const iframe = entry.target;
+      if (!iframe.src) {
+        iframe.src = iframe.dataset.src;
+      }
+      _chartObserver.unobserve(iframe);
+    });
+  }, { rootMargin: "200px" }); // 提前 200px 预加载，消除滚动白屏
+
+  function _syncChartFrameHeight(iframe) {
+    try {
+      const doc = iframe.contentDocument;
+      if (!doc?.body) return;
+
+      // Plotly.newPlot() may still be laying out when the iframe load event fires.
+      // Keep the frame from collapsing to the title-only height, and repair old
+      // saved charts whose graph div used height:100% without a definite parent.
+      const plotly = iframe.contentWindow?.Plotly;
+      doc.querySelectorAll(".plotly-graph-div").forEach(plot => {
+        if (plot.getBoundingClientRect().height < 240) {
+          plot.style.minHeight = "360px";
+        }
+        if (plotly?.Plots?.resize && plot.classList.contains("js-plotly-plot")) {
+          plotly.Plots.resize(plot);
+        }
+      });
+
+      const contentHeight = Math.max(
+        doc.body.scrollHeight,
+        doc.documentElement?.scrollHeight || 0,
+      );
+      iframe.style.height = Math.max(420, contentHeight + 20) + "px";
+    } catch (_) {}
+  }
+
   function _buildChartFrame(chartId) {
     const wrap = document.createElement("div");
     wrap.className = "chart-frame";
@@ -185,16 +226,17 @@
     expandBtn.textContent = "⛶";
     expandBtn.addEventListener("click", () => window.open(`/api/chart/${chartId}`, "_blank"));
     const iframe = document.createElement("iframe");
-    iframe.src = `/api/chart/${chartId}`;
-    iframe.loading = "lazy";
+    // 不设置 src，先存入 data-src；由 IntersectionObserver 在进入视口时赋值。
+    // 这样视口内的图表立即加载，视口外的在滚动到附近时才发请求，避免同时并发
+    // 多个 iframe 请求阻塞浏览器连接池。
+    iframe.dataset.src = `/api/chart/${chartId}`;
     iframe.addEventListener("load", () => {
-      try {
-        const h = iframe.contentDocument.body.scrollHeight;
-        if (h > 100) iframe.style.height = (h + 20) + "px";
-      } catch (_) {}
+      requestAnimationFrame(() => _syncChartFrameHeight(iframe));
+      setTimeout(() => _syncChartFrameHeight(iframe), 250);
     });
     wrap.appendChild(expandBtn);
     wrap.appendChild(iframe);
+    _chartObserver.observe(iframe);
     return wrap;
   }
 
@@ -212,8 +254,7 @@
     scrollBottom();
   }
 
-  function _onReasoning(ev, ctx) {
-    if (ctx.typing.parentNode) ctx.typing.remove();
+  function _buildReasoningBlock(content) {
     const block = document.createElement("div");
     block.className = "reasoning-block";
     const toggle = document.createElement("div");
@@ -221,13 +262,19 @@
     toggle.innerHTML = `<span class="reasoning-arrow">▶</span> ${t('reasoning_toggle')}`;
     const body = document.createElement("div");
     body.className = "reasoning-body";
-    body.textContent = ev.content || "";
+    body.textContent = content || "";
     toggle.addEventListener("click", () => {
       toggle.classList.toggle("open");
       body.classList.toggle("open");
     });
     block.appendChild(toggle);
     block.appendChild(body);
+    return block;
+  }
+
+  function _onReasoning(ev, ctx) {
+    if (ctx.typing.parentNode) ctx.typing.remove();
+    const block = _buildReasoningBlock(ev.content);
     ctx.bubbleEl.before(block);
     scrollBottom();
   }
@@ -566,5 +613,6 @@
   window.BAA.chatStream = {
     onSendOrStop, sendMessage, sendConfirmStream, stopStreaming,
     handleEvent, newChat, buildChartFrame: _buildChartFrame,
+    buildReasoningBlock: _buildReasoningBlock,
   };
 })();

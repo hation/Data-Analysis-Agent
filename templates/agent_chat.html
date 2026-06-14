@@ -95,6 +95,10 @@
 
       <button class="sb-btn sb-btn-ghost sb-btn-block"
               data-action="openOverlay:ov-knowledge">🧠 业务知识库</button>
+      <button class="sb-btn sb-btn-ghost sb-btn-block"
+              id="temp-prompt-entry"
+              data-action="openOverlay:ov-temp-prompt"
+              title="为当前对话临时设定一段补充指令">📝 临时 Prompt</button>
     </section>
 
     <!-- ── Saved sessions ────────────────────────────────────── -->
@@ -111,7 +115,7 @@
 
     <!-- ── Footer ────────────────────────────────────────────── -->
     <footer class="sb-footer">
-      <div class="sb-footer-meta">v5.0 · Zafer_Liu</div>
+      <div class="sb-footer-meta">v5.1 · Zafer_Liu</div>
       <div class="sb-footer-actions">
         <button class="sb-iconbtn" id="theme-toggle" data-action="toggleTheme" title="Dark mode">🌙</button>
         <button class="sb-iconbtn" id="lang-toggle"  data-action="toggleLang">EN</button>
@@ -523,7 +527,7 @@
           </div>
           <input type="text" id="mcp-command" placeholder="命令，例如 npx 或 uvx" oninput="updateMcpCmdPreview()">
           <input type="text" id="mcp-args"    placeholder="参数（空格分隔），例如 -y @modelcontextprotocol/server-filesystem /tmp" oninput="updateMcpCmdPreview()">
-          <input type="text" id="mcp-env"     placeholder="环境变量（KEY=VALUE，逗号分隔，可选）">
+          <input type="text" id="mcp-env"     placeholder="环境变量（变量名=值，逗号分隔），例如：ATLASCLOUD_API_KEY=apikey-xxx, OTHER_KEY=yyy">
           <div id="mcp-cmd-preview" class="mcp-cmd-preview" style="display:none">
             <div class="cmd-label">命令预览</div>
             <span id="mcp-cmd-preview-text"></span>
@@ -714,6 +718,43 @@
   </div>
 </div>
 
+<!-- ══ Temporary Prompt Modal ════════════════════════════════════════ -->
+<div class="overlay" id="ov-temp-prompt">
+  <div class="modal" style="width:560px">
+    <div class="modal-title">📝 临时 Prompt</div>
+
+    <p class="tp-intro">
+      为<strong>当前这次对话</strong>临时设定一段补充指令。启用后，它会在本次会话的
+      每一轮对话中自动附加到系统提示词，新建对话即失效。适合放一些只对这次分析有效的
+      偏好或背景（例如：固定输出口径、指定术语、限定分析范围）。
+    </p>
+
+    <div class="f-row">
+      <label>临时指令内容</label>
+      <textarea id="tp-textarea" class="tp-textarea"
+                placeholder="例如：本次所有金额一律以「万元」为单位展示；分析时优先关注华东地区；结论部分控制在 3 句话以内。"
+                rows="8"></textarea>
+      <div class="tp-meta">
+        <span id="tp-count" class="tp-count">0 / 4000</span>
+      </div>
+    </div>
+
+    <div id="tp-status" class="tp-statusbar">
+      <span class="tp-dot tp-dot-off"></span>加载中…
+    </div>
+
+    <div class="modal-footer tp-footer">
+      <button class="btn-sm btn-sm-ghost"   data-action="tpClear" title="清空并停用">清空</button>
+      <div style="flex:1"></div>
+      <button class="btn-sm btn-sm-ghost"   id="tp-toggle-btn" data-action="tpToggle">启用</button>
+      <button class="btn-sm btn-sm-ghost"   id="tp-refine-btn" data-action="tpRefine"
+              title="先用模型把口语化描述整理成规范指令，再保存">✨ 智能整理后保存</button>
+      <button class="btn-sm btn-sm-primary" id="tp-save-btn"   data-action="tpSaveRaw">保存</button>
+      <button class="btn-sm btn-sm-ghost"   data-action="closeOverlay:ov-temp-prompt">关闭</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Inline edit form (shared, floats over modal) ── -->
 <div class="overlay" id="ov-kb-form">
   <div class="modal" style="width:520px">
@@ -818,6 +859,7 @@
 <!-- ── External panels (decorate window.openOverlay; must come AFTER overlay.js) -->
 <script src="{{ url_for('static', filename='js/mcp_settings.js') }}"></script>
 <script src="{{ url_for('static', filename='js/knowledge_panel.js') }}"></script>
+<script src="{{ url_for('static', filename='js/temp_prompt_panel.js') }}"></script>
 
 <!-- ── Main entry: event delegation + bootstrap ───────────────────── -->
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>

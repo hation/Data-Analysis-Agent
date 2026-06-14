@@ -123,6 +123,9 @@
         const el = appendMsg("assistant", null);
         const bubble = el.querySelector(".msg-bubble");
         bubble.innerHTML = window.renderMd(msg.content);
+        if (msg.reasoning) {
+          bubble.before(window.BAA.chatStream.buildReasoningBlock(msg.reasoning));
+        }
         for (const cid of (msg.chart_ids || [])) {
           const wrap = window.BAA.chatStream.buildChartFrame(cid);
           bubble.before(wrap);

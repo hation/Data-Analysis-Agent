@@ -71,6 +71,13 @@
     kbSubmitForm:    () => window.kbSubmitForm(),
     kbPickFile:      () => $("kb-file-input").click(),
 
+    // Temporary per-session prompt
+    tpSaveRaw:    () => window.tpSave(false),
+    tpRefine:     () => window.tpSave(true),
+    tpToggle:     () => window.tpToggle(),
+    tpClear:      () => window.tpClear(),
+    tpUpdateCount:() => window.tpUpdateCount(),
+
     // Data-source modal sub-controls
     toggleApiAuthValue: () => window.BAA.datasource.toggleApiAuthValue(),
 
@@ -181,6 +188,12 @@
   const kbFileInput = document.getElementById("kb-file-input");
   if (kbFileInput) {
     kbFileInput.addEventListener("change", e => window.kbOnFileSelect && window.kbOnFileSelect(e));
+  }
+
+  // Temp-prompt textarea — live character counter
+  const tpTextarea = document.getElementById("tp-textarea");
+  if (tpTextarea) {
+    tpTextarea.addEventListener("input", () => window.tpUpdateCount && window.tpUpdateCount());
   }
 
   // Textarea — slash popup driver

@@ -13,7 +13,7 @@ import logging
 import time
 from typing import Iterator, List, Dict, Any, Optional, Tuple
 
-from .prompts      import get_system_prompt, COMMAND_HINTS
+from .prompts      import get_system_prompt, build_temp_prompt_section, COMMAND_HINTS
 from .tools_schema import AGENT_TOOLS, get_tools_with_mcp
 from .tools_data   import DataToolsMixin
 from .tools_export import ExportToolsMixin
@@ -24,6 +24,7 @@ from .compaction   import (
 )
 from .retry        import call_with_retry as _call_with_retry, is_retryable as _is_retryable
 from .validate     import validate_tool_args as _validate_tool_args
+from .reasoning    import ThinkTagStreamParser
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ _PROPOSE_CMDS = (
 
 
 class BusinessAgent(DataToolsMixin, ExportToolsMixin):
-    MAX_ITERATIONS = 80
+    MAX_ITERATIONS = 120
 
     # Approximate chars-per-token ratio for fast estimation (conservative)
     _CHARS_PER_TOKEN = 3.5
@@ -59,6 +60,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         data_source=None,
         combined_schema: Optional[str] = None,
         all_sources: Optional[List] = None,
+        merged_source=None,
         enable_thinking: bool = False,
         thinking_budget: int = 8000,
         chart_store: Optional[dict] = None,
@@ -73,6 +75,9 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         self.data_source = data_source
         # All active DataSource objects — used by _route_query for multi-source routing
         self._all_sources: List = all_sources if all_sources else ([data_source] if data_source else [])
+        # MergedDataSource — single DuckDB connection covering all active sources.
+        # When present, cross-source SQL (containing src{N}__ prefixes) is routed here.
+        self._merged_source = merged_source
         # Pre-computed merged schema (multi-source); takes priority over single-source schema
         self._combined_schema: Optional[str] = combined_schema
         self.enable_thinking = enable_thinking
@@ -206,6 +211,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         report_sections: Optional[List] = None,
         dashboard_name: str = "",
         dashboard_widgets: Optional[List] = None,
+        temp_prompt: str = "",
     ) -> Iterator[Dict]:
         """
         Yields event dicts consumed by the Flask SSE stream:
@@ -285,9 +291,42 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
             return
 
 
+        # ── Data-source connectivity check ────────────────────────────────────
+        # If the agent was built with data sources but no usable schema, it means
+        # the connection is broken (e.g. server restart wiped in-memory state).
+        # Fail fast with a clear message instead of letting the LLM silently
+        # exhaust its turns and return an empty reply.
+        _has_sources = bool(self._all_sources or self.data_source)
+        _has_schema  = bool(
+            getattr(self, "_combined_schema", None)
+            or getattr(self, "_schema_cache", None)
+        )
+        if _has_sources and not _has_schema:
+            # One last attempt: try to get the schema right now.
+            try:
+                _live_schema = self._tool_get_schema()
+            except Exception:
+                _live_schema = ""
+            if not _live_schema or _live_schema == "No data source connected.":
+                src_names = "、".join(
+                    getattr(s, "name", "未知数据源") for s in self._all_sources
+                ) if self._all_sources else "已连接数据源"
+                yield {
+                    "type": "error",
+                    "message": (
+                        f"数据源「{src_names}」的连接已断开（可能由服务重启引起），"
+                        "请在侧边栏重新连接数据源后再试。"
+                    ),
+                }
+                yield {"type": "done"}
+                return
+
         system = get_system_prompt()
         if command and command in COMMAND_HINTS:
             system += f"\n\n[ACTIVE COMMAND: /{command}]\n{COMMAND_HINTS[command]}"
+        # Per-session temporary instruction (user-set, this conversation only).
+        if temp_prompt:
+            system += build_temp_prompt_section(temp_prompt)
 
         prior_reasoning_msg: List[Dict] = []
         if last_reasoning:
@@ -507,6 +546,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
             tc_acc: Dict[int, Dict[str, str]] = {}
             content_parts: List[str] = []
             reasoning_parts: List[str] = []
+            think_parser = ThinkTagStreamParser()
             usage_data = None
             finish_reason = None
 
@@ -521,9 +561,13 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                 delta = choice.delta
 
                 if delta.content:
-                    content_parts.append(delta.content)
-                    if command not in _PROPOSE_CMDS:
-                        yield {"type": "text_delta", "content": delta.content}
+                    visible_delta, tagged_reasoning = think_parser.feed(delta.content)
+                    if visible_delta:
+                        content_parts.append(visible_delta)
+                        if command not in _PROPOSE_CMDS:
+                            yield {"type": "text_delta", "content": visible_delta}
+                    if tagged_reasoning:
+                        reasoning_parts.append(tagged_reasoning)
 
                 rc = getattr(delta, "reasoning_content", None)
                 if rc:
@@ -542,7 +586,15 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                             if tcd.function.arguments:
                                 tc_acc[idx]["args"] += tcd.function.arguments
 
-            full_content = "".join(content_parts)
+            visible_tail, reasoning_tail = think_parser.finish()
+            if visible_tail:
+                content_parts.append(visible_tail)
+                if command not in _PROPOSE_CMDS:
+                    yield {"type": "text_delta", "content": visible_tail}
+            if reasoning_tail:
+                reasoning_parts.append(reasoning_tail)
+
+            full_content = "".join(content_parts).strip()
             has_tool_calls = bool(tc_acc) and finish_reason == "tool_calls"
             reasoning_content = "".join(reasoning_parts) or None
 

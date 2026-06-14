@@ -192,12 +192,69 @@ def _sanitize_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _coerce_problem_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """将 object 列中含有空白字符的数字串统一转为纯字符串。
+
+    DuckDB 在推断 schema 时，如果某列值形如 '11  002142  7.44'（数字+空格），
+    会误判为 DOUBLE 并尝试 cast，导致 InvalidInputException。
+    通过提前将所有 object 列强制转为 str/None，让 DuckDB 将其识别为 VARCHAR。
+    """
+    df = df.copy()
+    for col in df.columns:
+        if df[col].dtype != object:
+            continue
+        non_null = df[col].dropna()
+        if len(non_null) == 0:
+            continue
+        # 只转换"非 datetime"的 object 列（datetime 列已在 _sanitize_df 处理）
+        has_dt = any(isinstance(v, (pd.Timestamp, datetime.datetime)) for v in non_null)
+        if has_dt:
+            continue
+        df[col] = df[col].apply(
+            lambda v: None if (v is None or (isinstance(v, float) and np.isnan(v))) else str(v)
+        )
+    return df
+
+
 def _register(conn: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame):
     """Zero-copy register a DataFrame as a DuckDB table (no INSERT at all)."""
     df = _sanitize_df(df)
+    # 将所有 object 列强制转为 str/None，防止 DuckDB 把含空格的数字串
+    # 误判为 DOUBLE 并尝试 cast，导致 InvalidInputException。
+    df = _coerce_problem_columns(df)
     conn.register("_tmp_reg_", df)
-    conn.execute(f'CREATE OR REPLACE TABLE "{table}" AS SELECT * FROM _tmp_reg_')
-    conn.unregister("_tmp_reg_")
+    try:
+        conn.execute(f'CREATE OR REPLACE TABLE "{table}" AS SELECT * FROM _tmp_reg_')
+    except Exception as exc:
+        # 兜底：若仍然失败（如非 object 列的 cast 问题），逐列探测并修复后重试。
+        log.warning("[_register] table=%r cast failed (%s), probing columns for bad types…", table, exc)
+        conn.unregister("_tmp_reg_")
+        df = df.copy()
+        for col in df.columns:
+            if df[col].dtype == object:
+                continue  # 已由 _coerce_problem_columns 处理
+            tmp_df = df[[col]].copy()
+            try:
+                conn.register("_probe_", tmp_df)
+                conn.execute('CREATE OR REPLACE TABLE "_probe_tbl_" AS SELECT * FROM _probe_')
+                conn.execute('DROP TABLE IF EXISTS "_probe_tbl_"')
+                conn.unregister("_probe_")
+            except Exception:
+                try:
+                    conn.unregister("_probe_")
+                except Exception:
+                    pass
+                log.warning("[_register] column %r dtype=%s cannot cast, coercing to VARCHAR", col, df[col].dtype)
+                df[col] = df[col].apply(
+                    lambda v: None if (v is None or (isinstance(v, float) and np.isnan(v))) else str(v)
+                )
+        conn.register("_tmp_reg_", df)
+        conn.execute(f'CREATE OR REPLACE TABLE "{table}" AS SELECT * FROM _tmp_reg_')
+    finally:
+        try:
+            conn.unregister("_tmp_reg_")
+        except Exception:
+            pass
 
 
 # ── DuckDB query / introspection ─────────────────────────────────────────────
@@ -213,9 +270,11 @@ def _table_schema_str(conn: duckdb.DuckDBPyConnection, table: str, row_count: in
     col_lines = [f"  {r[0]}  {r[1]}" for r in desc_rows]
     header = f"Table: {table}  ({row_count} rows)"
 
-    # When auto-named columns exist, append 2 sample rows so the Agent can
-    # infer what each column actually contains.
-    if has_auto_cols and row_count > 0:
+    # Always append 2 sample rows so the LLM can see actual values and
+    # distinguish tables that share identical column names / types across
+    # multiple data sources (e.g. monthly MON vs weekly week_5_4).
+    # Auto-named columns (col, col_2 …) already had this; now universal.
+    if row_count > 0:
         try:
             sample = conn.execute(f'SELECT * FROM "{table}" LIMIT 2').fetchall()
             if sample:

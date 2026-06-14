@@ -49,7 +49,8 @@ def _auto_col(df: pd.DataFrame, *hints: str) -> Optional[str]:
     """
     strs = [c for c in df.columns if df[c].dtype == object or df[c].dtype == 'string']
     nums = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    col_lower = {c.lower(): c for c in df.columns}
+    col_lower = {str(c).lower(): c for c in df.columns}
+    hints = tuple(h for h in hints if isinstance(h, str) and h)
     
     # 1. 精确匹配 hints
     for h in hints:
@@ -60,9 +61,15 @@ def _auto_col(df: pd.DataFrame, *hints: str) -> Optional[str]:
     # 2. 模糊匹配（包含关系）
     for h in hints:
         h_lower = h.lower()
+        # Single-character role columns such as x/y must only match exactly.
+        # Otherwise column "y" incorrectly matches words like "category".
+        if len(h_lower) < 2:
+            continue
         for col in df.columns:
-            col_lower_name = col.lower()
-            if h_lower in col_lower_name or col_lower_name in h_lower:
+            col_lower_name = str(col).lower()
+            if len(col_lower_name) >= 2 and (
+                h_lower in col_lower_name or col_lower_name in h_lower
+            ):
                 return col
     
     # 3. 类型匹配：根据 hint 的语义推断应该是什么类型
@@ -121,13 +128,13 @@ def _detect_wide_format(df: pd.DataFrame, mapping: dict) -> bool:
     nums = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
 
     # 存在真实的 color/series 列 → 已经是长格式
-    color_hint = mapping.get("color") or mapping.get("series") or ""
-    if color_hint and color_hint in df.columns:
+    color_hint = mapping.get("color") or mapping.get("series") or mapping.get("group") or ""
+    if isinstance(color_hint, str) and color_hint in df.columns:
         return False
 
     # y 列真实存在 → Agent 指定了单一指标，不需要 melt
     y_hint = mapping.get("y") or ""
-    if y_hint and y_hint in df.columns:
+    if isinstance(y_hint, str) and y_hint in df.columns:
         return False
 
     # 2个以上字符串列 → 长格式（其中一列可做分组）
@@ -137,7 +144,8 @@ def _detect_wide_format(df: pd.DataFrame, mapping: dict) -> bool:
     return len(strs) == 1 and len(nums) >= 2
 
 
-def _convert_wide_to_long(df: pd.DataFrame, id_col: str, value_cols: list = None):
+def _convert_wide_to_long(df: pd.DataFrame, id_col: str, value_cols: list = None,
+                          extra_id_cols: list = None):
     """将宽格式转换为长格式。
 
     Parameters
@@ -162,8 +170,9 @@ def _convert_wide_to_long(df: pd.DataFrame, id_col: str, value_cols: list = None
             val_name = candidate
             break
 
+    id_vars = [id_col] + [c for c in (extra_id_cols or []) if c != id_col]
     df_long = df.melt(
-        id_vars=[id_col],
+        id_vars=id_vars,
         value_vars=value_cols,
         var_name="指标",
         value_name=val_name,
@@ -219,7 +228,8 @@ def generate(
 
     x_col = mapping.get("x") or x
     y_col = mapping.get("y") or y
-    color_col = mapping.get("color") or color
+    # Accept "series" as alias for "color" (Agent commonly uses "series" for grouped bar)
+    color_col = mapping.get("color") or mapping.get("series") or color
     title = options.get("title", title)
 
     # ── 检测并转换宽格式数据 ──────────────────────────────
@@ -235,23 +245,46 @@ def generate(
         # mapping 里可显式指定 value_cols 来控制 melt 哪些列
         # 未指定时取全部数值列（排除 id_col）
         explicit_cols = mapping.get("value_cols")
+        if not explicit_cols and isinstance(mapping.get("y"), list):
+            explicit_cols = mapping["y"]
         if explicit_cols:
             value_cols = [c for c in explicit_cols if c in df.columns]
         else:
             value_cols = None   # _convert_wide_to_long 内部自动取全部数值列
 
-        df, val_name = _convert_wide_to_long(df, id_col, value_cols)
+        color_hint = mapping.get("color") or mapping.get("series") or mapping.get("group")
+        source_color = color_hint if isinstance(color_hint, str) and color_hint in df.columns else None
+        df, val_name = _convert_wide_to_long(
+            df, id_col, value_cols, [source_color] if source_color else None
+        )
 
         _x = id_col
         _y = val_name
-        _color = "指标"   # melt 后的分组列名
+        if source_color and len(value_cols or []) > 1:
+            _color = "分组 · 指标"
+            df[_color] = df[source_color].astype(str) + " · " + df["指标"].astype(str)
+        elif source_color:
+            _color = source_color
+        else:
+            _color = "指标"   # melt 后的分组列名
 
         warnings.append(f"自动转换宽格式数据：{id_col} (x) × 指标 (color) × {val_name} (y)")
     else:
         # 长格式数据：正常处理
         _x = _auto_col(df, x_col, "x", "季度", "时间", "类别", "行标签")
         _y = _auto_col(df, y_col, "y", "销售额", "销量", "value", "amount", "数值")
-        _color = _auto_col(df, color_col, "color", "产品", "区域", "group", "category", "周期")
+        if isinstance(color_col, str) and color_col in df.columns:
+            _color = color_col
+        elif "series" in df.columns:
+            # SQL commonly aliases the grouping field as `series` while the
+            # mapping still contains its source name (for example `mode`).
+            _color = "series"
+        elif "color" in df.columns:
+            _color = "color"
+        else:
+            _color = _auto_col(
+                df, color_col, "color", "产品", "区域", "group", "category", "周期"
+            )
 
         # ── 回退：y 列存在但无 color 列，且还有其他数值列 → 多指标宽格式 ──────
         # 场景：Agent 传了 x='银行类型', y='ESG总分', series='指标'（不存在），

@@ -8,6 +8,7 @@ from flask import Blueprint, request, Response, jsonify
 
 from .state import session_manager, config_manager, chart_store
 from agent.agent import BusinessAgent
+from agent.reasoning import split_reasoning_tags
 
 log = logging.getLogger(__name__)
 bp = Blueprint("chat", __name__)
@@ -33,14 +34,36 @@ def _build_agent(sess) -> BusinessAgent:
     if not active_sources and sess.data_source:
         active_sources = [sess.data_source]
 
+    # 若有数据源但 schema 仍为空，尝试实时获取一次。
+    # 若获取后仍为空（SQL 数据源连接断开、文件丢失等），报错提示用户重新连接，
+    # 而不是让 LLM 无声地空转后输出空回复。
+    if active_sources and not combined_schema:
+        try:
+            combined_schema = sess.get_combined_schema()
+            sess._combined_schema_cache = combined_schema
+        except Exception as exc:
+            log.warning("[chat] schema fetch failed  sid=%s  error=%s", sess.session_id, exc)
+            combined_schema = None
+        if not combined_schema:
+            src_names = "、".join(getattr(s, "name", "未知数据源") for s in active_sources)
+            raise ValueError(
+                f"数据源「{src_names}」的连接已断开（可能由服务重启引起），"
+                "请在侧边栏重新连接数据源后再试。"
+            )
+
+    # Build (or reuse cached) MergedDataSource when ≥2 sources are active.
+    # This enables cross-source JOIN / UNION in the agent.
+    merged_source = sess.get_merged_source() if hasattr(sess, "get_merged_source") else None
+
     src_names = [getattr(s, "name", "?") for s in active_sources]
-    log.debug("[chat] build_agent  provider=%s  model=%s  active_sources=%s",
-              provider, cfg.model, src_names)
+    log.debug("[chat] build_agent  provider=%s  model=%s  active_sources=%s  merged=%s",
+              provider, cfg.model, src_names, merged_source is not None)
 
     return BusinessAgent(
         client=client, model=cfg.model, data_source=sess.data_source,
         combined_schema=combined_schema,
         all_sources=active_sources,
+        merged_source=merged_source,
         enable_thinking=cfg.enable_thinking,
         thinking_budget=cfg.thinking_budget,
         chart_store=chart_store,
@@ -166,6 +189,12 @@ def chat_stream(sid: str):
         dashboard_name    = d.get("dashboard_name", "")
         dashboard_widgets = d.get("dashboard_widgets") or []
 
+        # Per-session temporary instruction — only injected when enabled.
+        active_temp_prompt = (
+            getattr(sess, "temp_prompt", "")
+            if getattr(sess, "temp_prompt_enabled", False) else ""
+        )
+
         try:
             for event in agent.run(
                 message, list(sess.history), command=command,
@@ -175,6 +204,7 @@ def chat_stream(sid: str):
                 excel_tables=excel_tables, excel_filename=excel_filename,
                 report_title=report_title, report_sections=report_sections,
                 dashboard_name=dashboard_name, dashboard_widgets=dashboard_widgets,
+                temp_prompt=active_temp_prompt,
             ):
                 if sess.cancel_requested:
                     sess.cancel_requested = False
@@ -183,6 +213,18 @@ def chat_stream(sid: str):
                     return
 
                 etype = event.get("type")
+
+                # Provider/fallback safety net. BusinessAgent normally separates
+                # <think> during streaming, but never let an embedded block leak
+                # into the final answer if a compatibility path returns it whole.
+                if etype == "text":
+                    visible_text, embedded_reasoning = split_reasoning_tags(
+                        event.get("content", "")
+                    )
+                    if embedded_reasoning:
+                        collected_reasoning.append(embedded_reasoning)
+                        yield _sse({"type": "reasoning", "content": embedded_reasoning})
+                    event = {**event, "content": visible_text}
 
                 if etype == "chart_html":
                     cid = uuid.uuid4().hex

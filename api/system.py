@@ -35,6 +35,8 @@ PROTECTED = {
     "LLM/mcp_config.json",
     "data/datasource_config.json",
     ".env",
+    # Local compatibility patches — machine-specific, must not be overwritten.
+    "local_patches.py",
     # VCS / IDE metadata
     ".git",
     "__pycache__",

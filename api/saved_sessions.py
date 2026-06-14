@@ -10,6 +10,7 @@ from flask import Blueprint, request, jsonify
 
 from .state import session_manager, config_manager
 from data.connector import ExcelDataSource, CSVDataSource
+from agent.reasoning import split_reasoning_tags
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +52,19 @@ def _collect_chart_ids(history: list) -> list[str]:
             if cid not in ids:
                 ids.append(cid)
     return ids
+
+
+def _normalize_reasoning_history(history: list) -> list:
+    """Migrate legacy assistant messages that stored ``<think>`` in content."""
+    for msg in history:
+        if msg.get("role") != "assistant" or not msg.get("content"):
+            continue
+        visible, embedded = split_reasoning_tags(msg["content"])
+        if embedded:
+            msg["content"] = visible
+            prior = (msg.get("reasoning") or "").strip()
+            msg["reasoning"] = "\n\n".join(x for x in (prior, embedded) if x)
+    return history
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -248,13 +262,18 @@ def load_session(sid: str):
         return jsonify({"error": f"读取失败: {exc}"}), 500
 
     sess = session_manager.get_or_create(sid)
-    sess.history              = data.get("history", [])
+    sess.history              = _normalize_reasoning_history(data.get("history", []))
     keep_provider = (request.json or {}).get("keep_provider", False)
     if not keep_provider:
         sess.model_provider = data.get("model_provider", "")
     sess.total_input_tokens   = data.get("total_input_tokens", 0)
     sess.total_output_tokens  = data.get("total_output_tokens", 0)
     sess.last_prompt_tokens   = 0
+    sess.last_reasoning = next(
+        (m.get("reasoning", "") for m in reversed(sess.history)
+         if m.get("role") == "assistant" and m.get("reasoning")),
+        "",
+    )
 
     sess.chart_ids = _collect_chart_ids(sess.history)
 

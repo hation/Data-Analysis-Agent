@@ -18,6 +18,8 @@ import asyncio
 import json
 import logging
 import os
+import shutil
+import sys
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -26,8 +28,63 @@ from typing import Any, Dict, List, Optional, Tuple
 log = logging.getLogger(__name__)
 
 STDIO_ALLOWED_COMMANDS = frozenset({
-    "uvx", "uv", "npx", "node", "python", "python3", "deno"
+    "uvx", "uv", "npx", "npm", "node", "python", "python3", "deno"
 })
+
+
+def _resolve_command(command: str) -> str:
+    """
+    Resolve a whitelisted command name to an absolute executable path.
+
+    Windows note: asyncio.create_subprocess_exec uses CreateProcess, which does
+    NOT walk PATH the way a shell does and won't find .cmd/.bat shims (npx.cmd,
+    npm.cmd). So a bare "node" / "npx" works in a terminal but fails here. We use
+    shutil.which() (which honors PATH and PATHEXT) to find the real executable,
+    so users can configure just "node" instead of the full install path.
+
+    If the command is already an absolute/relative path, it's used as-is. If it
+    can't be resolved, the original string is returned and the spawn surfaces the
+    original error.
+    """
+    # Already a path (contains a separator) — trust it, don't re-resolve.
+    if os.path.sep in command or (os.altsep and os.altsep in command):
+        return command
+
+    resolved = shutil.which(command)
+    if resolved:
+        return resolved
+
+    # On Windows, also try resolving against the dir holding the python launcher
+    # and common Node install dirs, in case PATH isn't inherited (frozen app).
+    if sys.platform == "win32":
+        candidates = []
+        py_dir = os.path.dirname(sys.executable)
+        candidates.append(py_dir)
+        candidates.append(os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "nodejs"))
+        for base in candidates:
+            for ext in (".cmd", ".bat", ".exe", ""):
+                cand = os.path.join(base, command + ext)
+                if os.path.isfile(cand):
+                    return cand
+
+    return command
+
+
+def _build_stdio_argv(command: str, args: List[str]) -> List[str]:
+    """
+    Build the argv for create_subprocess_exec from a resolved command + args.
+
+    On Windows, .cmd/.bat shims (npx.cmd, npm.cmd) are batch scripts, not real
+    executables — CreateProcess refuses to launch them directly ("%1 is not a
+    valid Win32 application"). They must be run through the command interpreter,
+    so we prepend `cmd.exe /c`. Real .exe files (node.exe, uv.exe) are launched
+    directly.
+    """
+    if sys.platform == "win32" and command.lower().endswith((".cmd", ".bat")):
+        comspec = os.environ.get("ComSpec", "cmd.exe")
+        return [comspec, "/c", command, *args]
+    return [command, *args]
+
 
 STATUS_DISCONNECTED = "disconnected"
 STATUS_CONNECTING   = "connecting"
@@ -111,10 +168,14 @@ class BaseTransport(ABC):
 
 class StdioTransport(BaseTransport):
     def __init__(self, command: str, args: List[str], env: Dict[str, str]):
-        basename = os.path.basename(command)
+        # Validate against the basename (without extension) so both a bare
+        # "node" and a full "C:\Program Files\nodejs\node.exe" pass the whitelist.
+        basename = os.path.splitext(os.path.basename(command))[0]
         if basename not in STDIO_ALLOWED_COMMANDS:
             raise ValueError(f"命令 '{command}' 不在白名单中")
-        self._command = command
+        # Resolve "node"/"npx"/... to an absolute executable path. On Windows
+        # create_subprocess_exec won't find bare command names or .cmd shims.
+        self._command = _resolve_command(command)
         self._args = args
         self._env = {**os.environ.copy(), **env}
         self._proc: Optional[asyncio.subprocess.Process] = None
@@ -122,13 +183,21 @@ class StdioTransport(BaseTransport):
         self._lock = asyncio.Lock()
 
     async def connect(self) -> None:
-        self._proc = await asyncio.create_subprocess_exec(
-            self._command, *self._args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=self._env,
-        )
+        argv = _build_stdio_argv(self._command, self._args)
+        try:
+            self._proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=self._env,
+            )
+        except (FileNotFoundError, NotADirectoryError) as e:
+            raise ConnectionError(
+                f"无法启动命令 '{self._command}': {e}. "
+                f"请确认已安装对应运行时（如 Node.js / Python），"
+                f"或在配置中填写可执行文件的完整路径。"
+            )
         await self._initialize()
 
     async def _initialize(self) -> None:

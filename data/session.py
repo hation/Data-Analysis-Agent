@@ -30,6 +30,13 @@ class ChatSession:
     chart_ids: List[str] = field(default_factory=list)
     # PPT color scheme — persisted so it survives multiple PPT requests
     ppt_color_scheme: str = "mckinsey"
+    # ── Temporary per-session prompt ───────────────────────────────────────────
+    # A free-form instruction the user sets for THIS conversation only. When
+    # enabled, it is appended to the system prompt on every turn (see agent.run).
+    # `temp_prompt` holds the processed text that will be injected;
+    # `temp_prompt_enabled` is the on/off switch.
+    temp_prompt: str = ""
+    temp_prompt_enabled: bool = False
     # TTL tracking — updated on every access
     last_accessed: datetime = field(default_factory=datetime.now)
     # Last turn's reasoning chain summary — injected into the next turn's messages
@@ -37,6 +44,9 @@ class ChatSession:
     # Cached merged schema string — cleared whenever data sources change so we
     # don't serve a stale schema after upload/connect/disconnect.
     _combined_schema_cache: Optional[str] = None
+    # Cached MergedDataSource — rebuilt whenever data sources change.
+    # Only populated when ≥2 sources are active.
+    _merged_source_cache: Optional[object] = None
 
     # ── Multi-source API ───────────────────────────────────────────────────────
 
@@ -57,6 +67,7 @@ class ChatSession:
             self._sources = [{"id": sid, "source": source}]
             self._active_ids = [sid]
         self._combined_schema_cache = None
+        self._invalidate_merged_source()
 
     def _active_entries(self) -> List[Dict[str, Any]]:
         """Ordered list of active source entries."""
@@ -70,6 +81,7 @@ class ChatSession:
         if sid not in self._active_ids:
             self._active_ids.append(sid)
         self._combined_schema_cache = None
+        self._invalidate_merged_source()
         log.info("[session] source added  session=%s  source=%s  id=%s  total=%d",
                  self.session_id, getattr(source, "name", "?"), sid, len(self._sources))
         return sid
@@ -83,6 +95,7 @@ class ChatSession:
         if removed_ok:
             name = getattr(removed["source"], "name", "?") if removed else "?"
             self._combined_schema_cache = None
+            self._invalidate_merged_source()
             log.info("[session] source removed  session=%s  source=%s  id=%s  remaining=%d",
                      self.session_id, name, source_id, len(self._sources))
         return removed_ok
@@ -99,6 +112,7 @@ class ChatSession:
             self._active_ids.append(source_id)
             new_state = True
         self._combined_schema_cache = None
+        self._invalidate_merged_source()
         log.info("[session] source toggled  session=%s  source=%s  id=%s  active=%s",
                  self.session_id, getattr(entry["source"], "name", "?"), source_id, new_state)
         return new_state
@@ -117,7 +131,16 @@ class ChatSession:
         ]
 
     def get_combined_schema(self) -> str:
-        """Merged schema from all ACTIVE sources."""
+        """Merged schema from all ACTIVE sources.
+
+        When multiple sources are active and any two share the same table name,
+        each table is prefixed with ``src{N}__`` (1-based) so that the LLM can
+        unambiguously reference it.  Single-source behaviour is unchanged.
+
+        The prefix is understood by ``BusinessAgent._route_query`` and
+        ``_tool_query_data`` / ``_tool_create_analysis_table``, which strip it
+        before passing the SQL to the individual DataSource.
+        """
         active = self._active_entries()
         if not active:
             # Fallback: use all sources if none activated
@@ -126,11 +149,85 @@ class ChatSession:
             return ""
         if len(active) == 1:
             return active[0]["source"].get_schema()
-        parts = []
+
+        # Collect all table names across sources to detect collisions.
+        all_table_names: list[str] = []
+        src_tables: list[list[str]] = []
         for entry in active:
+            try:
+                tables = entry["source"].list_tables()
+            except Exception:
+                tables = []
+            src_tables.append(tables)
+            all_table_names.extend(tables)
+
+        collision = len(all_table_names) != len(set(all_table_names))
+
+        parts = []
+        for idx, entry in enumerate(active, start=1):
             src = entry["source"]
-            parts.append(f"=== 数据源: {getattr(src, 'name', '未命名')} ===\n{src.get_schema()}")
+            raw_schema = src.get_schema()
+            if collision:
+                # Prefix every "Table: <name>" line with src{N}__ so the LLM
+                # (and the router) can tell tables apart across sources.
+                import re as _re
+                def _add_prefix(m):
+                    return f"Table: src{idx}__{m.group(1)}"
+                raw_schema = _re.sub(r"Table:\s+(\S+)", _add_prefix, raw_schema)
+                note = (
+                    f"  [NOTE: prefix all table names with src{idx}__ when writing SQL, "
+                    f"e.g. SELECT * FROM \"src{idx}__<table_name>\"]"
+                )
+            else:
+                note = ""
+            header = f"=== 数据源 {idx}: {getattr(src, 'name', '未命名')} ==="
+            parts.append(f"{header}{note}\n{raw_schema}")
         return "\n\n".join(parts)
+
+    # ── Merged source (cross-source JOIN support) ──────────────────────────────
+
+    def _invalidate_merged_source(self) -> None:
+        """Close and drop the cached MergedDataSource.
+
+        Must be called whenever the active source list changes so the merged
+        connection is rebuilt with up-to-date data on next access.
+        """
+        ms = getattr(self, "_merged_source_cache", None)
+        if ms is not None:
+            try:
+                ms.invalidate()
+            except Exception:
+                pass
+            self._merged_source_cache = None
+
+    def get_merged_source(self):
+        """Return a MergedDataSource covering all active sources.
+
+        The object is created on first call and cached until the source list
+        changes.  Returns None when fewer than 2 sources are active (no merge
+        needed) or when construction fails.
+        """
+        active = self._active_entries()
+        if len(active) < 2:
+            return None
+
+        if self._merged_source_cache is not None:
+            return self._merged_source_cache
+
+        try:
+            from data.merged_source import MergedDataSource
+            src_list = [e["source"] for e in active]
+            ms = MergedDataSource(src_list)
+            self._merged_source_cache = ms
+            log.info(
+                "[session] MergedDataSource built  session=%s  sources=%s",
+                self.session_id,
+                [getattr(s, "name", "?") for s in src_list],
+            )
+            return ms
+        except Exception as exc:
+            log.warning("[session] MergedDataSource build failed: %s", exc)
+            return None
 
     def add_user(self, text: str):
         self.history.append({"role": "user", "content": text})
@@ -172,7 +269,14 @@ class ChatSession:
             self.history.append(entry)
 
     def add_assistant(self, text: str, reasoning: str = "", chart_ids: list = None):
+        from agent.reasoning import split_reasoning_tags
+        text, embedded_reasoning = split_reasoning_tags(text or "")
+        reasoning = "\n\n".join(
+            part for part in ((reasoning or "").strip(), embedded_reasoning) if part
+        )
         msg = {"role": "assistant", "content": text}
+        if reasoning:
+            msg["reasoning"] = reasoning
         # Record the charts produced in this turn so they can be restored when
         # the conversation is reloaded from disk.
         if chart_ids:

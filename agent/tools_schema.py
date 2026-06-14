@@ -236,7 +236,9 @@ AGENT_TOOLS = [
                         "description": (
                             "Maps chart field roles to column names per the chart's data_format. "
                             'E.g. {"x": "month", "y": "revenue"} or '
-                            '{"label": "product", "value": "sales"}.'
+                            '{"label": "product", "value": "sales"}. '
+                            "Values must be SQL result column names (or a list of column names). "
+                            "Do not put colors, display-name objects, or raw data arrays in field_mapping."
                         ),
                     },
                     "title": {
@@ -755,4 +757,3 @@ def get_tools_with_mcp(mcp_manager=None) -> list:
     except Exception:
         mcp_schemas = []
     return AGENT_TOOLS + mcp_schemas
-

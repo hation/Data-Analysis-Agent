@@ -92,10 +92,12 @@ def _validate_sql_ast(sql: str) -> Optional[str]:
     stmt = statements[0]
 
     # ── Top-level statement type ───────────────────────────────────────────────
-    if not isinstance(stmt, (exp.Select, exp.With)):
+    # sqlglot represents SELECT ... UNION SELECT ... as exp.Union. All read-only
+    # query expressions inherit from exp.Query, while INSERT/UPDATE/etc. do not.
+    if not isinstance(stmt, exp.Query):
         stmt_type = type(stmt).__name__
         return (
-            f"只允许 SELECT / WITH 查询，检测到: {stmt_type}。"
+            f"只允许 SELECT / WITH / UNION 查询，检测到: {stmt_type}。"
             "请使用 SELECT 语句查询数据。"
         )
 

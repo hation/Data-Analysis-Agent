@@ -407,23 +407,14 @@ to switch between models.
 
 # 🗺️ Project Milestones
 
-> **Current version `v5.0`** · June 4, 2026
+> **Current version `v5.1`** · June 13, 2026
 
-This is a major version update covering four directions: **multi-source data**, **intelligent interaction**, **stability fixes**, and **security hardening**.
+This update focuses on multi‑data‑source joint analysis and the stability experience of data ingestion.
 
----
-
-## 📌 Update Summary
-
-1. Multi-source data support
-2. SQL database connection improvements
-3. Data preview upgrades
-4. AI proactive questioning
-5. Auto-save conversations
-6. Improved MCP tool integration experience
-7. Prevent AI from fabricating data
-8. Knowledge base trigger fix
-9. Other experience improvements
+1. Enhanced cross‑data‑source joint analysis
+2. Excel data ingestion fixes
+3. Optimized data‑source disconnection prompts
+4. Improved model testing experience
 
 ---
 

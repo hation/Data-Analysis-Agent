@@ -5,6 +5,7 @@ This module is imported first (no deps on other agent sub-modules) so that
 tools_schema.py can import _ANALYZE_GUIDE and _CHART_IDS from here.
 """
 import os
+import re
 import sys
 from typing import Dict
 
@@ -98,6 +99,16 @@ Behaviour rules:
 2. Use exact column and table names from the schema — never guess.
    • If a query returns 0 rows or an error, report that explicitly — do NOT substitute
      fabricated data or infer what the result "should" look like.
+2b. MULTI-SOURCE QUERIES (src{N}__ prefixes):
+   When multiple data sources are active and share the same table name, every table
+   is prefixed in the schema as ``src1__tablename``, ``src2__tablename``, etc.
+   • Always use the full prefixed name in SQL, e.g.:
+       SELECT * FROM "src1__月度表"
+       SELECT a.*, b.* FROM "src1__表A" a JOIN "src2__表B" b ON a.id = b.id
+   • Cross-source JOINs and UNIONs are fully supported — both prefixed tables
+     run in the same query engine.
+   • Never strip or guess the prefix — use exactly what appears in the schema.
+
 2a. UNNAMED COLUMNS (col, col_2, col_3 …):
    When the schema contains auto-named columns like col, col_2, col_3, it means the
    original file had blank column headers. The schema will include 2 sample rows to
@@ -156,6 +167,8 @@ Chart generation workflow — MANDATORY STEPS (do NOT skip):
 field_mapping rules — CRITICAL:
 - Use EXACTLY the required_roles keys returned by select_chart as your field_mapping keys.
 - y can be a list of column names for multi-series: {"x":"month","y":["rev","cost"]}
+- field_mapping values are SQL result column names only. Never put {name,color} objects,
+  display labels, or raw data arrays under series/y/categories.
 - Parallel coordinates: dimensions must be a list: {"dimensions":["col1","col2","col3"]}
 - If a required role column is missing from the SQL result, the chart will fail — ensure SQL SELECTs all needed columns.
 
@@ -614,3 +627,52 @@ def get_system_prompt() -> str:
     entry takes effect on the next message without restarting the server.
     """
     return _build_system_prompt()
+
+
+# ── Temporary per-session prompt ──────────────────────────────────────────────
+
+# Hard cap on the injected temp-prompt length so a single conversation-scoped
+# instruction can't blow up the context window. ~4000 chars ≈ 1100 tokens.
+TEMP_PROMPT_MAX_CHARS = 4000
+
+
+def strip_temp_prompt_thinking(temp_prompt: str) -> str:
+    """Remove reasoning blocks accidentally emitted by thinking models."""
+    text = (temp_prompt or "").strip()
+    if not text:
+        return ""
+
+    # Most OpenAI-compatible reasoning models wrap hidden reasoning this way.
+    text = re.sub(r"<think\b[^>]*>[\s\S]*?</think\s*>", "", text,
+                  flags=re.IGNORECASE)
+
+    # If a provider emits an opening tag without closing it, everything after
+    # that tag is reasoning rather than a usable instruction.
+    unclosed = re.search(r"<think\b[^>]*>", text, flags=re.IGNORECASE)
+    if unclosed:
+        text = text[:unclosed.start()]
+
+    # Remove orphan closing tags left by malformed provider output.
+    text = re.sub(r"</think\s*>", "", text, flags=re.IGNORECASE)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def build_temp_prompt_section(temp_prompt: str) -> str:
+    """Wrap a user's per-session temporary instruction for system-prompt injection.
+
+    Returns an empty string when there is nothing to inject. The wrapper makes
+    the priority explicit: the temp instruction overrides ordinary default
+    behaviour, but must never override the ABSOLUTE no-fabrication rule or the
+    strict output-format rules above it in the system prompt.
+    """
+    text = strip_temp_prompt_thinking(temp_prompt)
+    if not text:
+        return ""
+    if len(text) > TEMP_PROMPT_MAX_CHARS:
+        text = text[:TEMP_PROMPT_MAX_CHARS] + "\n…[临时指令已截断]"
+    return (
+        "\n\n## 本次会话临时指令（用户为当前对话设定）\n"
+        "以下指令由用户为这次对话临时设定，优先级高于一般默认行为；"
+        "但绝对不可违反上文的「ABSOLUTE RULE — NO FABRICATION」与输出格式规则。\n"
+        f"{text}"
+    )
