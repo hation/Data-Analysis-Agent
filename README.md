@@ -1,17 +1,21 @@
 # 智能商业分析 Agent
 
+<p align="right"><a href="./README_EN.md">English</a></p>
+
 <p align="center">
-  <img src="./Images/Banner.png" alt="智能商业分析 Agent Banner" width="100%" />
+  <img src="./Information/assets/Banner.png" alt="智能商业分析 Agent Banner" width="100%" />
 </p>
 
-<p align="right"><a href="./README_EN.md">English</a></p>
+<div align="center">
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)
 ![Flask](https://img.shields.io/badge/Backend-Flask-black.svg)
 ![Plotly](https://img.shields.io/badge/Visualization-Plotly-3F4F75.svg)
 ![LLM](https://img.shields.io/badge/LLM-OpenAI%20Compatible-green.svg)
-![Charts](https://img.shields.io/badge/Charts-43_Types-orange.svg)
+![Charts](https://img.shields.io/badge/Charts-41_Types-orange.svg)
 ![License](https://img.shields.io/badge/License-Apache%202.0-yellow.svg)
+
+</div>
 
 > 一个面向商业分析场景的 AI Agent。  
 > 连接数据源后，用户只需使用自然语言提问，系统即可自动完成：
@@ -21,13 +25,15 @@
 > - 图表生成
 > - 业务洞察分析
 
+> 💬 **官方交流群：** QQ 群 `991636855` · [Telegram 群](https://t.me/+cdRNfS68u9BlYjJl)
 
 <p align="center">
+  <a href="#quickstart">⚡ 快速体验</a> ·
   <a href="#features">✨ 项目亮点</a> ·
   <a href="#agent-manager">🧩 推荐管理</a> ·
-  <a href="#install">⚙️ 快速安装</a> ·
+  <a href="#install">⚙️ 安装说明</a> ·
   <a href="#examples">📈 使用示例</a> ·
-  <a href="#llm-config">🤖 LLM配置说明</a> ·
+  <a href="#llm-config">🤖 LLM配置</a> ·
   <a href="#faq">❓ FAQ</a>
 </p>
 
@@ -36,18 +42,53 @@
 
 <br>
 
-- [赞助商](#sponsors)
-- [项目亮点](#features)
-- [核心能力](#capabilities)
-- [安装方式](#install)
-- [斜杠命令](#commands)
-- [使用示例](#examples)
-- [LLM 配置说明](#llm-config)
-- [项目里程碑](#roadmap)
-- [FAQ](#faq)
-- [Contributor](#contributor)
-- [License](#license)
-- [项目目标](#goal)
+- [⚡ 快速体验](#quickstart)
+- [🙏 赞助商](#sponsors)
+- [✨ 项目亮点](#features)
+- [🧠 核心能力](#capabilities)
+- [⚙️ 安装说明](#install)
+- [🛠 斜杠命令](#commands)
+- [📈 使用示例](#examples)
+- [🤖 LLM 配置说明](#llm-config)
+- [🗺️ 项目里程碑](#roadmap)
+- [❓ FAQ](#faq)
+- [🤝 贡献指南](#contributing)
+- [📄 License](#license)
+- [⭐ 项目目标](#goal)
+
+</details>
+
+---
+
+<a id="quickstart"></a>
+
+# ⚡ 30 秒快速体验
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/Zafer-Liu/Data-Analysis-Agent.git
+cd Data-Analysis-Agent
+
+# 2. 安装依赖
+pip install -r requirements.txt
+
+# 3. 启动
+python app.py
+
+# 4. 浏览器打开 http://localhost:5001
+# 5. 在侧边栏配置 API Key，上传数据，开始提问！
+```
+
+> 💡 Windows 用户也可以直接从 [GitHub Releases](https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest) 下载 exe 安装包。
+
+```text
+试试问：最近三个月销售额趋势如何？
+```
+
+<details>
+<summary>📖 完整安装方式（4种）</summary>
+
+详见下方 [安装说明](#install) 章节，支持 exe、压缩包、在线安装、Git Clone 四种方式。
 
 </details>
 
@@ -62,11 +103,6 @@
 <table>
 <tr>
 <td width="50%" align="center" valign="top">
-<a href="https://doloffer.com/">
-<img src="./Images/DolOffer.png" alt="DolOffer Logo" height="70">
-</a>
-<br>
-<br>
 <a href="https://doloffer.com/"><strong>DolOffer</strong></a>
 <br>
 <br>
@@ -76,11 +112,6 @@
 <a href="https://github.com/Doloffer-g/guide">了解更多 →</a>
 </td>
 <td width="50%" align="center" valign="top">
-<a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=data-analysis-agent">
-<img src="./Images/ATLAS%20CLOUD.png" alt="Atlas Cloud Logo" height="70">
-</a>
-<br>
-<br>
 <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=data-analysis-agent"><strong>Atlas Cloud</strong></a>
 <br>
 <br>
@@ -94,12 +125,11 @@
 
 ---
 
-
 <a id="features"></a>
 
 # ✨ 项目亮点
 
-智析Agent是一个对话式商业数据分析智能体，目标是让非技术用户也能像“聊天”一样完成数据分析。
+智析Agent是一个对话式商业数据分析智能体，目标是让非技术用户也能像"聊天"一样完成数据分析。
 
 上传 Excel / CSV，或连接数据库后，用户可以直接提问：
 
@@ -121,6 +151,25 @@
 并通过 **SSE（Server-Sent Events）流式输出**，实时展示分析过程。
 
 ---
+
+<a id="demo"></a>
+
+## 🎬 产品演示
+
+> 一图胜千言，一段演示胜万图。
+
+<div align="center">
+
+https://github.com/user-attachments/assets/f298aae2-6238-475e-9d85-1da33b7b847e
+
+</div>
+
+<p align="center">
+<em>演示视频 - 中文</em>
+</p>
+
+---
+
 <a id="agent-manager"></a>
 
 # 🧩 推荐管理方式：智管-Agent Manager
@@ -160,52 +209,49 @@
 
 ## 1️⃣ 自然语言数据分析
 
-无需编写 SQL,只需输入自然语言:
+无需编写 SQL，只需输入自然语言：
 
 ```text
 今年每个月的订单量趋势
 ```
 
-系统即可自动完成:
+系统即可自动完成：
 
 - SQL 生成
 - 数据查询
 - 图表推荐
 - 分析总结
 
-![Data Query](Images/Data_query.png)
-
+![Data Query](./Information/assets/Data_query.png)
 
 ## 2️⃣ 多数据源支持
 
-支持上传和连接多种数据源:
+支持上传和连接多种数据源：
 
-- **文件**:Excel / CSV
-- **数据库**:SQLite、MySQL、PostgreSQL、SQL Server
-- **未来计划**:DuckDB、Spark
+- **文件**：Excel / CSV
+- **数据库**：SQLite、MySQL、PostgreSQL、SQL Server
+- **未来计划**：DuckDB、Spark
 
-![Data Preview](Images/Data_preview.png)
-
+![Data Preview](./Information/assets/Data_preview.png)
 
 ## 3️⃣ 智能图表系统
 
-系统会根据查询结果,从以下 6 大类图表中自动推荐最合适的一种:
+系统会根据查询结果，从以下 **6 大类 43 种图表**中自动推荐最合适的一种：
 
 | 分类 | 图表类型 |
 |---|---|
-| **对比类** COMPARING | Marimekko_ABS（马里美科-绝对值）、Marimekko_PCT（马里美科-百分比）、Bar_Chart（柱状图）、Grouped_Bar_Chart（分组柱状图）、Stacked_Bar_Chart（堆叠柱状图）、Diverging_Bar_Chart（对比条形图）、Dot_Plot（点图）、Waffle（华夫格）、Bullet_Chart（靶心图）、Sankey_Chart（桑基图）、Heatmap（热力图）、Waterfall（瀑布图） |
-| **时间趋势类** TIME | Line_Chart（折线图）、Circular_Line_Chart（圆形折线图）、Slope_Chart（斜率图）、Sparkline（迷你图）、Bump_Chart（凹凸图）、Cycle_Chart（周期图）、Area_Chart（面积图）、Stacked_Area_Chart（堆叠面积图）、Horizon_Chart（地平线图）、Connected_Scatter（连线散点图） |
-| **分布类** DISTRIBUTION | Histogram_Pareto_chart（直方图与帕累托图）、Pyramid_Chart（金字塔图）、Error_Bar_Chart（误差条形图）、Box-and-Whisker_Plot（箱线图）、Violin_Chart（小提琴图）、Ridgeline_Plot（山脊线图）、Beeswarm_Plot（分簇散点图）、stem_leaf（茎叶图） |
-| **地理类** GEOSPATIAL | Flow_Map（动态流向图）、Dot_Density_Map（点密度地图）、Choropleth_Map（面量图） |
-| **关系类** RELATIONSHIP | Scatter_Plot（散点图）、Bubble_Plot（气泡图）、Radar_Charts（雷达图）、Chord_Diagram（弦图）、Arc_Chart（弧图）、Network_Diagram（网络图）、Parallel_Coordinates_Plot（平行坐标图） |
-| **占比类** PART-TO-WHOLE | Treemap（矩形树图）、Sunburst_Diagram（旭日图）、Nightingale_Chart（南丁格尔玫瑰图）、Pie_Chart（饼图） |
+| **对比类** | Marimekko_ABS、Marimekko_PCT、Bar_Chart、Grouped_Bar_Chart、Stacked_Bar_Chart、Diverging_Bar_Chart、Dot_Plot、Waffle、Bullet_Chart、Sankey_Chart、Heatmap、Waterfall |
+| **时间趋势类** | Line_Chart、Circular_Line_Chart、Slope_Chart、Sparkline、Bump_Chart、Cycle_Chart、Area_Chart、Stacked_Area_Chart、Horizon_Chart、Connected_Scatter |
+| **分布类** | Histogram_Pareto_chart、Pyramid_Chart、Error_Bar_Chart、Box-and-Whisker_Plot、Violin_Chart、Ridgeline_Plot、Beeswarm_Plot、stem_leaf |
+| **地理类** | Flow_Map、Dot_Density_Map、Choropleth_Map |
+| **关系类** | Scatter_Plot、Bubble_Plot、Radar_Charts、Chord_Diagram、Arc_Chart、Network_Diagram、Parallel_Coordinates_Plot |
+| **占比类** | Treemap、Sunburst_Diagram、Nightingale_Chart、Pie_Chart |
 
-![Auto Generated](Images/Auto_generated_image.png)
-
+![Auto Generated](./Information/assets/Auto_generated_image.png)
 
 ## 4️⃣ SSE 流式分析体验
 
-分析过程实时可见:
+分析过程实时可见：
 
 ```text
 [1/4] 正在读取数据结构...
@@ -214,19 +260,18 @@
 [4/4] 正在生成图表与洞察...
 ```
 
-相比传统 BI 工具,更透明、更具交互感。
-
+相比传统 BI 工具，更透明、更具交互感。
 
 ## 5️⃣ 多模型兼容
 
-支持以下模型服务:
+支持以下模型服务：
 
 - DeepSeek
 - OpenAI
 - AtlasCloud
 - 任意 OpenAI SDK Compatible API
 
-并支持自定义 `base_url`、`model`、`api_key`。默认配置如下:
+并支持自定义 `base_url`、`model`、`api_key`。默认配置如下：
 
 | Provider | Default Model |
 |---|---|
@@ -234,77 +279,68 @@
 | OpenAI | `gpt-4o-mini` |
 | AtlasCloud | `deepseek-v4-pro` |
 
-
 ## 6️⃣ 数据分析
 
-目前支持的数据分析功能包括:
+目前支持的数据分析功能包括：
 
-- 异常值处理(截尾、缩尾处理)
+- 异常值处理（截尾、缩尾处理）
 - 十分位分组分析
 - K-Means 聚类分析
 - 决策树建模
 - ……
 
-![Analyze](Images/Analyze.png)
-
-
 ## 7️⃣ 报告生成
 
-支持导出:
+支持导出：
 
 - 整理后的 Excel 表格
 - docx 格式报告
 - 内置风格 PPT
 
-![Output](Images/Output.png)
-
-
 ## 8️⃣ MCP 拓展
 
-支持连接本地或远程 MCP,拓展 Agent 技能。
+支持连接本地或远程 MCP，拓展 Agent 技能。
 
-![MCP](Images/MCP1.png)
+![MCP](./Information/assets/MCP1.png)
 
-- 教程:[MCP_tutorial](Information/MCP_tutorial.md)
-
+- 教程：[MCP_tutorial](./Information/MCP_tutorial.md)
 
 ## 9️⃣ 知识库输入
 
-支持上传业务知识,让 Agent 更加了解你的数据。
+支持上传业务知识，让 Agent 更加了解你的数据。
 
-![repository](Images/repository2.png)
+![repository](./Information/assets/repository2.png)
 
-- 教程:[repository_tutorial](Information/repository_tutorial.md)
-
+- 教程：[repository_tutorial](./Information/repository_tutorial.md)
 
 ---
-
 
 <a id="install"></a>
 
-# ⚙️ 安装方式
-
----
+# ⚙️ 安装说明
 
 ### 🖥️ 方式 1：Windows 安装包（最简单，推荐）
 
-从 [Releases](https://github.com/Zafer-Liu/Data-Analysis-Agent/tree/main/Releases) 下载最新版本：
+从 [GitHub Releases](https://github.com/Zafer-Liu/Data-Analysis-Agent/tree/main/Releases) 下载最新版本：
 
 | 平台 | 文件 |
 |------|------|
-| Windows | `BusinessAnalyticsAgent.exe` |
+| Windows | `BusinessAnalyticsAgent_v1.0.0_LTS.exe` |
 
-双击安装包，按提示安装即可。
+> **前置要求：Python 3.10+、Windows 10 / 11 64 位。**
+
+双击安装包并按提示安装。安装完成后，从桌面或开始菜单启动 **Business Analytics Agent**。
+
 ---
 
 ### 方式 2：下载压缩包（推荐新手，跨平台）
 
 > **前置要求：Python 3.10+**  
-> 还没装？[点此下载](https://www.python.org/downloads/)（Windows 安装时请勾选 **”Add Python to PATH”**）
+> 还没装？[点此下载](https://www.python.org/downloads/)（Windows 安装时请勾选 **"Add Python to PATH"**）
 
 **第一步：下载并解压**
 
-![Download installation package](Images/package.png)
+![Download installation package](./Information/assets/package.png)
 
 **第二步：双击启动**
 
@@ -333,15 +369,15 @@ xattr -d com.apple.quarantine ~/Downloads/Data-Analysis-Agent/start.command
 
 **第三步：启动后浏览器自动打开** `http://localhost:5001`
 
-![Download installation package2](Images/package2.png)
+![Download installation package2](./Information/assets/package2.png)
 
 **第四步：配置 API Key**
 
-![Configure the API3](Images/Deepseek3.png)
+![Configure the API3](./Information/assets/Deepseek3.png)
 
 **第五步：后续更新**
 
-![Update](Images/Update.png)
+![Update](./Information/assets/Update.png)
 
 ---
 
@@ -373,7 +409,7 @@ data-analysis-agent
 
 如提示 `command not found`，将以下内容添加到 `~/.zshrc` 或 `~/.bashrc`，然后重启终端：
 ```bash
-export PATH=”$HOME/.local/bin:$PATH”
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ---
@@ -389,10 +425,11 @@ python app.py
 
 浏览器打开 `http://localhost:5001`，然后配置 API Key（同方式 1）。
 
-
 ---
 
-# 🛠 斜杠命令 
+<a id="commands"></a>
+
+# 🛠 斜杠命令
 
 | Command | Status | Description |
 |---|---|---|
@@ -413,6 +450,7 @@ python app.py
 ---
 
 <a id="examples"></a>
+
 # 📈 使用示例
 
 ## 示例 1：趋势分析
@@ -461,9 +499,7 @@ python app.py
 
 <a id="llm-config"></a>
 
-# 🤖 LLM配置说明
-
-## LLM 配置
+# 🤖 LLM 配置说明
 
 在侧边栏 ⚙ 中填写：
 
@@ -481,7 +517,7 @@ Model
 
 # 🗺️ 项目里程碑
 
-> **当前版本 `v5.1`** · 2026 年 6 月 13 日
+> **当前版本 `v1.0.0 LTS`** · 2026 年 6 月 20 日
 
 本次升级聚焦于 **多数据源联合分析、数据接入稳定性体验**。
 
@@ -494,8 +530,8 @@ Model
 
 ## 📖 详细更新日志
 
-- [Version Update Log（中文）](Information/Version_Update_Log.md)
-- [Version Update Log (English)](Information/Version_Update_Log_EN.md)
+- [Version Update Log（中文）](./Information/Version_Update_Log.md)
+- [Version Update Log (English)](./Information/Version_Update_Log_EN.md)
 
 ---
 
@@ -573,13 +609,13 @@ xattr -d com.apple.quarantine /你的路径/start.command
 
 如果提示：
 
-> “无法打开，因为无法验证开发者”
+> "无法打开，因为无法验证开发者"
 
 可以：
 
 1. 右键点击 `start.command`
-2. 选择“打开”
-3. 再次点击“打开”
+2. 选择"打开"
+3. 再次点击"打开"
 
 </details>
 
@@ -604,11 +640,11 @@ xattr -d com.apple.quarantine /你的路径/start.command
 
 这里以 DeepSeek 为例：
 
-![Configure the API1](Images/Deepseek1.png)
+![Configure the API1](./Information/assets/Deepseek1.png)
 
-![Configure the API2](Images/Deepseek2.png)
+![Configure the API2](./Information/assets/Deepseek2.png)
 
-![Configure the API3](Images/Deepseek3.png)
+![Configure the API3](./Information/assets/Deepseek3.png)
 
 </details>
 
@@ -672,22 +708,64 @@ outputs/charts
 
 ---
 
-<a id="contributor"></a>
+<a id="contributing"></a>
 
-# 🚀 寻找一起改变世界的 Contributor
+# 🤝 贡献指南
+
+我们欢迎任何形式的贡献！无论是修复 Bug、改进文档还是添加新功能。
+
+### 贡献流程
+
+1. **Fork 本仓库**
+2. **创建特性分支**
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
+3. **提交你的更改**
+   ```bash
+   git add .
+   git commit -m "feat: 添加某某功能"
+   ```
+   建议使用 [Conventional Commits](https://www.conventionalcommits.org/) 规范提交信息。
+4. **推送到远程**
+   ```bash
+   git push origin feature/your-feature-name
+   ```
+5. **开启 Pull Request**
+   - 描述你的改动内容
+   - 如果是功能新增，请附上截图或录屏
+   - 关联相关的 Issue（如有）
+
+### 代码规范
+
+- Python 代码遵循 [PEP 8](https://pep8.org/)
+- 提交前运行 `flake8` 检查代码风格
+- 新增功能请添加对应的测试
+- 保持 Commit 信息清晰、简洁
+
+### 报告 Bug
+
+请使用 [GitHub Issues](https://github.com/Zafer-Liu/Data-Analysis-Agent/issues) 报告 Bug，并包含：
+
+- 📋 复现步骤
+- 🎯 预期行为
+- ⚠️ 实际行为
+- 📸 截图（如适用）
+- 💻 环境信息（操作系统、Python 版本）
+
+---
+
+## 🚀 寻找一起改变世界的 Contributor
 
 一个好的开源项目，从来不是一个人的独角戏。  
-我们正在打造一个**能真正应对复杂业务场景**的数据工具——它需要在海量数据中极速穿梭，在多表逻辑间游刃有余，在可视化看板上洞察先机。  
-而现在，我们遇到了几个极富挑战、也极能体现技术价值的问题。如果你热爱解决“硬核”问题，这里正需要你：
-
----
+我们正在打造一个**能真正应对复杂业务场景**的数据工具——它需要在海量数据中极速穿梭，在多表逻辑间游刃有余，在可视化看板上洞察先机。
 
 ### 急需你一起来攻克这些难题：
-- **多 Sheets 场景下的表间逻辑判断优化** —— 如何智能梳理几十张表之间的依赖与计算？
-- **可视化看板的交互与性能优化** —— 让数据故事讲得更流畅、更直观、更震撼。
-- **特殊业务场景下的模型能力提升** —— 那些通用工具搞不定的边缘业务。
-- **远程服务器调用** —— 搭建远程GPU调用框架。
----
+
+- **多 Sheets 场景下的表间逻辑判断优化** — 如何智能梳理几十张表之间的依赖与计算？
+- **可视化看板的交互与性能优化** — 让数据故事讲得更流畅、更直观、更震撼。
+- **特殊业务场景下的模型能力提升** — 那些通用工具搞不定的边缘业务。
+- **远程服务器调用** — 搭建远程 GPU 调用框架。
 
 ### 为什么值得你加入？
 
@@ -696,15 +774,13 @@ outputs/charts
 - 自由贡献，灵活协作——提 PR 或直接沟通，完全由你
 - 优秀 Contributor 将有机会成为项目 Committer
 
----
-
 ### 如何加入？
 
 - 直接 **Pull Request**，我们会在 24 小时内 review
-- 或联系邮箱：`rusboldtshanti34@gmail.com`（请备注“Contributor+擅长方向”）
+- 或联系邮箱：`rusboldtshanti34@gmail.com`（请备注"Contributor + 擅长方向"）
+- 加入官方交流群：QQ 群 `991636855` 或 [Telegram 群](https://t.me/+cdRNfS68u9BlYjJl)
+
 ---
-
-
 
 <a id="license"></a>
 
@@ -718,7 +794,14 @@ Apache License 2.0
 
 # ⭐ 项目目标
 
-把过程交给“智析”，把时间留给思考。
+把过程交给"智析"，把时间留给思考。
 
+---
 
+<div align="center">
 
+⭐️ 如果这个项目对你有帮助，请给它一个星标！
+
+Made with ❤️ by [Zafer-Liu](https://github.com/Zafer-Liu)
+
+</div>

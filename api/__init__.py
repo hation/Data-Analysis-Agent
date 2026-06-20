@@ -39,6 +39,9 @@ def create_app() -> Flask:
     from .mcp             import bp as mcp_bp
     from .dashboard       import bp as dashboard_bp
     from .knowledge       import bp as knowledge_bp
+    from .workspace       import bp as workspace_bp
+    from .jobs            import bp as jobs_bp
+    from .skills          import bp as skills_bp
 
     app.register_blueprint(models_bp)
     app.register_blueprint(datasource_bp)
@@ -49,6 +52,9 @@ def create_app() -> Flask:
     app.register_blueprint(mcp_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(knowledge_bp)
+    app.register_blueprint(workspace_bp)
+    app.register_blueprint(jobs_bp)
+    app.register_blueprint(skills_bp)
 
     @app.get("/")
     def index():

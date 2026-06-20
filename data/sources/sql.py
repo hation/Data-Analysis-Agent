@@ -346,7 +346,6 @@ class SQLDataSource(DataSource):
         return tables
 
     def get_preview(self) -> List[dict]:
-        from sqlalchemy import text as _text
         result = []
 
         # Analysis cache tables (DuckDB)
@@ -358,7 +357,8 @@ class SQLDataSource(DataSource):
             except Exception:
                 continue
 
-        # Source tables — use DuckDB if cached, else remote
+        # Source tables — metadata only.  Opening the preview must stay cheap:
+        # do not run COUNT(*) for every remote table and do not pull row data.
         for t in self._all_table_names():
             if t in self._loaded:
                 try:
@@ -369,15 +369,8 @@ class SQLDataSource(DataSource):
                     result.append({"name": t, "columns": [], "total_rows": None})
             else:
                 try:
-                    q = self._quote(t)
-                    with self._engine.connect() as _c:
-                        cols = list(_c.execute(_text(f"SELECT * FROM {q} LIMIT 0")).keys())
-                    try:
-                        with self._engine.connect() as _c:
-                            total = _c.execute(_text(f"SELECT COUNT(*) FROM {q}")).scalar()
-                    except Exception:
-                        total = None
-                    result.append({"name": t, "columns": cols, "total_rows": total})
+                    cols = [c["name"] for c in self._inspect.get_columns(t)]
+                    result.append({"name": t, "columns": cols, "total_rows": None})
                 except Exception:
                     result.append({"name": t, "columns": [], "total_rows": None})
 
@@ -389,18 +382,15 @@ class SQLDataSource(DataSource):
             real = table_name[len("[分析表] "):]
             return _preview_table_dict(self._duck, real, table_name, max_rows)
 
-        # Load into DuckDB if needed, then preview from DuckDB
-        self._ensure_loaded(table_name)
-        if table_name in self._loaded:
-            return _preview_table_dict(self._duck, table_name, table_name, max_rows)
-
-        # Fallback: remote DB
-        q   = self._quote(table_name)
-        sql = f"SELECT * FROM {q} LIMIT {max_rows}"
+        # Source-table preview is always a bounded remote query.  In particular,
+        # it must not call _ensure_loaded(): asking to see 100 rows should never
+        # download a complete remote table into DuckDB as a side effect.
         try:
-            from sqlalchemy import text as _text
+            from sqlalchemy import MetaData, Table, select
+            remote_table = Table(table_name, MetaData(), autoload_with=self._engine)
+            stmt = select(remote_table).limit(max_rows)
             with self._engine.connect() as conn:
-                df = pd.read_sql(_text(sql), conn)
+                df = pd.read_sql(stmt, conn)
         except Exception as exc:
             return {"name": table_name, "columns": [], "rows": [], "total_rows": None,
                     "error": str(exc)}

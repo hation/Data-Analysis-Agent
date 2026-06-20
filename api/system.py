@@ -36,7 +36,7 @@ PROTECTED = {
     "data/datasource_config.json",
     ".env",
     # Local compatibility patches — machine-specific, must not be overwritten.
-    "local_patches.py",
+    "infrastructure/local_patches.py",
     # VCS / IDE metadata
     ".git",
     "__pycache__",
@@ -311,15 +311,15 @@ def proxy_image():
 
 @bp.get("/api/instruction")
 def get_instruction():
-    """Return the raw Markdown of Instruction.md so the frontend can render it.
+    """Return the user guide Markdown so the frontend can render it.
 
     Kept as JSON (rather than text/markdown) so the response can also carry a
     consistent {ok, error} envelope when the file is missing — front-end
     error handling is uniform across endpoints.
     """
-    path = PROJECT_ROOT / "Instruction.md"
+    path = PROJECT_ROOT / "Information" / "Instruction.md"
     if not path.exists():
-        return jsonify({"ok": False, "error": "Instruction.md not found"}), 404
+        return jsonify({"ok": False, "error": "Information/Instruction.md not found"}), 404
     try:
         return jsonify({"ok": True, "markdown": path.read_text(encoding="utf-8")})
     except OSError as exc:

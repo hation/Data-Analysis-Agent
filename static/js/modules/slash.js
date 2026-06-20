@@ -32,11 +32,21 @@
     { cmd: "status",     icon: "📡",  descKey: "cmd.status.desc",     groupKey: "group.tools",    available: true },
   ];
 
+  function _description(c) {
+    return c.description || t(c.descKey);
+  }
+
+  function _escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, ch => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    })[ch]);
+  }
+
   function _highlightMatch(text, term) {
-    if (!term) return `/${text}`;
+    if (!term) return `/${_escapeHtml(text)}`;
     const idx = text.indexOf(term);
-    if (idx < 0) return `/${text}`;
-    return `/${text.slice(0, idx)}<mark>${text.slice(idx, idx + term.length)}</mark>${text.slice(idx + term.length)}`;
+    if (idx < 0) return `/${_escapeHtml(text)}`;
+    return `/${_escapeHtml(text.slice(0, idx))}<mark>${_escapeHtml(text.slice(idx, idx + term.length))}</mark>${_escapeHtml(text.slice(idx + term.length))}`;
   }
 
   function buildSlashPopup(filter = "") {
@@ -46,7 +56,7 @@
 
     const term    = filter.toLowerCase();
     const matched = COMMANDS.filter(c =>
-      !term || c.cmd.includes(term) || t(c.descKey).toLowerCase().includes(term)
+      !term || c.cmd.includes(term) || _description(c).toLowerCase().includes(term)
     );
 
     const header = pop.querySelector(".slash-pop-header");
@@ -80,7 +90,7 @@
           <div class="slash-name">${_highlightMatch(c.cmd, term)}
             ${!c.available ? `<span class="slash-soon">${t('slash.soon')}</span>` : ""}
           </div>
-          <div class="slash-desc">${t(c.descKey)}</div>
+          <div class="slash-desc">${_escapeHtml(_description(c))}</div>
         </div>`;
       if (c.available) div.addEventListener("click", () => selectCommand(c.cmd));
       scroll.appendChild(div);
@@ -141,7 +151,7 @@
     }
 
     // "/cmd " (no args) — select command, clear input
-    const mFull = v.match(/^\/(\w+)\s$/);
+    const mFull = v.match(/^\/([\w-]+)\s$/);
     if (mFull) {
       const found = COMMANDS.find(c => c.cmd === mFull[1] && c.available);
       if (found) {
@@ -153,7 +163,7 @@
     }
 
     // "/cmd args..." — select command, keep args as input text
-    const mFullCmd = v.match(/^\/(\w+)\s+(.+)/);
+    const mFullCmd = v.match(/^\/([\w-]+)\s+(.+)/);
     if (mFullCmd) {
       const found = COMMANDS.find(c => c.cmd === mFullCmd[1] && c.available);
       if (found) {
@@ -164,7 +174,7 @@
       }
     }
 
-    const mSlash = v.match(/^\/([\w]*)$/);
+    const mSlash = v.match(/^\/([\w-]*)$/);
     if (mSlash) {
       const term = mSlash[1];
       if (isSlashOpen()) {
@@ -215,7 +225,7 @@
 
   function fillHint(el) {
     const txt = el.textContent;
-    const m = txt.match(/^\/(\w+)\s?(.*)/);
+    const m = txt.match(/^\/([\w-]+)\s?(.*)/);
     if (m) {
       const found = COMMANDS.find(c => c.cmd === m[1] && c.available);
       if (found) {
@@ -228,9 +238,30 @@
     window.BAA.chatStream.sendMessage();
   }
 
+  async function loadSkills() {
+    try {
+      const response = await fetch("/api/skills");
+      if (!response.ok) return;
+      const payload = await response.json();
+      for (const skill of (payload.skills || [])) {
+        if (!skill.name || COMMANDS.some(c => c.cmd === skill.name)) continue;
+        COMMANDS.push({
+          cmd: skill.name,
+          icon: skill.icon || "🧩",
+          description: skill.description || skill.name,
+          groupKey: "group.skills",
+          available: true,
+        });
+      }
+      buildSlashPopup();
+    } catch (err) {
+      console.warn("[BAA] analysis skills unavailable:", err);
+    }
+  }
+
   window.BAA.slash = {
     COMMANDS, buildSlashPopup, openSlashPopup, closeSlashPopup, isSlashOpen,
-    selectCommand, clearCmd, onInput, onKeyDown, autoResize, fillHint,
+    selectCommand, clearCmd, onInput, onKeyDown, autoResize, fillHint, loadSkills,
   };
 
   // Backward-compat globals used by HTML data-actions / language change handler.

@@ -3,10 +3,10 @@
 """Business Analyst Agent — main entry point.
 
 The heavy lifting is split across:
-  prompts.py      — SYSTEM_PROMPT, COMMAND_HINTS, path setup
-  tools_schema.py — AGENT_TOOLS (JSON schemas sent to the LLM)
-  tools_data.py   — DataToolsMixin  (schema / query / analysis / chart / clean)
-  tools_export.py — ExportToolsMixin (Excel / Word / PPT)
+  prompts.py             — SYSTEM_PROMPT, COMMAND_HINTS, path setup
+  tools/schemas.py       — AGENT_TOOLS (JSON schemas sent to the LLM)
+  tools/business/data.py — DataToolsMixin  (schema / query / analysis / chart / clean)
+  tools/business/export.py — ExportToolsMixin (Excel / Word / PPT)
 """
 import json
 import logging
@@ -14,10 +14,20 @@ import time
 from typing import Iterator, List, Dict, Any, Optional, Tuple
 
 from .prompts      import get_system_prompt, build_temp_prompt_section, COMMAND_HINTS
-from .tools_schema import AGENT_TOOLS, get_tools_with_mcp
-from .tools_data   import DataToolsMixin
-from .tools_export import ExportToolsMixin
+from .skills       import get_skill, render_skill_prompt
+from .tools.schemas import AGENT_TOOLS, get_tools_with_mcp
+from .tools.business import DataToolsMixin, ExportToolsMixin
+from .tools.exposure import filter_tools_for_turn
+from .tools.results import make_tool_result
+from .tools.parallel import should_parallelize_batch
+from .tools.workspace import (
+    WorkspaceTaskStore,
+    WorkspaceTeamStore,
+    WorkspaceToolService,
+    structured_output,
+)
 from .mcp_manager  import get_mcp_manager
+from data.workspace import workspace_manager
 from .compaction   import (
     should_compact_history, compact_history,
     should_trim_history, trim_oversized_tool_results,
@@ -194,6 +204,35 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         self.data_source = source
         self._schema_cache = None
 
+    def _tool_workspace_status(self) -> str:
+        """Return a bounded summary of system roots and optional user workdir."""
+        try:
+            status = workspace_manager.status(self._session_id)
+            result = {
+                "system_workspace": workspace_manager.system_status(),
+                "user_workspace": {"mounted": bool(status.get("mounted"))},
+                "usage": (
+                    "Use workspace_glob with path uploads, outputs, or mcp and a cursor; "
+                    "then use workspace_grep or workspace_read_file only for relevant files."
+                ),
+            }
+            runtime = workspace_manager.get(self._session_id)
+            if runtime is not None:
+                files = runtime.list_data_files(max_files=5)
+                result["user_workspace"] = {
+                    "mounted": True,
+                    "uri": "workspace://user",
+                    "workdir": str(runtime.workdir),
+                    "artifacts_dir": str(runtime.artifacts_dir),
+                    "recent_data_files": files,
+                    "recent_files_truncated": len(files) >= 5,
+                    "data_source_state": "mounted files are already registered as tables",
+                }
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as e:
+            log.warning("[agent] workspace_status failed: %s", e)
+            return f"Unable to check workspace status: {e}"
+
     # ── Agent loop ────────────────────────────────────────────────────────────
 
     def run(
@@ -212,6 +251,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         dashboard_name: str = "",
         dashboard_widgets: Optional[List] = None,
         temp_prompt: str = "",
+        data_context: Optional[Dict] = None,
     ) -> Iterator[Dict]:
         """
         Yields event dicts consumed by the Flask SSE stream:
@@ -324,9 +364,32 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         system = get_system_prompt()
         if command and command in COMMAND_HINTS:
             system += f"\n\n[ACTIVE COMMAND: /{command}]\n{COMMAND_HINTS[command]}"
+        elif command:
+            skill = get_skill(command)
+            if skill is not None:
+                skill_prompt = render_skill_prompt(skill, user_message)
+                system += f"\n\n[ACTIVE ANALYSIS SKILL: /{skill.name}]\n{skill_prompt}"
         # Per-session temporary instruction (user-set, this conversation only).
         if temp_prompt:
             system += build_temp_prompt_section(temp_prompt)
+        if data_context:
+            selected_tables = data_context.get("tables") or []
+            table_lines = "\n".join(
+                f"- data source '{item.get('source_name', '')}', table "
+                f"'{item.get('table', '')}', SQL identifier "
+                f"\"{item.get('query_table', item.get('table', ''))}\""
+                for item in selected_tables
+            )
+            system += (
+                "\n\n[CURRENT DATA PREVIEW CONTEXT]\n"
+                "The user explicitly selected these tables in Data Preview:\n"
+                f"{table_lines}\n"
+                "Prefer these tables for ambiguous analysis requests and join them when the request "
+                "requires combined fields. Use the exact SQL identifiers listed above. "
+                "If the user's request clearly names another table or requires other tables, follow "
+                "the request instead. Never claim the preview sample is the full dataset.\n"
+                "[END CURRENT DATA PREVIEW CONTEXT]"
+            )
 
         prior_reasoning_msg: List[Dict] = []
         if last_reasoning:
@@ -448,6 +511,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                     kb.list_metrics() and any(m["enabled"] for m in kb.list_metrics())
                     or any(r["enabled"] for r in kb.list_rules())
                     or any(n["enabled"] for n in kb.list_notes())
+                    or any(c["enabled"] for c in kb.list_chunks(limit=1))
                 )
             except Exception:
                 return False
@@ -507,14 +571,23 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
             else:
                 _max_tokens = self._max_output_tokens
 
+            _available_tools = filter_tools_for_turn(
+                get_tools_with_mcp(self._mcp_manager),
+                command=command,
+                has_data_source=_has_sources,
+                has_workspace=workspace_manager.get(self._session_id) is not None,
+                include_mcp=True,
+            )
             call_kwargs: Dict[str, Any] = dict(
                 model=self.model,
                 messages=messages,
-                tools=get_tools_with_mcp(self._mcp_manager),
+                tools=_available_tools,
                 tool_choice="auto",
                 temperature=0.1,
                 max_tokens=_max_tokens,
             )
+            log.debug("[tools] exposed=%d command=%r has_data=%s",
+                      len(_available_tools), command or "(none)", _has_sources)
 
             if self.enable_thinking and self.model.startswith("claude"):
                 _ctx = self._get_context_window()
@@ -705,7 +778,13 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                         args = {}
 
                     # Pre-dispatch validation: catch obviously bad args early
-                    _val_err = _validate_tool_args(name, args)
+                    # A4：把 workspace 的 allowed_roots 传入，让 SQL 路径白名单生效
+                    _ws_runtime = workspace_manager.get(self._session_id)
+                    _allowed_roots = (
+                        _ws_runtime.allowed_roots_for_sql()
+                        if _ws_runtime is not None else None
+                    )
+                    _val_err = _validate_tool_args(name, args, allowed_roots=_allowed_roots)
                     if _val_err:
                         log.warning("[tool] %s: arg validation failed: %s", name, _val_err)
                         # Inject as a synthetic tool result so the model can self-correct
@@ -738,6 +817,24 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                         "propose_dashboard_outline": f"生成看板大纲：{args.get('name', '?')} ({len(args.get('widgets', []))} 个)",
                         "generate_dashboard":    f"生成看板：{args.get('name', '?')} ({len(args.get('widgets', []))} 个组件)",
                         "ask_user":              f"向用户提问：{args.get('question', '?')[:40]}",
+                        "workspace_glob":        f"查找工作目录文件: {args.get('pattern', '**/*')}",
+                        "workspace_grep":        f"搜索工作目录内容: {args.get('pattern', '')[:40]}",
+                        "workspace_read_file":   f"读取工作目录文件: {args.get('file_path', '?')}",
+                        "workspace_write_file":  f"写入工作目录文件: {args.get('file_path', '?')}",
+                        "workspace_edit_file":   f"编辑工作目录文件: {args.get('file_path', '?')}",
+                        "workspace_command":     f"执行受控操作: {args.get('operation', '?')}",
+                        "structured_output":     "校验结构化输出",
+                        "load_analysis_skill":  f"加载分析技能: {args.get('name', '?')}",
+                        "task_create":          f"创建工作区任务: {args.get('title', '?')}",
+                        "task_get":             f"查看工作区任务: {args.get('task_id', '?')}",
+                        "task_list":            "列出工作区任务",
+                        "task_update":          f"更新工作区任务: {args.get('task_id', '?')}",
+                        "team_create":          f"创建分析团队: {args.get('name', '?')}",
+                        "team_delete":          f"删除分析团队: {args.get('name', '?')}",
+                        "send_message":         f"发送团队消息: {args.get('recipient', '?')}",
+                        "agent_delegate":       f"委派分析任务: {args.get('description', '')[:40]}",
+                        "workspace_checkpoint": f"工作区检查点: {args.get('action', '?')} {args.get('name', '')}",
+                        "plan_complete":        "提交结构化计划",
                     }
                     full_display = display_map.get(name, name)
                     yield {
@@ -753,8 +850,11 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                 # data-access tool, inject a forced query_knowledge call first.
                 # This is a hard enforcement that runs regardless of model choice.
                 _DATA_TOOLS = {"get_schema", "query_data", "create_analysis_table",
-                               "run_analysis", "profile_data"}
+                               "run_analysis", "profile_data",
+                               "workspace_status"}
                 _tool_names_in_batch = {name for _, name, _ in _parsed_tools}
+                _kb_preflight_context = ""
+                _kb_preflight_attached = False
                 _needs_kb_check = (
                     _kb_active
                     and not _kb_checked_this_turn
@@ -769,34 +869,113 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                     yield {"type": "tool_start", "tool": "query_knowledge",
                            "display": f"查询知识库: {kb_question[:40]}",
                            "detail":  f"查询知识库: {kb_question}"}
-                    kb_result = self._tool_query_knowledge(kb_question)
+                    kb_result, kb_refs = self._tool_query_knowledge_with_refs(kb_question)
                     yield {"type": "tool_end", "tool": "query_knowledge"}
+                    yield {
+                        "type": "knowledge_refs",
+                        "refs": kb_refs,
+                        "query": kb_question,
+                    }
 
                     if kb_result and kb_result != "No relevant knowledge found.":
-                        # Inject KB context as a system message so the model sees
-                        # it before executing data tools. Using role:system avoids
-                        # the tool_call_id pairing requirement that synthetic
-                        # assistant→tool exchanges carry — some providers (e.g.
-                        # Azure OpenAI, Anthropic native) reject tool messages
-                        # whose IDs were never returned in a real LLM response.
-                        messages.append({
-                            "role": "system",
-                            "content": (
-                                "[Business Knowledge Base — retrieved for this query]\n"
-                                f"{kb_result}\n"
-                                "[End of knowledge base context. Apply these metric "
-                                "definitions and business rules when writing SQL and "
-                                "interpreting results. Do not contradict them.]"
-                            ),
-                        })
-                        log.info("[tool] KB pre-flight injected as system msg (%d chars)", len(kb_result))
+                        # Keep the provider tool-calling sequence valid:
+                        # assistant(tool_calls) must be followed directly by the
+                        # matching tool messages, so do not insert system/user
+                        # context here. Attach the KB context to the first real
+                        # data tool result instead.
+                        _kb_preflight_context = kb_result
+                        log.info("[tool] KB pre-flight captured (%d chars)", len(kb_result))
                     else:
                         log.info("[tool] KB pre-flight: no relevant knowledge found")
+
+                if not _kb_preflight_context and should_parallelize_batch(_parsed_tools):
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                    def _run_parallel_tool(item):
+                        tc, name, args = item
+                        t0 = time.monotonic()
+                        sources: list[dict] = []
+                        artifacts: list[dict] = []
+                        if name == "query_knowledge":
+                            raw, refs = self._tool_query_knowledge_with_refs(
+                                question=args.get("question", "")
+                            )
+                            sources = refs
+                            events = [{
+                                "type": "knowledge_refs",
+                                "refs": refs,
+                                "query": args.get("question", ""),
+                            }]
+                        elif name == "get_table_detail":
+                            raw = self._tool_get_table_detail(
+                                table_name=args.get("table_name", "")
+                            )
+                            events = []
+                        elif name == "select_chart":
+                            raw = self._tool_select_chart(
+                                user_intent=args.get("user_intent", ""),
+                                available_columns=args.get("available_columns", []),
+                            )
+                            events = []
+                        elif name.startswith("mcp__"):
+                            raw = self._mcp_manager.call_tool(name, args)
+                            events = []
+                        else:
+                            raw = f"Unknown parallel tool: {name}"
+                            events = []
+                        envelope = make_tool_result(
+                            name,
+                            raw,
+                            sources=sources,
+                            artifacts=artifacts,
+                            debug={
+                                "elapsed_seconds": round(time.monotonic() - t0, 3),
+                                "args_preview": {
+                                    k: str(v)[:80] for k, v in args.items()
+                                    if k != "slides"
+                                },
+                                "parallel": True,
+                            },
+                        )
+                        return tc, name, envelope, events
+
+                    with ThreadPoolExecutor(max_workers=min(4, len(_parsed_tools))) as ex:
+                        futures = [ex.submit(_run_parallel_tool, item) for item in _parsed_tools]
+                        parallel_results = [f.result() for f in as_completed(futures)]
+
+                    result_by_id = {tc.id: (tc, name, env, events)
+                                    for tc, name, env, events in parallel_results}
+                    for tc, name, _args in _parsed_tools:
+                        _tc, _name, envelope, events = result_by_id[tc.id]
+                        for event in events:
+                            yield event
+                        yield {
+                            "type": "tool_audit",
+                            "tool": name,
+                            "ok": envelope.ok,
+                            "error": envelope.error,
+                            "summary": envelope.summary,
+                            "content": str(envelope.data),
+                            "sources": envelope.sources,
+                            "artifacts": envelope.artifacts,
+                            "elapsed_seconds": envelope.debug.get("elapsed_seconds"),
+                            "args_preview": envelope.debug.get("args_preview", {}),
+                            "parallel": True,
+                        }
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": envelope.to_model_text(),
+                        })
+                        yield {"type": "tool_end", "tool": name}
+                    continue
 
                 for tc, name, args in _parsed_tools:
                     _args_preview = {k: str(v)[:80] for k, v in args.items() if k != "slides"}
                     log.info("[tool] %s  args=%s", name, _args_preview)
                     _tool_t0 = time.monotonic()
+                    tool_sources: list[dict] = []
+                    tool_artifacts: list[dict] = []
 
                     # Mark KB as checked if the model explicitly called it
                     if name == "query_knowledge":
@@ -809,22 +988,32 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                 available_columns=args.get("available_columns", []),
                             )
                         elif name == "query_knowledge":
-                            tool_result = self._tool_query_knowledge(
+                            tool_result, kb_refs = self._tool_query_knowledge_with_refs(
                                 question=args.get("question", "")
                             )
+                            tool_sources = kb_refs
+                            yield {
+                                "type": "knowledge_refs",
+                                "refs": kb_refs,
+                                "query": args.get("question", ""),
+                            }
                         elif name == "get_schema":
                             tool_result = self._tool_get_schema()
+                        elif name == "workspace_status":
+                            tool_result = self._tool_workspace_status()
                         elif name == "get_table_detail":
                             tool_result = self._tool_get_table_detail(
                                 table_name=args.get("table_name", "")
                             )
                         elif name == "create_analysis_table":
-                            tool_result = self._tool_create_analysis_table(
+                            tool_result, tool_sources = self._tool_create_analysis_table_with_refs(
                                 sql=args.get("sql", ""),
                                 table_name=args.get("table_name", "analysis_data"),
                             )
+                            yield {"type": "data_refs", "refs": tool_sources}
                         elif name == "query_data":
-                            tool_result = self._tool_query_data(args.get("sql", ""))
+                            tool_result, tool_sources = self._tool_query_data_with_refs(args.get("sql", ""))
+                            yield {"type": "data_refs", "refs": tool_sources}
                         elif name == "run_analysis":
                             tool_result = self._tool_run_analysis(
                                 analysis_name=args.get("analysis_name", ""),
@@ -833,7 +1022,14 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                 groupby_column=args.get("groupby_column", ""),
                                 n_deciles=int(args.get("n_deciles", 10)),
                             )
+                            tool_sources = self._data_refs_for_sql(
+                                args.get("sql", ""), self.data_source, None
+                            )
+                            yield {"type": "data_refs", "refs": tool_sources}
                         elif name == "generate_chart":
+                            tool_sources = self._data_refs_for_sql(
+                                args.get("sql", ""), self.data_source, None
+                            )
                             chart = self._tool_generate_chart(
                                 chart_type=args.get("chart_type", "Bar_Chart"),
                                 sql=args.get("sql", ""),
@@ -850,6 +1046,8 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                     f"Chart generated ({args.get('chart_type')}). "
                                     "It is displayed to the user."
                                 )
+                                tool_artifacts = [{"type": "chart", "chart_type": args.get("chart_type", "")}]
+                                yield {"type": "data_refs", "refs": tool_sources}
                             else:
                                 tool_result = f"Chart failed: {chart.get('error', 'unknown')}"
                         elif name == "profile_data":
@@ -1033,6 +1231,110 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                             }
                             tool_result = "问题已展示给用户，等待用户回答后继续。请不要输出任何文字。"
                             _outline_proposed = True
+                        elif name.startswith("workspace_"):
+                            ws_tools = WorkspaceToolService(self._session_id)
+                            if name == "workspace_glob":
+                                tool_result = ws_tools.glob(
+                                    args.get("pattern", "**/*"), args.get("path", "uploads"),
+                                    args.get("max_results", 20), args.get("cursor", 0),
+                                )
+                            elif name == "workspace_grep":
+                                tool_result = ws_tools.grep(
+                                    args.get("pattern", ""), args.get("path", "."),
+                                    args.get("include", "*"), args.get("max_results", 20),
+                                )
+                            elif name == "workspace_read_file":
+                                tool_result = ws_tools.read_file(
+                                    args.get("file_path", ""), args.get("offset", 0), args.get("limit", 200)
+                                )
+                            elif name == "workspace_write_file":
+                                tool_result = ws_tools.write_file(args.get("file_path", ""), args.get("content", ""))
+                            elif name == "workspace_edit_file":
+                                tool_result = ws_tools.edit_file(
+                                    args.get("file_path", ""), args.get("old_string", ""), args.get("new_string", "")
+                                )
+                            elif name == "workspace_command":
+                                tool_result = ws_tools.command(
+                                    args.get("operation", ""), args.get("path", "."),
+                                    timeout=args.get("timeout", 30),
+                                )
+                            else:
+                                tool_result = "Unknown workspace tool"
+                        elif name == "structured_output":
+                            tool_result = structured_output(args.get("output"), args.get("required_fields"))
+                        elif name == "load_analysis_skill":
+                            skill = get_skill(args.get("name", ""))
+                            tool_result = (
+                                {"name": skill.name, "description": skill.description, "prompt": skill.prompt}
+                                if skill else "ERROR: unknown analysis skill"
+                            )
+                        elif name.startswith("task_"):
+                            task_store = WorkspaceTaskStore(self._session_id)
+                            if name == "task_create":
+                                tool_result = task_store.create(
+                                    args.get("title", ""), args.get("description", ""), args.get("assignee", ""),
+                                    args.get("blocks"), args.get("blocked_by"),
+                                )
+                            elif name == "task_get":
+                                tool_result = task_store.get(args.get("task_id", ""))
+                            elif name == "task_list":
+                                tool_result = task_store.list(args.get("status", ""), args.get("assignee", ""))
+                            elif name == "task_update":
+                                tool_result = task_store.update(
+                                    args.get("task_id", ""), status=args.get("status"),
+                                    assignee=args.get("assignee"), description=args.get("description"),
+                                    add_blocks=args.get("add_blocks"), add_blocked_by=args.get("add_blocked_by"),
+                                )
+                        elif name in {"team_create", "team_delete", "send_message", "agent_delegate"}:
+                            team_store = WorkspaceTeamStore(self._session_id)
+                            if name == "team_create":
+                                tool_result = team_store.create(
+                                    args.get("name", ""), args.get("description", ""), args.get("members", [])
+                                )
+                            elif name == "team_delete":
+                                tool_result = team_store.delete(args.get("name", ""))
+                            elif name == "send_message":
+                                tool_result = team_store.send_message(
+                                    args.get("team_name", ""), args.get("recipient", ""), args.get("message", "")
+                                )
+                            else:
+                                team_name = args.get("team_name", "")
+                                member_name = args.get("member_name", "")
+                                member = (
+                                    team_store.member(team_name, member_name)
+                                    if team_name and member_name else
+                                    {"role": "delegated business analyst", "instructions": ""}
+                                )
+                                delegated_prompt = str(args.get("prompt", ""))[:20_000]
+                                response = self.client.chat.completions.create(
+                                    model=self.model,
+                                    messages=[
+                                        {
+                                            "role": "system",
+                                            "content": (
+                                                "You are a bounded delegated analyst. You have no tools, shell, "
+                                                "or filesystem access. Work only from context explicitly supplied "
+                                                f"in the prompt. Role: {member.get('role', 'analyst')}. "
+                                                f"Instructions: {member.get('instructions', '')}"
+                                            ),
+                                        },
+                                        {"role": "user", "content": delegated_prompt},
+                                    ],
+                                    stream=False,
+                                    temperature=0.1,
+                                    max_tokens=min(4000, self._max_output_tokens),
+                                )
+                                tool_result = response.choices[0].message.content or ""
+                        elif name == "workspace_checkpoint":
+                            tool_result = WorkspaceToolService(self._session_id).checkpoint(
+                                args.get("action", ""), args.get("name", ""),
+                                args.get("patterns"), bool(args.get("confirm", False)),
+                            )
+                        elif name == "plan_complete":
+                            tool_result = {
+                                "summary": args.get("summary", ""),
+                                "steps": args.get("steps", []),
+                            }
                         elif name.startswith("mcp__"):
                             tool_result = self._mcp_manager.call_tool(name, args)
                         else:
@@ -1047,9 +1349,48 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                         _result_preview = str(tool_result)[:120].replace("\n", " ")
                         log.info("[tool] %s OK  %.2fs  result=%r", name, time.monotonic() - _tool_t0, _result_preview)
 
-                    messages.append(
-                        {"role": "tool", "tool_call_id": tc.id, "content": str(tool_result)}
+                    if (
+                        _kb_preflight_context
+                        and not _kb_preflight_attached
+                        and name in _DATA_TOOLS
+                    ):
+                        tool_result = (
+                            "[Business Knowledge Base — retrieved for this query]\n"
+                            f"{_kb_preflight_context}\n"
+                            "[End of knowledge base context. Apply these metric "
+                            "definitions and business rules when writing SQL and "
+                            "interpreting results. Do not contradict them.]\n\n"
+                            f"{tool_result}"
+                        )
+                        _kb_preflight_attached = True
+
+                    envelope = make_tool_result(
+                        name,
+                        tool_result,
+                        sources=tool_sources,
+                        artifacts=tool_artifacts,
+                        debug={
+                            "elapsed_seconds": round(time.monotonic() - _tool_t0, 3),
+                            "args_preview": _args_preview,
+                        },
                     )
+                    yield {
+                        "type": "tool_audit",
+                        "tool": name,
+                        "ok": envelope.ok,
+                        "error": envelope.error,
+                        "summary": envelope.summary,
+                        "content": str(envelope.data),
+                        "sources": envelope.sources,
+                        "artifacts": envelope.artifacts,
+                        "elapsed_seconds": envelope.debug.get("elapsed_seconds"),
+                        "args_preview": envelope.debug.get("args_preview", {}),
+                    }
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": envelope.to_model_text(),
+                    })
                     yield {"type": "tool_end", "tool": name}
 
                 if _outline_proposed:

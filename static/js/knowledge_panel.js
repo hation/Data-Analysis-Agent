@@ -8,25 +8,26 @@
 
 const _kb = {
   tab:         "metrics",
-  editType:    null,
-  editId:      null,
   previewRecs: [],
+  sourceFile:  "",
 };
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 
-function kbSwitchTab(tab, btn) {
-  _kb.tab = tab;
-  document.querySelectorAll(".kb-tab").forEach(b => b.classList.remove("active"));
-  btn.classList.add("active");
-  ["metrics", "rules", "notes", "import"].forEach(t => {
-    const el = document.getElementById(`kb-panel-${t}`);
-    if (el) el.style.display = t === tab ? "flex" : "none";
-  });
+function loadByTab(tab) {
   if      (tab === "metrics") kbLoadMetrics();
   else if (tab === "rules")   kbLoadRules();
   else if (tab === "notes")   kbLoadNotes();
   else if (tab === "import")  { kbResetImport(); kbLoadFiles(); }
+}
+
+function kbSwitchTab(tab, btn) {
+  _kb.tab = tab;  // 保持 _kb.tab 同步（import 区仍用）
+  const vk = window.BAA.vueKb;
+  if (vk && vk.isAvailable()) {
+    vk.setTab(tab);
+    loadByTab(tab);
+  }
 }
 
 // ── Refresh (manual) ──────────────────────────────────────────────────────────
@@ -40,50 +41,38 @@ async function kbRefresh(type) {
 // ── Load lists ────────────────────────────────────────────────────────────────
 
 async function kbLoadMetrics() {
-  const list = document.getElementById("kb-list-metrics");
-  list.innerHTML = '<div class="kb-empty">加载中…</div>';
+  const vk = window.BAA.vueKb;
+  if (!vk || !vk.isAvailable()) return;
+  vk.setListStatus("metrics", { loading: true, err: "" });
   try {
     const data = await fetch("/api/knowledge/metrics").then(r => r.json());
-    const enabled = data.filter(r => r.enabled).length;
-    document.getElementById("kb-metrics-count").textContent =
-      `共 ${data.length} 条 · ${enabled} 条已启用`;
-    list.innerHTML = data.length
-      ? data.map(r => kbMetricCard(r)).join("")
-      : '<div class="kb-empty">暂无指标定义</div>';
+    vk.setItems("metrics", data);
   } catch (e) {
-    list.innerHTML = `<div class="kb-empty" style="color:#ef4444">加载失败: ${e.message}</div>`;
+    vk.setListStatus("metrics", { loading: false, err: e.message });
   }
 }
 
 async function kbLoadRules() {
-  const list = document.getElementById("kb-list-rules");
-  list.innerHTML = '<div class="kb-empty">加载中…</div>';
+  const vk = window.BAA.vueKb;
+  if (!vk || !vk.isAvailable()) return;
+  vk.setListStatus("rules", { loading: true, err: "" });
   try {
     const data = await fetch("/api/knowledge/rules").then(r => r.json());
-    const enabled = data.filter(r => r.enabled).length;
-    document.getElementById("kb-rules-count").textContent =
-      `共 ${data.length} 条 · ${enabled} 条已启用`;
-    list.innerHTML = data.length
-      ? data.map(r => kbRuleCard(r)).join("")
-      : '<div class="kb-empty">暂无业务规则</div>';
+    vk.setItems("rules", data);
   } catch (e) {
-    list.innerHTML = `<div class="kb-empty" style="color:#ef4444">加载失败: ${e.message}</div>`;
+    vk.setListStatus("rules", { loading: false, err: e.message });
   }
 }
 
 async function kbLoadNotes() {
-  const list = document.getElementById("kb-list-notes");
-  list.innerHTML = '<div class="kb-empty">加载中…</div>';
+  const vk = window.BAA.vueKb;
+  if (!vk || !vk.isAvailable()) return;
+  vk.setListStatus("notes", { loading: true, err: "" });
   try {
     const data = await fetch("/api/knowledge/notes").then(r => r.json());
-    const enabled = data.filter(r => r.enabled).length;
-    document.getElementById("kb-notes-count").textContent =
-      `共 ${data.length} 条 · ${enabled} 条已启用`;
-    list.innerHTML = data.length
-      ? data.map(r => kbNoteCard(r)).join("")
-      : '<div class="kb-empty">暂无背景知识</div>';
+    vk.setItems("notes", data);
   } catch (e) {
-    list.innerHTML = `<div class="kb-empty" style="color:#ef4444">加载失败: ${e.message}</div>`;
+    vk.setListStatus("notes", { loading: false, err: e.message });
   }
 }
 
@@ -95,87 +84,22 @@ function esc(s) {
     .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
 
-function kbToggleSwitch(enabled) {
-  return `<div class="kb-toggle ${enabled ? 'on' : ''}" title="${enabled ? '已启用，点击禁用' : '已禁用，点击启用'}">
-    <div class="kb-toggle-knob"></div>
-  </div>`;
-}
-
-function kbMetricCard(r) {
-  const dimmed = r.enabled ? "" : "opacity:.45;";
-  return `
-  <div class="kb-card" id="kbc-metrics-${r.id}" style="${dimmed}">
-    <div class="kb-card-head">
-      <div class="kb-card-name">
-        <span class="kb-badge kb-badge-metric">指标</span>
-        ${esc(r.name)}
-        ${r.alias ? `<span style="font-size:12px;color:#94a3b8;font-weight:400">· ${esc(r.alias)}</span>` : ""}
-      </div>
-      <div class="kb-card-actions">
-        <div onclick="kbToggle('metrics',${r.id})">${kbToggleSwitch(r.enabled)}</div>
-        <button class="kb-act-btn" onclick="kbOpenForm('metrics',${r.id})">编辑</button>
-        <button class="kb-act-btn danger" onclick="kbDelete('metrics',${r.id})">删除</button>
-      </div>
-    </div>
-    ${r.definition  ? `<div class="kb-card-meta">${esc(r.definition)}</div>` : ""}
-    ${r.sql_template? `<div class="kb-card-sql">${esc(r.sql_template)}</div>` : ""}
-    ${r.notes       ? `<div class="kb-card-meta" style="color:#94a3b8;font-size:11px">备注：${esc(r.notes)}</div>` : ""}
-  </div>`;
-}
-
-function kbRuleCard(r) {
-  const badgeCls = r.severity === "error" ? "kb-badge-rule-error" : "kb-badge-rule-warning";
-  const dimmed   = r.enabled ? "" : "opacity:.45;";
-  return `
-  <div class="kb-card" id="kbc-rules-${r.id}" style="${dimmed}">
-    <div class="kb-card-head">
-      <div class="kb-card-name">
-        <span class="kb-badge ${badgeCls}">${esc(r.severity)}</span>
-        ${esc(r.rule_id)}
-      </div>
-      <div class="kb-card-actions">
-        <div onclick="kbToggle('rules',${r.id})">${kbToggleSwitch(r.enabled)}</div>
-        <button class="kb-act-btn" onclick="kbOpenForm('rules',${r.id})">编辑</button>
-        <button class="kb-act-btn danger" onclick="kbDelete('rules',${r.id})">删除</button>
-      </div>
-    </div>
-    ${r.description ? `<div class="kb-card-meta">${esc(r.description)}</div>` : ""}
-    ${r.condition   ? `<div class="kb-card-sql">${esc(r.condition)}</div>` : ""}
-  </div>`;
-}
-
-function kbNoteCard(r) {
-  const dimmed = r.enabled ? "" : "opacity:.45;";
-  return `
-  <div class="kb-card" id="kbc-notes-${r.id}" style="${dimmed}">
-    <div class="kb-card-head">
-      <div class="kb-card-name">
-        <span class="kb-badge kb-badge-note">背景</span>
-        ${esc(r.topic)}
-        ${r.tags ? `<span style="font-size:11px;color:#94a3b8;font-weight:400">${esc(r.tags)}</span>` : ""}
-      </div>
-      <div class="kb-card-actions">
-        <div onclick="kbToggle('notes',${r.id})">${kbToggleSwitch(r.enabled)}</div>
-        <button class="kb-act-btn" onclick="kbOpenForm('notes',${r.id})">编辑</button>
-        <button class="kb-act-btn danger" onclick="kbDelete('notes',${r.id})">删除</button>
-      </div>
-    </div>
-    ${r.content ? `<div class="kb-card-meta">${esc(r.content)}</div>` : ""}
-  </div>`;
-}
-
 // ── Toggle enabled ────────────────────────────────────────────────────────────
 
 async function kbToggle(type, id) {
+  const vk = window.BAA.vueKb;
+  if (!vk || !vk.isAvailable()) return;
+  const item = vk.getItem(type, id);
+  if (!item) return;
+  const oldEnabled = item.enabled;
+  vk.updateItem(type, id, { enabled: !oldEnabled });  // 乐观更新
   try {
     const res  = await fetch(`/api/knowledge/${type}/${id}/toggle`, { method: "POST" });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "切换失败");
-
-    if      (type === "metrics") await kbLoadMetrics();
-    else if (type === "rules")   await kbLoadRules();
-    else if (type === "notes")   await kbLoadNotes();
+    // 成功：state 已是乐观值，无需 reload
   } catch (e) {
+    vk.updateItem(type, id, { enabled: oldEnabled });  // 回滚
     showToast(`切换失败: ${e.message}`);
   }
 }
@@ -183,101 +107,35 @@ async function kbToggle(type, id) {
 // ── Form: open ────────────────────────────────────────────────────────────────
 
 async function kbOpenForm(type, id = null) {
-  _kb.editType = type;
-  _kb.editId   = id;
-
-  ["metrics", "rules", "notes"].forEach(t => {
-    document.getElementById(`kb-fields-${t}`).style.display = t === type ? "block" : "none";
-  });
-
-  const titles = { metrics: "指标定义", rules: "业务规则", notes: "背景知识" };
-  document.getElementById("kb-form-title").textContent =
-    (id ? "编辑" : "新增") + titles[type];
-  document.getElementById("kb-form-err").textContent = "";
-  kbFormClear();
-
+  const vk = window.BAA.vueKb;
+  if (!vk || !vk.isAvailable()) return;
+  let rec = null;
   if (id !== null) {
     try {
       const list = await fetch(`/api/knowledge/${type}`).then(r => r.json());
-      const rec  = list.find(r => r.id === id);
-      if (rec) kbFormFill(type, rec);
+      rec = list.find(r => r.id === id) || null;
     } catch (_) {}
   }
-
+  vk.openForm({ type, mode: id !== null ? "edit" : "add", editId: id, rec });
   openOverlay("ov-kb-form");
-}
-
-function kbFormClear() {
-  ["kbf-name","kbf-alias","kbf-definition","kbf-sql","kbf-notes",
-   "kbf-rule-id","kbf-rule-desc","kbf-rule-cond",
-   "kbf-topic","kbf-content","kbf-tags"].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.value = "";
-  });
-  const sev = document.getElementById("kbf-rule-sev");
-  if (sev) sev.value = "warning";
-}
-
-function kbFormFill(type, rec) {
-  if (type === "metrics") {
-    document.getElementById("kbf-name").value       = rec.name         || "";
-    document.getElementById("kbf-alias").value      = rec.alias        || "";
-    document.getElementById("kbf-definition").value = rec.definition   || "";
-    document.getElementById("kbf-sql").value        = rec.sql_template || "";
-    document.getElementById("kbf-notes").value      = rec.notes        || "";
-  } else if (type === "rules") {
-    document.getElementById("kbf-rule-id").value   = rec.rule_id      || "";
-    document.getElementById("kbf-rule-desc").value = rec.description  || "";
-    document.getElementById("kbf-rule-cond").value = rec.condition    || "";
-    document.getElementById("kbf-rule-sev").value  = rec.severity     || "warning";
-  } else if (type === "notes") {
-    document.getElementById("kbf-topic").value   = rec.topic   || "";
-    document.getElementById("kbf-content").value = rec.content || "";
-    document.getElementById("kbf-tags").value    = rec.tags    || "";
-  }
 }
 
 // ── Form: submit ──────────────────────────────────────────────────────────────
 
 async function kbSubmitForm() {
-  const type  = _kb.editType;
-  const id    = _kb.editId;
-  const errEl = document.getElementById("kb-form-err");
-  errEl.textContent = "";
+  const vk = window.BAA.vueKb;
+  if (!vk || !vk.isAvailable()) return;
+  const fv = vk.getFormValues();
+  const { type, mode, editId, body } = fv;
+  // 校验
+  if (type === "metrics" && !body.name)     { vk.setFormErr("指标名称不能为空"); return; }
+  if (type === "rules"   && !body.rule_id)  { vk.setFormErr("规则 ID 不能为空"); return; }
+  if (type === "notes"   && !body.topic)    { vk.setFormErr("主题不能为空"); return; }
+  vk.setFormErr("");
+  vk.setFormBusy(true);
 
-  let body = {};
-  if (type === "metrics") {
-    const name = document.getElementById("kbf-name").value.trim();
-    if (!name) { errEl.textContent = "指标名称不能为空"; return; }
-    body = {
-      name,
-      alias:        document.getElementById("kbf-alias").value.trim(),
-      definition:   document.getElementById("kbf-definition").value.trim(),
-      sql_template: document.getElementById("kbf-sql").value.trim(),
-      notes:        document.getElementById("kbf-notes").value.trim(),
-    };
-  } else if (type === "rules") {
-    const rule_id = document.getElementById("kbf-rule-id").value.trim();
-    if (!rule_id) { errEl.textContent = "规则 ID 不能为空"; return; }
-    body = {
-      rule_id,
-      description: document.getElementById("kbf-rule-desc").value.trim(),
-      condition:   document.getElementById("kbf-rule-cond").value.trim(),
-      severity:    document.getElementById("kbf-rule-sev").value,
-    };
-  } else if (type === "notes") {
-    const topic = document.getElementById("kbf-topic").value.trim();
-    if (!topic) { errEl.textContent = "主题不能为空"; return; }
-    body = {
-      topic,
-      content: document.getElementById("kbf-content").value.trim(),
-      tags:    document.getElementById("kbf-tags").value.trim(),
-    };
-  }
-
-  const method = id ? "PUT" : "POST";
-  const url    = id ? `/api/knowledge/${type}/${id}` : `/api/knowledge/${type}`;
-
+  const method = mode === "edit" ? "PUT" : "POST";
+  const url    = mode === "edit" ? `/api/knowledge/${type}/${editId}` : `/api/knowledge/${type}`;
   try {
     const res  = await fetch(url, {
       method,
@@ -285,16 +143,16 @@ async function kbSubmitForm() {
       body: JSON.stringify(body),
     });
     const data = await res.json();
-    if (!res.ok) { errEl.textContent = data.error || "保存失败"; return; }
+    if (!res.ok) { vk.setFormErr(data.error || "保存失败"); vk.setFormBusy(false); return; }
 
     closeOverlay("ov-kb-form");
-    showToast(id ? "已更新 ✓" : "已添加 ✓");
-
-    if      (type === "metrics") await kbLoadMetrics();
-    else if (type === "rules")   await kbLoadRules();
-    else if (type === "notes")   await kbLoadNotes();
+    vk.closeForm();
+    vk.setFormBusy(false);
+    showToast(mode === "edit" ? "已更新 ✓" : "已添加 ✓");
+    loadByTab(type);  // 刷新当前类型列表
   } catch (e) {
-    errEl.textContent = `请求失败: ${e.message}`;
+    vk.setFormErr(`请求失败: ${e.message}`);
+    vk.setFormBusy(false);
   }
 }
 
@@ -302,15 +160,16 @@ async function kbSubmitForm() {
 
 async function kbDelete(type, id) {
   if (!confirm("确认删除这条记录？")) return;
+  const vk = window.BAA.vueKb;
+  if (!vk || !vk.isAvailable()) return;
+  vk.removeItem(type, id);  // 乐观删除
   try {
     const delRes = await fetch(`/api/knowledge/${type}/${id}`, { method: "DELETE" });
     if (!delRes.ok) throw new Error("删除请求失败");
     showToast("已删除");
-    if      (type === "metrics") await kbLoadMetrics();
-    else if (type === "rules")   await kbLoadRules();
-    else if (type === "notes")   await kbLoadNotes();
   } catch (e) {
     showToast(`删除失败: ${e.message}`);
+    loadByTab(type);  // 回滚：重新 load
   }
 }
 
@@ -367,6 +226,7 @@ function kbResetImport() {
   document.getElementById("kb-file-input").value           = "";
   document.getElementById("kb-drop-zone").style.display    = "flex";
   _kb.previewRecs = [];
+  _kb.sourceFile = "";
 }
 
 function kbOnDrop(e) {
@@ -416,6 +276,7 @@ async function kbParseFile(file) {
     if (!res.ok) throw new Error(data.error || "解析失败");
 
     _kb.previewRecs = data.preview || [];
+    _kb.sourceFile = data.filename || "";
     kbRenderPreview(data);
     kbLoadFiles();   // refresh file list after upload
   } catch (e) {
@@ -525,8 +386,8 @@ function kbCancelImport() { kbResetImport(); }
 
 async function kbConfirmImport() {
   const records = _kb.previewRecs.filter(r => r !== null);
-  if (!records.length) {
-    document.getElementById("kb-import-err").textContent = "没有可入库的记录";
+  if (!records.length && !_kb.sourceFile) {
+    document.getElementById("kb-import-err").textContent = "没有可入库的记录或源文件";
     return;
   }
   const okEl  = document.getElementById("kb-import-ok");
@@ -538,14 +399,15 @@ async function kbConfirmImport() {
     const res  = await fetch("/api/knowledge/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ records }),
+      body: JSON.stringify({ records, filename: _kb.sourceFile }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "入库失败");
 
     const { inserted } = data;
+    const ragChunks = data.rag?.chunks || 0;
     okEl.textContent =
-      `✓ 入库成功：指标 ${inserted.metrics} 条，规则 ${inserted.rules} 条，背景知识 ${inserted.notes} 条`;
+      `✓ 入库成功：指标 ${inserted.metrics} 条，规则 ${inserted.rules} 条，背景知识 ${inserted.notes} 条，RAG 分块 ${ragChunks} 条`;
     _kb.previewRecs = [];
     setTimeout(() => kbResetImport(), 1800);
   } catch (e) {
@@ -558,10 +420,30 @@ async function kbConfirmImport() {
 const _origOpenOverlay = window.openOverlay;
 window.openOverlay = function(id, ...rest) {
   if (id === "ov-knowledge") {
-    if      (_kb.tab === "metrics") kbLoadMetrics();
-    else if (_kb.tab === "rules")   kbLoadRules();
-    else if (_kb.tab === "notes")   kbLoadNotes();
-    else if (_kb.tab === "import")  { kbResetImport(); kbLoadFiles(); }
+    const vk = window.BAA.vueKb;
+    if (vk && vk.isAvailable()) {
+      vk.onOpen();  // 委托 Vue，触发 onSwitchTab(state.tab) → load
+    } else {
+      // fallback 旧逻辑
+      if      (_kb.tab === "metrics") kbLoadMetrics();
+      else if (_kb.tab === "rules")   kbLoadRules();
+      else if (_kb.tab === "notes")   kbLoadNotes();
+      else if (_kb.tab === "import")  { kbResetImport(); kbLoadFiles(); }
+    }
   }
   if (_origOpenOverlay) _origOpenOverlay(id, ...rest);
 };
+
+// ── Init: inject callbacks into Vue kb island ───────────────────────────────
+(function () {
+  const vk = window.BAA.vueKb;
+  if (!vk || !vk.isAvailable()) return;
+  vk.sync({
+    onSwitchTab:  (tab)       => kbSwitchTab(tab),
+    onToggle:     (type, id)  => kbToggle(type, id),
+    onOpenForm:   (type, id)  => kbOpenForm(type, id),
+    onSubmitForm: ()          => kbSubmitForm(),
+    onCancelForm: ()          => closeOverlay("ov-kb-form"),
+    onDelete:     (type, id)  => kbDelete(type, id),
+  });
+})();

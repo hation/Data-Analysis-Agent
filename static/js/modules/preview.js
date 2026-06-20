@@ -4,12 +4,77 @@
   const { $, esc } = window.BAA.dom;
   const { openOverlay } = window.BAA.overlay;
   const state = window.BAA.state;
+  let currentTableMeta = null;
+  let selectedTables = new Map();
+
+  function _tableKey(tableMeta) {
+    return `${tableMeta.source_id || ""}:${tableMeta.name}`;
+  }
+
+  function _contextTables() {
+    const ctx = state.analysisContext;
+    if (!ctx) return [];
+    if (Array.isArray(ctx.tables)) return ctx.tables;
+    return ctx.table ? [ctx] : []; // backward compatibility with single-table context
+  }
+
+  function _hydrateSelectionFromContext() {
+    selectedTables = new Map();
+    for (const ctxTable of _contextTables()) {
+      const meta = state._previewData?.tables?.find(
+        tb => tb.source_id === ctxTable.source_id && tb.name === ctxTable.table
+      );
+      if (meta) selectedTables.set(_tableKey(meta), meta);
+    }
+  }
 
   // ── Cache invalidation ────────────────────────────────────────────────────
   function invalidate() {
     state._previewData  = null;
     state._previewCache = {};
     state._previewSid   = null;
+    currentTableMeta = null;
+  }
+
+  function _syncContextControls(tableMeta) {
+    if (tableMeta !== undefined) currentTableMeta = tableMeta || null;
+    const btn = $("preview-use-table");
+    const status = $("preview-context-status");
+    const count = selectedTables.size;
+    if (btn) {
+      btn.disabled = count === 0;
+      btn.textContent = count ? `使用已选 ${count} 张表分析` : "请先选择表";
+    }
+    if (!status) return;
+    status.textContent = count
+      ? `已选择 ${count} 张表，可继续切换预览并多选`
+      : "点击表名前的方框选择一张或多张分析表";
+  }
+
+  function useSelectedTablesForAnalysis() {
+    if (!selectedTables.size) return;
+    const tables = [...selectedTables.values()].map(tb => ({
+      source_id: tb.source_id || "",
+      source_name: tb.source_name || "",
+      table: tb.name,
+    }));
+    state.analysisContext = {
+      tables,
+    };
+    _syncContextControls();
+    window.BAA.overlay.toast(`后续分析将优先使用已选的 ${tables.length} 张表`, "ok");
+    if (window.BAA.overlay) window.BAA.overlay.closeOverlay("ov-schema");
+  }
+
+  function _toggleTableSelection(tableMeta, selectBtn) {
+    const key = _tableKey(tableMeta);
+    if (selectedTables.has(key)) selectedTables.delete(key);
+    else selectedTables.set(key, tableMeta);
+    const selected = selectedTables.has(key);
+    selectBtn.classList.toggle("selected", selected);
+    selectBtn.setAttribute("aria-pressed", String(selected));
+    selectBtn.title = selected ? "取消选择" : "选择用于分析";
+    _syncContextControls();
   }
 
   // ── Drag-to-resize splitter ───────────────────────────────────────────────
@@ -50,10 +115,13 @@
   function openSchemaView() {
     openOverlay("ov-schema");
     _initResizeHandle();
+    _hydrateSelectionFromContext();
+    _syncContextControls(null);
 
     if (state._previewData && state._previewSid === state.SID && state._previewData.tables?.length) {
       _renderSidebar(state._previewData.tables);
       const first = state._previewData.tables[0];
+      _syncContextControls(first);
       const cacheKey = _cacheKey(first);
       if (state._previewCache[cacheKey]) {
         _renderTable(state._previewCache[cacheKey]);
@@ -111,6 +179,19 @@
 
       sourceCount++;
 
+      const row = document.createElement("div");
+      row.className = "preview-tab-row";
+
+      const selectBtn = document.createElement("button");
+      const selected = selectedTables.has(_tableKey(tb));
+      selectBtn.className = "preview-tab-select" + (selected ? " selected" : "");
+      selectBtn.type = "button";
+      selectBtn.setAttribute("aria-pressed", String(selected));
+      selectBtn.setAttribute("aria-label", `选择 ${tb.name} 用于分析`);
+      selectBtn.title = selected ? "取消选择" : "选择用于分析";
+      selectBtn.innerHTML = '<span aria-hidden="true">✓</span>';
+      selectBtn.addEventListener("click", () => _toggleTableSelection(tb, selectBtn));
+
       const tab = document.createElement("button");
       tab.className = "preview-tab" + (i === 0 ? " active" : "");
       tab.dataset.idx = i;
@@ -122,7 +203,8 @@
         ${rowHint ? `<span class="preview-tab-rows">${rowHint}</span>` : ""}`;
       tab.title = tb.name + (rowHint ? ` (${rowHint} 行)` : "");
       tab.addEventListener("click", () => _switchTab(i, tab));
-      tabs.appendChild(tab);
+      row.append(selectBtn, tab);
+      tabs.appendChild(row);
     });
 
     // Backfill last group badge
@@ -149,6 +231,7 @@
     }
     state._previewData = await r.json();
     state._previewSid  = state.SID;
+    _hydrateSelectionFromContext();
 
     const tables = state._previewData.tables || [];
     if (!tables.length) {
@@ -164,13 +247,16 @@
   function _switchTab(idx, clickedBtn) {
     $("preview-tabs").querySelectorAll(".preview-tab")
       .forEach(b => b.classList.toggle("active", b === clickedBtn));
-    _loadTable(state._previewData.tables[idx]);
+    const tableMeta = state._previewData.tables[idx];
+    _syncContextControls(tableMeta);
+    _loadTable(tableMeta);
   }
 
   // ── Load one table ────────────────────────────────────────────────────────
   async function _loadTable(tableMeta) {
     const wrap = $("preview-table-wrap");
     const key  = _cacheKey(tableMeta);
+    _syncContextControls(tableMeta);
     if (state._previewCache[key]) { _renderTable(state._previewCache[key]); return; }
 
     _renderSkeleton(tableMeta);
@@ -234,5 +320,8 @@
     }
   }
 
-  window.BAA.preview = { invalidate, openSchemaView };
+  const useBtn = $("preview-use-table");
+  if (useBtn) useBtn.addEventListener("click", useSelectedTablesForAnalysis);
+
+  window.BAA.preview = { invalidate, openSchemaView, useSelectedTablesForAnalysis };
 })();

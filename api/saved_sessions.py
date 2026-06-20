@@ -140,6 +140,11 @@ def _list_files() -> list[dict]:
     return result
 
 
+def _session_file(filename: str) -> Path:
+    """Resolve a saved-session filename inside SAVE_DIR."""
+    return SAVE_DIR / Path(filename).name
+
+
 # ── API endpoints ──────────────────────────────────────────────────────────
 
 @bp.get("/api/saved-sessions")
@@ -252,7 +257,7 @@ def load_session(sid: str):
     if not filename:
         return jsonify({"error": "未指定文件名"}), 400
 
-    path = SAVE_DIR / filename
+    path = _session_file(filename)
     if not path.exists() or path.suffix != ".json":
         return jsonify({"error": "文件不存在"}), 404
 
@@ -301,9 +306,33 @@ def load_session(sid: str):
     })
 
 
+@bp.post("/api/saved-sessions/<filename>/rename")
+@bp.patch("/api/saved-sessions/<filename>")
+def rename_session(filename: str):
+    """Rename a saved conversation by updating its display name in metadata."""
+    path = _session_file(filename)
+    if not path.exists() or path.suffix != ".json":
+        return jsonify({"error": "文件不存在"}), 404
+
+    name = (request.json or {}).get("name", "").strip()
+    if not name:
+        return jsonify({"error": "名称不能为空"}), 400
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["name"] = name
+        data["renamed_at"] = datetime.now().isoformat(timespec="seconds")
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        return jsonify({"error": f"重命名失败: {exc}"}), 500
+
+    log.info("[session] renamed  file=%s  name=%r", path.name, name)
+    return jsonify({"ok": True, "filename": path.name, "name": name})
+
+
 @bp.delete("/api/saved-sessions/<filename>")
 def delete_session(filename: str):
-    path = SAVE_DIR / filename
+    path = _session_file(filename)
     if not path.exists() or path.suffix != ".json":
         return jsonify({"error": "文件不存在"}), 404
     path.unlink()

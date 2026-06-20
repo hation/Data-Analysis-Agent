@@ -52,14 +52,27 @@
     // Saved sessions
     saveSession:   () => window.BAA.sessions.saveSession(),
     loadSession:   (el) => window.BAA.sessions.loadSavedSession(el.dataset.filename, el.dataset.name),
+    cancelLoadSession: () => window.BAA.sessions.cancelLoadSession(),
+    renameSession: (el) => window.BAA.sessions.renameSavedSession(el.dataset.filename, el.dataset.name),
+    submitRenameSession: () => window.BAA.sessions.submitRenameSession(),
     deleteSession: (el) => window.BAA.sessions.deleteSavedSession(el.dataset.filename, el.dataset.name),
+    confirmDeleteSession: () => window.BAA.sessions.confirmDeleteSavedSession(),
 
     // Update modal
     runUpdate:   () => window.BAA.update.runUpdate(),
 
+    // Workspace (workdir mount)
+    openWorkspace:   () => window.BAA.workspace.openModal(),
+    mountWorkspace:  () => window.BAA.workspace.doMount(),
+    pickWorkdir:     () => window.BAA.workspace.pickWorkdir(),
+
     // MCP server form
     toggleMcpAddForm: () => window.toggleMcpAddForm(),
     addMcpServer:     () => window.addMcpServer(),
+    switchMcpTab:     (_el, tab) => window.switchMcpTab(tab),
+    scanLocalMcp:     () => window.scanLocalMcp(),
+    parseMcpConfig:   () => window.parseMcpConfig(),
+    updateMcpCmdPreview: () => window.updateMcpCmdPreview(),
 
     // Knowledge base
     kbOpenForm:      (_el, type) => window.kbOpenForm(type),
@@ -172,6 +185,16 @@
     fn(el, ...args);
   });
 
+  // Input delegation (for live previews/counters)
+  document.addEventListener("input", e => {
+    const el = e.target.closest("[data-input]");
+    if (!el) return;
+    const [name, ...args] = el.dataset.input.split(":");
+    const fn = ACTIONS[name];
+    if (!fn) { console.warn("[BAA] unknown input action:", name); return; }
+    fn(el, ...args);
+  });
+
   // Overlay backdrop click → close
   document.addEventListener("click", e => {
     const ov = e.target.closest(".overlay");
@@ -246,12 +269,18 @@
     if (input) input.placeholder = t('input.placeholder');
     const savedEmpty = document.querySelector('#saved-list .saved-empty');
     if (savedEmpty) savedEmpty.textContent = t('saved_empty');
+    // Re-sync workspace sidebar status text if unmounted (mounted shows path segment, no need to update)
+    if (!document.getElementById('ws-dot')?.classList.contains('on')) {
+      const wsTxt = $('ws-status-text');
+      if (wsTxt) wsTxt.textContent = t('workspace.unmounted');
+    }
     if (window.BAA.slash.isSlashOpen()) window.BAA.slash.buildSlashPopup();
   });
 
   // ── Bootstrap ─────────────────────────────────────────────────────
   (async () => {
     window.BAA.slash.buildSlashPopup();
+    await window.BAA.slash.loadSkills();
 
     // Try to reuse the previous session (so autosave + in-memory history survive refresh)
     const prevSID = localStorage.getItem("baa_session_id");
@@ -274,6 +303,7 @@
       state.SID = (await r.json()).session_id;
     }
     localStorage.setItem("baa_session_id", state.SID);
+    sessionStorage.setItem("baa_session_id", state.SID);
     await window.BAA.models.loadModels();
     await window.BAA.models.loadBuiltinProviders();
     await window.BAA.sessions.loadSavedList();
@@ -295,6 +325,9 @@
         }
       }
     } catch { /* non-critical */ }
+
+    // Sync workspace mount state (sidebar dot + modal Vue state)
+    if (window.BAA.workspace) window.BAA.workspace.loadStatus();
 
     // Check for a resumable auto-save from the previous session
     if (window.BAA.autosave) window.BAA.autosave.checkAutosaveOnLoad();

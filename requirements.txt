@@ -13,7 +13,8 @@
 # Web
 flask>=2.0.0
 flask-cors>=3.0.0
-gunicorn>=20.1.0
+waitress>=3.0.0        # 统一 WSGI server（开发/生产），支持 SSE chunked
+gunicorn>=20.1.0       # Linux 私有化部署备用
 pyecharts>=2.0.0
 selenium>=4.0.0
 snapshot-selenium>=0.0.2
@@ -23,6 +24,7 @@ scipy>=1.7.0
 duckdb>=1.0.0
 pandas>=1.3.0
 numpy>=1.21.0
+PyYAML>=6.0.0          # agent skill front matter parsing (import name: yaml)
 openpyxl>=3.1.0
 xlrd>=2.0.1
 python-calamine>=0.1.0

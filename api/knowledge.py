@@ -115,6 +115,10 @@ def delete_file(filename: str):
     if not target.exists():
         return jsonify({"error": "File not found"}), 404
     target.unlink()
+    try:
+        _kb().delete_document_index(filename)
+    except Exception:
+        log.exception("Failed to delete RAG index for %s", filename)
     return jsonify({"ok": True})
 
 
@@ -124,11 +128,21 @@ def delete_file(filename: str):
 def confirm_records():
     body = request.get_json(silent=True) or {}
     records = body.get("records", [])
-    if not records:
-        return jsonify({"error": "No records provided"}), 400
+    filename = Path(body.get("filename") or "").name
+    if not records and not filename:
+        return jsonify({"error": "No records or source file provided"}), 400
     try:
-        counts = _kb().bulk_insert(records)
-        return jsonify({"ok": True, "inserted": counts})
+        kb = _kb()
+        counts = kb.bulk_insert(records) if records else {"metrics": 0, "rules": 0, "notes": 0}
+        rag = {"chunks": 0}
+        if filename:
+            source_path = _KB_DIR / filename
+            if source_path.exists() and source_path.suffix.lower() in _ALLOWED_EXTS:
+                from Function.Knowledge.file_parser import extract_text
+                text = extract_text(str(source_path))
+                if text.strip():
+                    rag = kb.index_document(filename, text, source_type="file")
+        return jsonify({"ok": True, "inserted": counts, "rag": rag})
     except Exception as e:
         log.exception("Knowledge confirm failed")
         return jsonify({"error": str(e)}), 500

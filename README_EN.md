@@ -1,23 +1,21 @@
 # Intelligent Business Analysis Agent
 
-<p align="center">
-  <img src="./Images/Banner.png" alt="Business Analysis Agent Banner" width="100%" />
-</p>
-
-<p align="right"><a href="./README.md">中文</a></p>
+<p align="right"><a href="./README_EN.md">English</a></p>
 
 <p align="center">
-  <a href="https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest/download/BusinessAnalyticsAgent_v5.1.exe">
-    <img src="https://img.shields.io/badge/Download-Windows_Installer_v5.1-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows Installer" />
-  </a>
+  <img src="./Information/assets/Banner.png" alt="智能商业分析 Agent Banner" width="100%" />
 </p>
+
+<div align="center">
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)
 ![Flask](https://img.shields.io/badge/Backend-Flask-black.svg)
 ![Plotly](https://img.shields.io/badge/Visualization-Plotly-3F4F75.svg)
 ![LLM](https://img.shields.io/badge/LLM-OpenAI%20Compatible-green.svg)
-![Charts](https://img.shields.io/badge/Charts-43_Types-orange.svg)
+![Charts](https://img.shields.io/badge/Charts-41_Types-orange.svg)
 ![License](https://img.shields.io/badge/License-Apache%202.0-yellow.svg)
+
+</div>
 
 > An AI Agent built for business analysis scenarios.
 > After connecting a data source, users simply ask questions in natural language — the system automatically handles:
@@ -27,24 +25,76 @@
 > - Chart generation
 > - Business insight analysis
 
+> 💬 **Official Community:** QQ Group `991636855` · [Telegram Group](https://t.me/+cdRNfS68u9BlYjJl)
+
+<p align="center">
+  <a href="#quickstart">⚡ Quick Start</a> ·
+  <a href="#features">✨ Highlights</a> ·
+  <a href="#agent-manager">🧩 Agent Manager</a> ·
+  <a href="#install">⚙️ Installation</a> ·
+  <a href="#examples">📈 Examples</a> ·
+  <a href="#llm-config">🤖 LLM Setup</a> ·
+  <a href="#faq">❓ FAQ</a>
+</p>
+
+<details>
+<summary><strong>📚 Full Table of Contents</strong></summary>
+
+<br>
+
+- [⚡ Quick Start](#quickstart)
+- [🙏 Sponsors](#sponsors)
+- [✨ Project Highlights](#features)
+- [🧠 Core Capabilities](#capabilities)
+- [⚙️ Installation](#install)
+- [🛠 Slash Commands](#commands)
+- [📈 Usage Examples](#examples)
+- [🤖 LLM Configuration](#llm-config)
+- [🗺️ Project Milestones](#roadmap)
+- [❓ FAQ](#faq)
+- [🤝 Contribution Guide](#contributing)
+- [📄 License](#license)
+- [⭐ Project Goal](#goal)
+
+</details>
+
 ---
 
-# Table of Contents
+<a id="quickstart"></a>
 
-- [🙏 Sponsors](#-sponsors)
-- [✨ Project Highlights](#-project-highlights)
-- [🧠 Core Capabilities](#-core-capabilities)
-- [⚙️ Installation](#️-installation)
-- [🛠 Slash Commands](#-slash-commands)
-- [📈 Usage Examples](#-usage-examples)
-- [🤖 LLM Configuration](#-llm-configuration)
-- [🗺️ Project Milestones](#️-project-milestones)
-- [❓ FAQ](#-faq)
-- [🚀 Looking for Contributors](#-looking-for-contributors)
-- [📄 License](#-license)
-- [⭐ Project Goal](#-project-goal)
+# ⚡ 30-Second Quick Start
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/Zafer-Liu/Data-Analysis-Agent.git
+cd Data-Analysis-Agent
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Start the application
+python app.py
+
+# 4. Open http://localhost:5001 in your browser
+# 5. Configure your API key in the sidebar, upload data, and start asking questions!
+```
+
+> 💡 Windows users can also download the latest installer from [GitHub Releases](https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest).
+
+```text
+Try asking: What is the sales trend for the last three months?
+```
+
+<details>
+<summary>📖 All installation methods (4)</summary>
+
+See [Installation](#install) below for the Windows installer, ZIP package, one-click install, and Git clone methods.
+
+</details>
 
 ---
+
+<a id="sponsors"></a>
 
 # 🙏 Sponsors
 
@@ -53,11 +103,6 @@ Thank you to the following sponsors for supporting this project!
 <table>
 <tr>
 <td width="50%" align="center" valign="top">
-<a href="https://doloffer.com/">
-<img src="./Images/DolOffer.png" alt="DolOffer Logo" height="70">
-</a>
-<br>
-<br>
 <a href="https://doloffer.com/"><strong>DolOffer</strong></a>
 <br>
 <br>
@@ -67,11 +112,6 @@ Thank you to DolOffer for supporting this project! DolOffer is a platform focuse
 <a href="https://github.com/Doloffer-g/guide">Learn more →</a>
 </td>
 <td width="50%" align="center" valign="top">
-<a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=data-analysis-agent">
-<img src="./Images/ATLAS%20CLOUD.png" alt="Atlas Cloud Logo" height="70">
-</a>
-<br>
-<br>
 <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=data-analysis-agent"><strong>Atlas Cloud</strong></a>
 <br>
 <br>
@@ -84,6 +124,8 @@ Thank you to Atlas Cloud for supporting this project! Atlas Cloud is an all-moda
 </table>
 
 ---
+
+<a id="features"></a>
 
 # ✨ Project Highlights
 
@@ -110,6 +152,58 @@ All delivered via **SSE (Server-Sent Events) streaming**, showing the analysis p
 
 ---
 
+<a id="demo"></a>
+
+## 🎬 Product Demo
+
+> One demonstration is worth a thousand screenshots.
+
+<div align="center">
+
+https://github.com/user-attachments/assets/f298aae2-6238-475e-9d85-1da33b7b847e
+
+</div>
+
+<p align="center">
+<em>Product demo — Chinese</em>
+</p>
+
+---
+
+<a id="agent-manager"></a>
+
+# 🧩 Recommended Management: Agent Manager
+
+Business Analytics Agent can run independently or with **Agent Manager** for a more convenient desktop management experience.
+
+<details>
+<summary><strong>Learn how Agent Manager manages this project</strong></summary>
+
+<br>
+
+**Agent Manager** is a unified control center for local AI Agent projects. After adding Business Analytics Agent, you can:
+
+* Start or stop the Agent with one click
+* View logs and port status in real time
+* Open the web analysis interface inside the desktop app
+* Ask the Manager Agent to start or open this project in natural language
+* Create a temporary public sharing link for demos
+
+```text
+Example:
+Start Business Analytics Agent and open its interface.
+```
+
+This is especially useful when you frequently demonstrate, debug, or run multiple Agent projects.
+
+👉 Project: [Agent Manager](https://github.com/Zafer-Liu/Agent_Manager)
+
+</details>
+
+---
+
+<a id="capabilities"></a>
+
 # 🧠 Core Capabilities
 
 ## 1️⃣ Natural Language Data Analysis
@@ -127,7 +221,7 @@ The system will automatically:
 - Recommend a chart
 - Summarize the analysis
 
-![Data Query](Images/Data_query.png)
+![Data Query](./Information/assets/Data_query.png)
 
 ## 2️⃣ Multi-Source Data Support
 
@@ -137,7 +231,7 @@ Supports uploading and connecting to multiple data sources:
 - **Databases**: SQLite, MySQL, PostgreSQL, SQL Server
 - **Planned**: DuckDB, Spark
 
-![Data Preview](Images/Data_preview.png)
+![Data Preview](./Information/assets/Data_preview.png)
 
 ## 3️⃣ Intelligent Chart System
 
@@ -152,7 +246,7 @@ Based on your query results, the system automatically recommends the most approp
 | **RELATIONSHIP** | Scatter_Plot, Bubble_Plot, Radar_Charts, Chord_Diagram, Arc_Chart, Network_Diagram, Parallel_Coordinates_Plot |
 | **PART-TO-WHOLE** | Treemap, Sunburst_Diagram, Nightingale_Chart, Pie_Chart |
 
-![Auto Generated](Images/Auto_generated_image.png)
+![Auto Generated](./Information/assets/Auto_generated_image.png)
 
 ## 4️⃣ SSE Streaming Analysis Experience
 
@@ -194,8 +288,6 @@ Currently supported analysis features:
 - Decision tree modeling
 - And more...
 
-![Analyze](Images/Analyze.png)
-
 ## 7️⃣ Report Generation
 
 Supports exporting:
@@ -204,55 +296,50 @@ Supports exporting:
 - Reports in `.docx` format
 - Built-in styled PowerPoint presentations
 
-![Output](Images/Output.png)
-
 ## 8️⃣ MCP Extensions
 
 Supports connecting to local or remote MCP servers to expand the Agent's capabilities.
 
-![MCP](Images/MCP1.png)
+![MCP](./Information/assets/MCP1.png)
 
-- Tutorial: [MCP_tutorial](Information/MCP_tutorial.md)
+- Tutorial: [MCP_tutorial](./Information/MCP_tutorial.md)
 
 ## 9️⃣ Knowledge Base Input
 
 Supports uploading business knowledge to help the Agent better understand your data.
 
-![repository](Images/repository2.png)
+![repository](./Information/assets/repository2.png)
 
-- Tutorial: [repository_tutorial](Information/repository_tutorial.md)
+- Tutorial: [repository_tutorial](./Information/repository_tutorial.md)
 
 ---
+
+<a id="install"></a>
 
 # ⚙️ Installation
 
----
+### 🖥️ Option 1: Windows Installer (Easiest — Recommended)
 
-### 🖥️ Option 0: Windows Installer (Easiest — Recommended)
+Download the latest version from [GitHub Releases](https://github.com/Zafer-Liu/Data-Analysis-Agent/tree/main/Releases):
 
-No Python required. Download, run the installer, and you're done.
+| Platform | File |
+|---|---|
+| Windows | `BusinessAnalyticsAgent_v1.0.0_LTS.exe` |
 
-<p align="center">
-  <a href="https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest/download/BusinessAnalyticsAgent_v5.1.exe">
-    <img src="https://img.shields.io/badge/Download-Windows_Installer_v5.1-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows Installer" />
-  </a>
-</p>
+> **Prerequisites: Python 3.10+ and 64-bit Windows 10 / 11.**
 
-> File: `BusinessAnalyticsAgent_v5.1.exe` (44 MB)  
-> Requires: Windows 10 / 11 64-bit  
-> After installation, find **BusinessAnalyticsAgent** on your desktop or Start Menu and double-click to launch.  
-> **Security note:** If Windows shows "Windows protected your PC", click "More info" → "Run anyway". The installer is not code-signed, which is normal for open-source projects.
+Run the installer and follow the setup wizard. After installation, launch **Business Analytics Agent** from the desktop or Start Menu.
 
 ---
 
-### Option 1: Download the ZIP (Recommended for Beginners, Cross-Platform)
+### Option 2: Download the ZIP (Recommended for Beginners, Cross-Platform)
 
 > **Prerequisite: Python 3.10+**
 > Don't have it? [Download here](https://www.python.org/downloads/) (Windows: check **"Add Python to PATH"** during install)
 
 **Step 1: Download and extract**
 
-![Download installation package](Images/package.png)
+![Download installation package](Information/assets/package.png)
 
 **Step 2: Double-click to launch**
 
@@ -265,19 +352,19 @@ No Python required. Download, run the installer, and you're done.
 
 **Step 3: Browser auto-opens** at `http://localhost:5001`
 
-![Download installation package2](Images/package2.png)
+![Download installation package2](./Information/assets/package2.png)
 
 **Step 4: Configure your API Key**
 
-![Configure the API3](Images/Deepseek3.png)
+![Configure the API3](./Information/assets/Deepseek3.png)
 
 **Step 5: Future updates**
 
-![Update](Images/Update.png)
+![Update](./Information/assets/Update.png)
 
 ---
 
-### Option 2: One-Click Online Install
+### Option 3: One-Click Online Install
 
 **Windows (run in PowerShell):**
 
@@ -310,7 +397,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ---
 
-### Option 3: Clone from GitHub
+### Option 4: Clone from GitHub
 
 ```bash
 git clone https://github.com/Zafer-Liu/Data-Analysis-Agent.git
@@ -319,9 +406,11 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Open `http://localhost:5001` in your browser and configure your API Key (same as Option 1).
+Open `http://localhost:5001` in your browser and configure your API Key.
 
 ---
+
+<a id="commands"></a>
 
 # 🛠 Slash Commands
 
@@ -342,6 +431,8 @@ Open `http://localhost:5001` in your browser and configure your API Key (same as
 | `/status` | ✅ | View task status |
 
 ---
+
+<a id="examples"></a>
 
 # 📈 Usage Examples
 
@@ -389,9 +480,9 @@ The system will prioritize generating a visualization.
 
 ---
 
-# 🤖 LLM Configuration
+<a id="llm-config"></a>
 
-## LLM Setup
+# 🤖 LLM Configuration
 
 In the sidebar ⚙, fill in:
 
@@ -405,9 +496,11 @@ to switch between models.
 
 ---
 
+<a id="roadmap"></a>
+
 # 🗺️ Project Milestones
 
-> **Current version `v5.1`** · June 13, 2026
+> **Current version `v1.0.0 LTS`** · June 20, 2026
 
 This update focuses on multi‑data‑source joint analysis and the stability experience of data ingestion.
 
@@ -420,10 +513,12 @@ This update focuses on multi‑data‑source joint analysis and the stability ex
 
 ## 📖 Detailed Changelog
 
-- [Version Update Log (中文)](Information/Version_Update_Log.md)
-- [Version Update Log (English)](Information/Version_Update_Log_EN.md)
+- [Version Update Log (中文)](./Information/Version_Update_Log.md)
+- [Version Update Log (English)](./Information/Version_Update_Log_EN.md)
 
 ---
+
+<a id="faq"></a>
 
 # ❓ FAQ
 
@@ -522,11 +617,11 @@ Enter your API Key in the sidebar ⚙ and save.
 
 Using DeepSeek as an example:
 
-![Configure the API1](Images/Deepseek1.png)
+![Configure the API1](./Information/assets/Deepseek1.png)
 
-![Configure the API2](Images/Deepseek2.png)
+![Configure the API2](./Information/assets/Deepseek2.png)
 
-![Configure the API3](Images/Deepseek3.png)
+![Configure the API3](./Information/assets/Deepseek3.png)
 
 </details>
 
@@ -586,7 +681,54 @@ You can open the corresponding HTML files directly in your browser.
 
 ---
 
-# 🚀 Looking for Contributors
+<a id="contributing"></a>
+
+# 🤝 Contribution Guide
+
+We welcome every kind of contribution, whether you are fixing a bug, improving documentation, or adding a feature.
+
+### Contribution Workflow
+
+1. **Fork this repository**
+2. **Create a feature branch**
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
+3. **Commit your changes**
+   ```bash
+   git add .
+   git commit -m "feat: add your feature"
+   ```
+   We recommend following the [Conventional Commits](https://www.conventionalcommits.org/) specification.
+4. **Push your branch**
+   ```bash
+   git push origin feature/your-feature-name
+   ```
+5. **Open a Pull Request**
+   - Describe your changes
+   - Include screenshots or a recording for new UI features
+   - Link related issues, if any
+
+### Code Standards
+
+- Follow [PEP 8](https://pep8.org/) for Python code
+- Run `flake8` before submitting changes
+- Add relevant tests for new features
+- Keep commit messages clear and concise
+
+### Reporting Bugs
+
+Report bugs through [GitHub Issues](https://github.com/Zafer-Liu/Data-Analysis-Agent/issues) and include:
+
+- 📋 Steps to reproduce
+- 🎯 Expected behavior
+- ⚠️ Actual behavior
+- 📸 Screenshots, when applicable
+- 💻 Environment details, including OS and Python version
+
+---
+
+## 🚀 Looking for Contributors
 
 A great open-source project is never a solo act.
 We're building a **data tool that can genuinely handle complex business scenarios** — one that races through massive datasets, navigates multi-table logic with ease, and surfaces insights on visual dashboards.
@@ -616,8 +758,11 @@ We've hit a few deeply challenging, high-value problems. If you love solving har
 
 - Open a **Pull Request** directly — we review within 24 hours
 - Or contact us at: `rusboldtshanti34@gmail.com` (please note "Contributor + area of expertise")
+- Join the official community: QQ Group `991636855` or [Telegram Group](https://t.me/+cdRNfS68u9BlYjJl)
 
 ---
+
+<a id="license"></a>
 
 # 📄 License
 
@@ -625,6 +770,19 @@ Apache License 2.0
 
 ---
 
+<a id="goal"></a>
+
 # ⭐ Project Goal
 
-Make business analysis as simple as having a conversation.
+Leave the process to Business Analytics Agent, and save your time for thinking.
+
+---
+
+
+<div align="center">
+
+⭐️ If this project helps you, please give it a star!
+
+Made with ❤️ by [Zafer-Liu](https://github.com/Zafer-Liu)
+
+</div>

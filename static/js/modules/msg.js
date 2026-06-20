@@ -58,6 +58,15 @@
   }
 
   function appendMsg(role, text) {
+    if (window.BAA.vueChat && window.BAA.vueChat.appendMsg) {
+      const vueEl = window.BAA.vueChat.appendMsg(role, text);
+      if (vueEl) {
+        _bindBubbleImages(vueEl.querySelector(".msg-bubble"));
+        scrollBottom();
+        return vueEl;
+      }
+    }
+
     const msgs = $("messages");
     const div  = document.createElement("div");
     div.className = `msg ${role}`;
@@ -78,12 +87,25 @@
   }
 
   function sysMsg(text) {
+    if (window.BAA.vueChat && window.BAA.vueChat.sysMsg) {
+      const vueEl = window.BAA.vueChat.sysMsg(text);
+      scrollBottom();
+      return vueEl;
+    }
+
     const msgs = $("messages");
     const d = document.createElement("div");
     d.className = "sys-msg";
     d.style.cssText = "text-align:center;font-size:12px;color:#94a3b8;padding:3px 0;";
     d.textContent = text;
     msgs.appendChild(d);
+  }
+
+  function clearMessages() {
+    if (window.BAA.vueChat && window.BAA.vueChat.clear) {
+      window.BAA.vueChat.clear();
+    }
+    document.querySelectorAll(".msg, .sys-msg").forEach(el => el.remove());
   }
 
   function fmtK(n) { return n >= 1000 ? (n / 1000).toFixed(1) + "K" : String(n); }
@@ -144,7 +166,15 @@
     scrollBottom();
   }
 
-  window.BAA.msg = { appendMsg, sysMsg, updateTokenBar, showStatus, fmtK, bindBubbleImages: _bindBubbleImages };
+  window.BAA.msg = {
+    appendMsg,
+    sysMsg,
+    clearMessages,
+    updateTokenBar,
+    showStatus,
+    fmtK,
+    bindBubbleImages: _bindBubbleImages,
+  };
 
   // Backward-compat globals (used by chat_stream / sessions / status command).
   window.appendMsg      = appendMsg;

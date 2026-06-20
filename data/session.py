@@ -5,9 +5,13 @@ import logging
 import uuid
 from dataclasses import dataclass, field, fields, MISSING
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
 log = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from agent.jobs import JobRunner
+    from data.jobs_store import JobsStore
 
 
 @dataclass
@@ -41,6 +45,10 @@ class ChatSession:
     last_accessed: datetime = field(default_factory=datetime.now)
     # Last turn's reasoning chain summary — injected into the next turn's messages
     last_reasoning: str = ""
+    # ── JobRunner (A6) ──────────────────────────────────────────────────────────
+    # Lazily initialized via the `job_runner` property. Each session gets its own
+    # ThreadPoolExecutor; the underlying JobsStore is a process-wide singleton.
+    _job_runner: Optional["JobRunner"] = None
     # Cached merged schema string — cleared whenever data sources change so we
     # don't serve a stale schema after upload/connect/disconnect.
     _combined_schema_cache: Optional[str] = None
@@ -67,6 +75,25 @@ class ChatSession:
             self._sources = [{"id": sid, "source": source}]
             self._active_ids = [sid]
         self._combined_schema_cache = None
+
+    # ── JobRunner (A6) ──────────────────────────────────────────────────────────
+
+    @property
+    def job_runner(self):
+        """Lazily create a per-session JobRunner backed by the global JobsStore."""
+        if self._job_runner is None:
+            from agent.jobs import JobRunner
+            self._job_runner = JobRunner(self.session_id, get_global_jobs_store())
+        return self._job_runner
+
+    def shutdown_job_runner(self) -> None:
+        """Release the runner's thread pool. Called on session removal/TTL eviction."""
+        if self._job_runner is not None:
+            try:
+                self._job_runner.shutdown(wait=False)
+            except Exception:
+                log.exception("[session] job_runner shutdown error")
+            self._job_runner = None
         self._invalidate_merged_source()
 
     def _active_entries(self) -> List[Dict[str, Any]]:
@@ -318,6 +345,25 @@ class ChatSession:
 _SESSION_TTL = 7200      # seconds before an idle session is evicted
 _CLEANUP_INTERVAL = 1800  # how often the daemon thread wakes to prune
 
+# ── Global JobsStore singleton (A6) ──────────────────────────────────────────
+# One SQLite DB shared by all sessions. JobRunner instances are per-session,
+# but they all write to this single store.
+_global_jobs_store: Optional["JobsStore"] = None
+_jobs_store_lock = __import__("threading").Lock()
+
+
+def get_global_jobs_store() -> "JobsStore":
+    """Return the process-wide JobsStore singleton (lazily created)."""
+    global _global_jobs_store
+    if _global_jobs_store is None:
+        with _jobs_store_lock:
+            if _global_jobs_store is None:
+                from data.jobs_store import JobsStore
+                _global_jobs_store = JobsStore()
+                log.info("[session] global JobsStore initialized at %s",
+                         _global_jobs_store.path)
+    return _global_jobs_store
+
 
 class SessionManager:
     def __init__(self):
@@ -347,7 +393,9 @@ class SessionManager:
         return s
 
     def remove(self, sid: str):
-        self._store.pop(sid, None)
+        s = self._store.pop(sid, None)
+        if s is not None:
+            s.shutdown_job_runner()
 
     def _cleanup_expired(self):
         cutoff = datetime.now()
@@ -356,7 +404,9 @@ class SessionManager:
             if (cutoff - s.last_accessed).total_seconds() > _SESSION_TTL
         ]
         for sid in expired:
-            self._store.pop(sid, None)
+            s = self._store.pop(sid, None)
+            if s is not None:
+                s.shutdown_job_runner()
         if expired:
             log.info("[session] TTL cleanup  removed=%d  remaining=%d",
                      len(expired), len(self._store))

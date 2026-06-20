@@ -2,7 +2,7 @@
 (function () {
   const { $, esc, scrollBottom, scrollReset, hideWelcome, showWelcome } = window.BAA.dom;
   const state = window.BAA.state;
-  const { appendMsg, sysMsg, updateTokenBar, showStatus } = window.BAA.msg;
+  const { appendMsg, sysMsg, clearMessages, updateTokenBar, showStatus } = window.BAA.msg;
   const { clearCmd } = window.BAA.slash;
 
   // ── Send / Stop ────────────────────────────────────────────────────
@@ -88,6 +88,9 @@
   }
 
   async function _streamChat(payload, stepsEl, bubbleEl, typing) {
+    if (state.analysisContext && !payload.data_context) {
+      payload.data_context = state.analysisContext;
+    }
     const resp = await fetch(`/api/session/${state.SID}/chat`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -106,13 +109,20 @@
         const lines = buf.split("\n"); buf = lines.pop();
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
-          try { handleEvent(JSON.parse(line.slice(6)), stepsEl, bubbleEl, typing); }
+          try { await handleEvent(JSON.parse(line.slice(6)), stepsEl, bubbleEl, typing); }
           catch (_) {}
         }
       }
     } catch (_) {
       // reader.cancel() throws — expected when stopStreaming() is called.
     } finally {
+      if (!(window.BAA.vueChat && window.BAA.vueChat.finishAllTools && window.BAA.vueChat.finishAllTools(stepsEl))) {
+        _tickAllSteps(stepsEl);
+      }
+      if (window.BAA.vueChat && window.BAA.vueChat.hideToolActivity) {
+        window.BAA.vueChat.hideToolActivity(stepsEl);
+      }
+      if (typing && typing.parentNode) typing.remove();
       state._streamReader = null;
       state.isStreaming   = false;
       _setSendBtnStopping(false);
@@ -141,31 +151,205 @@
     stepsEl.querySelectorAll(".tool-step:not(.done):not(.done-compaction)").forEach(_finishStep);
   }
 
+  function _showToolActivity(ctx) {
+    return !!(window.BAA.vueChat
+      && window.BAA.vueChat.showToolActivity
+      && window.BAA.vueChat.showToolActivity(ctx.stepsEl));
+  }
+
+  function _hideToolActivity(ctx) {
+    return !!(window.BAA.vueChat
+      && window.BAA.vueChat.hideToolActivity
+      && window.BAA.vueChat.hideToolActivity(ctx.stepsEl));
+  }
+
   // ── SSE event handlers (object-table dispatch) ─────────────────────
   function _onToolStart(ev, ctx) {
-    _tickFinishedSteps(ctx.stepsEl);
-    const s = document.createElement("div");
-    const isCompaction = ev.tool === "compaction";
-    s.className = isCompaction ? "tool-step tool-step-compaction" : "tool-step";
-    const shortText = esc(ev.display);
-    const fullText  = esc(ev.detail || ev.display);
-    const hasMore   = !isCompaction && ev.detail && ev.detail !== ev.display;
-    const icon      = isCompaction ? `<span class="compaction-spin">⟳</span>` : `<span class="spin">⟳</span>`;
-    s.innerHTML = `${icon}<span class="tool-step-text">${shortText}</span>${hasMore ? '<span class="tool-step-toggle">⋯</span>' : ''}`;
-    if (hasMore) {
-      s.dataset.short = shortText;
-      s.dataset.full  = fullText;
-      s.addEventListener("click", () => {
-        const expanded = s.classList.toggle("expanded");
-        s.querySelector(".tool-step-text").innerHTML = expanded ? s.dataset.full : s.dataset.short;
-        s.querySelector(".tool-step-toggle").textContent = expanded ? "▲" : "⋯";
-      });
+    if (ctx.typing && ctx.typing.parentNode) ctx.typing.remove();
+    if (window.BAA.vueChat && window.BAA.vueChat.startTool) {
+      if (window.BAA.vueChat.startTool(ctx.stepsEl, ev)) {
+        scrollBottom();
+        return;
+      }
     }
+    _hideToolActivity(ctx);
+    _tickFinishedSteps(ctx.stepsEl);
+    const isCompaction = ev.tool === "compaction";
+    const s = document.createElement(isCompaction ? "div" : "details");
+    s.className = isCompaction ? "tool-step tool-step-compaction" : "tool-step";
+    s.dataset.tool = ev.tool || "";
+    if (!isCompaction) s.open = false;
+    const shortText = esc(String(ev.display || ev.detail || "").replace(/\s+/g, " ").trim());
+    const fullText  = esc(ev.detail || ev.display || "");
+    const icon      = isCompaction ? `<span class="compaction-spin">⟳</span>` : `<span class="spin">⟳</span>`;
+    s.innerHTML = isCompaction
+      ? `${icon}<span class="tool-step-text">${fullText}</span>`
+      : `<summary class="tool-step-head">${icon}<span class="tool-step-text">${shortText}</span></summary><div class="tool-step-detail">${fullText}</div>`;
     ctx.stepsEl.appendChild(s);
     scrollBottom();
   }
 
+  function _onKnowledgeRefs(ev, ctx) {
+    if (window.BAA.vueChat && window.BAA.vueChat.setKnowledgeRefs) {
+      if (window.BAA.vueChat.setKnowledgeRefs(ctx.stepsEl, ev)) {
+        _showToolActivity(ctx);
+        scrollBottom();
+        return;
+      }
+    }
+    const refs = Array.isArray(ev.refs) ? ev.refs : [];
+    const steps = [...ctx.stepsEl.querySelectorAll('.tool-step[data-tool="query_knowledge"]')];
+    const step = steps[steps.length - 1];
+    if (!step) return;
+
+    const old = step.nextElementSibling;
+    if (old && old.classList.contains("knowledge-refs")) old.remove();
+
+    const panel = document.createElement("details");
+    panel.className = "knowledge-refs";
+    panel.open = false;
+
+    const summary = document.createElement("summary");
+    summary.textContent = refs.length
+      ? `引用来源（${refs.length} 条）`
+      : "引用来源（未命中）";
+    panel.appendChild(summary);
+
+    const list = document.createElement("div");
+    list.className = "knowledge-ref-list";
+    if (!refs.length) {
+      const empty = document.createElement("div");
+      empty.className = "knowledge-ref-empty";
+      empty.textContent = "本次知识库检索没有命中可引用条目。";
+      list.appendChild(empty);
+    } else {
+      refs.forEach(ref => {
+        const item = document.createElement("div");
+        item.className = "knowledge-ref-item";
+        const score = ref.score !== "" && ref.score !== null && ref.score !== undefined
+          ? `<span class="knowledge-ref-score">score ${esc(String(ref.score))}</span>`
+          : "";
+        item.innerHTML = `
+          <div class="knowledge-ref-head">
+            <span class="knowledge-ref-type">${esc(ref.type || "来源")}</span>
+            <span class="knowledge-ref-title">${esc(ref.title || ref.source || "未命名来源")}</span>
+            ${score}
+          </div>
+          ${ref.source ? `<div class="knowledge-ref-source">${esc(ref.source)}</div>` : ""}
+          ${ref.snippet ? `<div class="knowledge-ref-snippet">${esc(ref.snippet)}</div>` : ""}`;
+        list.appendChild(item);
+      });
+    }
+    panel.appendChild(list);
+    step.after(panel);
+    scrollBottom();
+  }
+
+  function _attachPanelAfterStep(ctx, toolName, className, panel) {
+    const steps = [...ctx.stepsEl.querySelectorAll(`.tool-step[data-tool="${toolName}"]`)];
+    const step = steps[steps.length - 1];
+    if (!step) return false;
+    const old = step.parentElement.querySelector(`.${className}[data-for-step="${step.dataset.stepId || ""}"]`);
+    if (old) old.remove();
+    if (!step.dataset.stepId) step.dataset.stepId = `${toolName}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    panel.dataset.forStep = step.dataset.stepId;
+    step.after(panel);
+    scrollBottom();
+    return true;
+  }
+
+  function _onDataRefs(ev, ctx) {
+    if (window.BAA.vueChat && window.BAA.vueChat.setDataRefs) {
+      if (window.BAA.vueChat.setDataRefs(ctx.stepsEl, ev)) {
+        _showToolActivity(ctx);
+        scrollBottom();
+        return;
+      }
+    }
+    const refs = Array.isArray(ev.refs) ? ev.refs : [];
+    if (!refs.length) return;
+    const panel = document.createElement("details");
+    panel.className = "data-refs";
+    panel.open = false;
+    const summary = document.createElement("summary");
+    summary.textContent = `数据依据（${refs.length} 条）`;
+    panel.appendChild(summary);
+
+    const list = document.createElement("div");
+    list.className = "knowledge-ref-list";
+    refs.forEach(ref => {
+      const item = document.createElement("div");
+      item.className = "knowledge-ref-item";
+      const rows = ref.rows !== null && ref.rows !== undefined
+        ? `<span class="knowledge-ref-score">${esc(String(ref.rows))} rows</span>`
+        : "";
+      item.innerHTML = `
+        <div class="knowledge-ref-head">
+          <span class="knowledge-ref-type">${esc(ref.type || "数据")}</span>
+          <span class="knowledge-ref-title">${esc(ref.title || "SQL 查询")}</span>
+          ${rows}
+        </div>
+        ${ref.source ? `<div class="knowledge-ref-source">${esc(ref.source)}</div>` : ""}
+        ${ref.snippet ? `<div class="knowledge-ref-snippet">${esc(ref.snippet)}</div>` : ""}`;
+      list.appendChild(item);
+    });
+    panel.appendChild(list);
+    _attachPanelAfterStep(ctx, "query_data", "data-refs", panel)
+      || _attachPanelAfterStep(ctx, "create_analysis_table", "data-refs", panel)
+      || _attachPanelAfterStep(ctx, "run_analysis", "data-refs", panel)
+      || _attachPanelAfterStep(ctx, "generate_chart", "data-refs", panel);
+  }
+
+  function _onToolAudit(ev, ctx) {
+    if (window.BAA.vueChat && window.BAA.vueChat.setToolAudit) {
+      if (window.BAA.vueChat.setToolAudit(ctx.stepsEl, ev)) {
+        _showToolActivity(ctx);
+        scrollBottom();
+        return;
+      }
+    }
+    const tool = ev.tool || "";
+    if (!tool) return;
+    const panel = document.createElement(ev.content || ev.summary ? "details" : "div");
+    panel.className = ev.ok === false ? "tool-audit tool-audit-error" : "tool-audit";
+    panel.dataset.tool = tool;
+    if (panel.tagName === "DETAILS") panel.open = false;
+    const elapsed = ev.elapsed_seconds !== undefined ? `${ev.elapsed_seconds}s` : "";
+    const sourceCount = Array.isArray(ev.sources) ? ev.sources.length : 0;
+    const artifactCount = Array.isArray(ev.artifacts) ? ev.artifacts.length : 0;
+    const bits = [
+      ev.parallel ? "并行" : "",
+      elapsed && `耗时 ${esc(elapsed)}`,
+      sourceCount ? `来源 ${sourceCount}` : "",
+      artifactCount ? `产物 ${artifactCount}` : "",
+      ev.error ? `错误 ${esc(ev.error)}` : "",
+    ].filter(Boolean);
+    const statusLine = document.createElement(panel.tagName === "DETAILS" ? "summary" : "span");
+    statusLine.className = "tool-audit-status";
+    statusLine.textContent = bits.length ? bits.join(" · ") : "工具执行完成";
+    panel.appendChild(statusLine);
+    const content = ev.content ?? ev.data ?? ev.summary;
+    if (content) {
+      panel.classList.add("tool-audit-has-summary");
+      const body = document.createElement("div");
+      body.className = "tool-audit-summary";
+      body.textContent = String(content);
+      panel.appendChild(body);
+    }
+    if (ev.args_preview) {
+      try { panel.title = JSON.stringify(ev.args_preview, null, 2); } catch (_) {}
+    }
+    _attachPanelAfterStep(ctx, tool, "tool-audit", panel);
+  }
+
   function _onToolEnd(ev, ctx) {
+    if (window.BAA.vueChat && window.BAA.vueChat.endTool) {
+      if (window.BAA.vueChat.endTool(ctx.stepsEl, ev)) {
+        _showToolActivity(ctx);
+        scrollBottom();
+        return;
+      }
+    }
     const step = ctx.stepsEl.querySelector(".tool-step:not(.done):not([data-finished])");
     if (!step) return;
     step.dataset.finished = "1";
@@ -241,6 +425,13 @@
   }
 
   function _onChartRef(ev, ctx) {
+    _hideToolActivity(ctx);
+    if (window.BAA.vueChat && window.BAA.vueChat.addChartRef) {
+      if (window.BAA.vueChat.addChartRef(ctx.bubbleEl, ev.chart_id)) {
+        scrollBottom();
+        return;
+      }
+    }
     // Insert chart inside the msg-body, just before the text bubble,
     // so it shares the same left-border / background visual context.
     const wrap = _buildChartFrame(ev.chart_id);
@@ -249,6 +440,13 @@
   }
 
   function _onTextDelta(ev, ctx) {
+    _hideToolActivity(ctx);
+    if (window.BAA.vueChat && window.BAA.vueChat.appendTextDelta) {
+      if (window.BAA.vueChat.appendTextDelta(ctx.bubbleEl, ev.content, ctx.typing)) {
+        scrollBottom();
+        return;
+      }
+    }
     if (ctx.typing.parentNode) ctx.typing.remove();
     ctx.bubbleEl.insertAdjacentText("beforeend", ev.content || "");
     scrollBottom();
@@ -273,17 +471,31 @@
   }
 
   function _onReasoning(ev, ctx) {
+    if (window.BAA.vueChat && window.BAA.vueChat.addReasoning) {
+      if (window.BAA.vueChat.addReasoning(ctx.bubbleEl, ev.content, ctx.typing)) {
+        scrollBottom();
+        return;
+      }
+    }
     if (ctx.typing.parentNode) ctx.typing.remove();
     const block = _buildReasoningBlock(ev.content);
     ctx.bubbleEl.before(block);
+    _showToolActivity(ctx);
     scrollBottom();
   }
 
   function _onText(ev, ctx) {
-    if (ctx.typing.parentNode) ctx.typing.remove();
-    _tickAllSteps(ctx.stepsEl);
     const md = ev.content || "";
-    ctx.bubbleEl.innerHTML = window.renderMd(md);
+    _hideToolActivity(ctx);
+    if (!md.trim()) return;
+    if (ctx.typing.parentNode) ctx.typing.remove();
+    if (!(window.BAA.vueChat && window.BAA.vueChat.finishAllTools && window.BAA.vueChat.finishAllTools(ctx.stepsEl))) {
+      _tickAllSteps(ctx.stepsEl);
+    }
+    const renderedByVue = window.BAA.vueChat && window.BAA.vueChat.setMarkdown
+      ? window.BAA.vueChat.setMarkdown(ctx.bubbleEl, md, ctx.typing)
+      : false;
+    if (!renderedByVue) ctx.bubbleEl.innerHTML = window.renderMd(md);
     // Attach hover-revealed action bar (copy) to the assistant message body.
     // The body persists across the bubble innerHTML rewrite, so we attach there.
     _ensureMsgActions(ctx.bubbleEl, md);
@@ -337,13 +549,23 @@
   }
 
   function _onError(ev, ctx) {
+    _hideToolActivity(ctx);
+    if (window.BAA.vueChat && window.BAA.vueChat.setError) {
+      if (window.BAA.vueChat.setError(ctx.bubbleEl, ev.message, ctx.typing)) return;
+    }
     if (ctx.typing.parentNode) ctx.typing.remove();
     ctx.bubbleEl.innerHTML = `<span style="color:#ef4444">⚠ ${esc(ev.message)}</span>`;
   }
 
   function _onStopped(ev, ctx) {
+    _hideToolActivity(ctx);
+    if (!(window.BAA.vueChat && window.BAA.vueChat.finishAllTools && window.BAA.vueChat.finishAllTools(ctx.stepsEl))) {
+      _tickAllSteps(ctx.stepsEl);
+    }
+    if (window.BAA.vueChat && window.BAA.vueChat.markStopped) {
+      if (window.BAA.vueChat.markStopped(ctx.bubbleEl, t('stop_note'), ctx.typing)) return;
+    }
     if (ctx.typing.parentNode) ctx.typing.remove();
-    _tickAllSteps(ctx.stepsEl);
     const stopNote = document.createElement("div");
     stopNote.className = "stop-note";
     stopNote.textContent = t('stop_note');
@@ -351,11 +573,7 @@
     if (!ctx.bubbleEl.textContent.trim()) ctx.bubbleEl.remove();
   }
 
-  function _onOutline(ev, ctx) {
-    if (ctx.typing.parentNode) ctx.typing.remove();
-    _tickAllSteps(ctx.stepsEl);
-
-    // Determine outline variant.
+  function _outlineMeta(ev) {
     let icon, confirmCmd, reviseCmd, confirmPayload, headerTitle;
     if (ev.type === "ppt_outline") {
       icon = "🎯"; confirmCmd = "ppt_confirm"; reviseCmd = "ppt_revise";
@@ -374,6 +592,47 @@
       headerTitle = esc(ev.title || "分析报告");
       confirmPayload = { report_title: ev.title, report_sections: ev.sections };
     }
+    return { icon, confirmCmd, reviseCmd, confirmPayload, headerTitle };
+  }
+
+  function _onOutline(ev, ctx) {
+    _hideToolActivity(ctx);
+    if (ctx.typing.parentNode) ctx.typing.remove();
+    if (!(window.BAA.vueChat && window.BAA.vueChat.finishAllTools && window.BAA.vueChat.finishAllTools(ctx.stepsEl))) {
+      _tickAllSteps(ctx.stepsEl);
+    }
+
+    const meta = _outlineMeta(ev);
+
+    if (window.BAA.vueChat && window.BAA.vueChat.addOutlineCard) {
+      if (window.BAA.vueChat.addOutlineCard(ctx.bubbleEl, {
+        icon: meta.icon,
+        headerTitle: meta.headerTitle,
+        markdown: ev.markdown || "",
+      }, {
+        onConfirm: () => sendConfirmStream({ command: meta.confirmCmd, message: "确认", ...meta.confirmPayload }),
+        onRevise: (editText) => {
+          let message = String(editText || "");
+          if (meta.reviseCmd === "ppt_revise" && meta.confirmPayload.ppt_slides)
+            message = `${message}\n\n[CURRENT_SLIDES_JSON]\n${JSON.stringify(meta.confirmPayload.ppt_slides)}`;
+          else if (meta.reviseCmd === "report_revise" && meta.confirmPayload.report_sections)
+            message = `${message}\n\n[CURRENT_REPORT_JSON]\n${JSON.stringify({ title: meta.confirmPayload.report_title, sections: meta.confirmPayload.report_sections })}`;
+          else if (meta.reviseCmd === "dashboard_revise" && meta.confirmPayload.dashboard_widgets)
+            message = `${message}\n\n[CURRENT_DASHBOARD_JSON]\n${JSON.stringify({ name: meta.confirmPayload.dashboard_name, widgets: meta.confirmPayload.dashboard_widgets })}`;
+          sendConfirmStream({ command: meta.reviseCmd, message });
+        },
+        onCancel: () => {},
+      })) {
+        scrollBottom();
+        return;
+      }
+    }
+
+    _legacyOutlineBody(ev, ctx, meta);
+  }
+
+  function _legacyOutlineBody(ev, ctx, meta) {
+    const { icon, confirmCmd, reviseCmd, confirmPayload, headerTitle } = meta;
 
     const card = document.createElement("div");
     card.className = "ppt-outline-card";
@@ -445,9 +704,25 @@
   }
 
   function _onAskUser(ev, ctx) {
+    _hideToolActivity(ctx);
     if (ctx.typing.parentNode) ctx.typing.remove();
-    _tickAllSteps(ctx.stepsEl);
+    if (!(window.BAA.vueChat && window.BAA.vueChat.finishAllTools && window.BAA.vueChat.finishAllTools(ctx.stepsEl))) {
+      _tickAllSteps(ctx.stepsEl);
+    }
 
+    if (window.BAA.vueChat && window.BAA.vueChat.addAskUserCard) {
+      if (window.BAA.vueChat.addAskUserCard(ctx.bubbleEl, ev, {
+        onSubmit: (answer) => sendConfirmStream({ message: answer }),
+      })) {
+        scrollBottom();
+        return;
+      }
+    }
+
+    _legacyAskUserBody(ev, ctx);
+  }
+
+  function _legacyAskUserBody(ev, ctx) {
     const multiSelect = !!ev.multi_select;
     const options = Array.isArray(ev.options) ? ev.options : [];
 
@@ -562,6 +837,9 @@
   const SSE_HANDLERS = {
     tool_start:         _onToolStart,
     tool_end:           _onToolEnd,
+    knowledge_refs:     _onKnowledgeRefs,
+    data_refs:          _onDataRefs,
+    tool_audit:         _onToolAudit,
     chart_ref:          _onChartRef,
     text_delta:         _onTextDelta,
     reasoning:          _onReasoning,
@@ -577,9 +855,28 @@
     ask_user:           _onAskUser,
   };
 
-  function handleEvent(ev, stepsEl, bubbleEl, typing) {
+  const PAINT_BREAK_EVENTS = new Set(["tool_start", "tool_end", "knowledge_refs", "data_refs", "tool_audit"]);
+  const STREAM_PAINT_EVENTS = new Set(["text_delta"]);
+  let lastStreamPaintAt = 0;
+
+  function _nextPaint() {
+    return new Promise(resolve => {
+      if (window.requestAnimationFrame) {
+        requestAnimationFrame(() => setTimeout(resolve, 0));
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
+  }
+
+  async function handleEvent(ev, stepsEl, bubbleEl, typing) {
     const fn = SSE_HANDLERS[ev.type];
     if (fn) fn(ev, { stepsEl, bubbleEl, typing });
+    if (PAINT_BREAK_EVENTS.has(ev.type)) await _nextPaint();
+    else if (STREAM_PAINT_EVENTS.has(ev.type) && Date.now() - lastStreamPaintAt > 50) {
+      lastStreamPaintAt = Date.now();
+      await _nextPaint();
+    }
   }
 
   // ── New chat ───────────────────────────────────────────────────────
@@ -588,6 +885,7 @@
       const r = await fetch("/api/session/new", { method: "POST" });
       const data = await r.json();
       state.SID = data.session_id;
+      localStorage.setItem("baa_session_id", state.SID);
       sessionStorage.setItem("baa_session_id", state.SID);
     } catch (_) {
       // Front-end resets either way; backend will rebuild on next send.
@@ -604,7 +902,9 @@
     }
 
     state.activeCommand = "";
-    document.querySelectorAll(".msg, .sys-msg").forEach(el => el.remove());
+    if (window.BAA.datasource) window.BAA.datasource.resetSourceState();
+    if (window.BAA.autosave) window.BAA.autosave.setLoadedName("", "");
+    clearMessages();
     state.tokenState = { promptTokens: 0, totalInput: 0, totalOutput: 0, contextWindow: null };
     updateTokenBar();
     showWelcome();

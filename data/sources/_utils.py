@@ -95,30 +95,38 @@ def _detect_header_row(rows: list, scan: int = 10) -> int:
 def _new_conn() -> duckdb.DuckDBPyConnection:
     """Open a fresh DuckDB in-memory connection with sane thread settings.
 
-    Security hardening (second layer after AST validation in validate.py):
-      - Disable local filesystem access so read_csv('/etc/passwd') etc. are
-        blocked at the engine level even if they somehow pass validation.
-      - Disable external access (HTTP, S3, extension auto-download).
+    Security model (A4 起):
+      - 不再禁用 LocalFileSystem 也不再禁用 enable_external_access —— 这两个
+        设置会连带禁用 read_csv / read_parquet 等 file-read 函数，与"工作目录
+        直读"目标冲突。DuckDB 的 enable_external_access 是全有或全无的，无法
+        只禁网络而留本地。
+      - 改由 `agent/validate.py` 的 SQL AST 路径白名单做精细控制：
+          * 文件读取函数路径必须是字面量，resolve 后在工作目录/uploads/Information 白名单内
+          * 网络 URL（http/https/s3/gs/azure/hdfs 等）一律拒绝（SSRF 防护）
+          * 非字面量参数（@var / 列引用）一律拒绝
+          * install/load/attach/copy_to/pragma/http_get/http_post 仍然禁止
 
-    These settings are applied after PRAGMA threads to avoid ordering issues.
-    If a particular DuckDB version does not support a setting it is silently
-    skipped — the AST-level validation in validate.py is the primary guard.
+    Layered defense (A4):
+      Layer 1 (primary): agent/validate.py 的 sqlglot AST 校验
+        - SELECT/WITH only，禁写操作
+        - 文件读取函数路径白名单 + URL 黑名单
+        - 非字面量路径参数一律拒绝
+      Layer 2 (workspace): data/workspace.py 的 is_path_allowed()
+        - Python 工具层文件读写鉴权（A5 接入）
+      Layer 3 (engine, removed in A4): 原本依赖 enable_external_access=false
+        做引擎级兜底，但该设置会禁用所有 file-read 函数，与工作目录直读冲突，
+        A4 起移除，完全依赖 Layer 1 的 AST 校验。
+
+    Risk: 如果 sqlglot 解析失败走 heuristic fallback，heuristic 会保守地拒绝
+    所有 file-read 函数（无法做路径白名单），所以安全降级而非放行。
     """
     conn = duckdb.connect(":memory:")
     # Allow connections to be used from multiple threads (Flask worker threads)
     conn.execute("PRAGMA threads=4")
 
-    # ── Security lockdown ──────────────────────────────────────────────────────
-    for _stmt in (
-        "SET disabled_filesystems = 'LocalFileSystem'",
-        "SET enable_external_access = false",
-    ):
-        try:
-            conn.execute(_stmt)
-        except Exception as _exc:
-            # Older DuckDB versions may not support these settings; skip silently.
-            # The AST validation layer remains as the primary guard.
-            log.debug("[_new_conn] security setting not supported, skipping: %s (%s)", _stmt, _exc)
+    # A4 起：不再 SET enable_external_access=false —— 它会禁用 read_csv 等
+    # file-read 函数，与工作目录直读冲突。网络 SSRF 防护交给 validate.py 的
+    # URL 黑名单（_BLOCKED_URL_SCHEMES）。
 
     return conn
 

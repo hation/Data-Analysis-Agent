@@ -106,10 +106,31 @@
 
   // ── After any connect/add operation ───────────────────────────────────────
   function onSourcesUpdated(sources, newSourceName, hintKey) {
-    renderSourceList(sources);
-    const active = sources.find(s => s.active);
+    const list = Array.isArray(sources) ? sources : [];
+    if (state.analysisContext) {
+      const contextTables = Array.isArray(state.analysisContext.tables)
+        ? state.analysisContext.tables
+        : (state.analysisContext.table ? [state.analysisContext] : []);
+      const remaining = contextTables.filter(ctxTable => list.some(
+        src => src.id === ctxTable.source_id && src.active
+      ));
+      state.analysisContext = remaining.length ? { tables: remaining } : null;
+    }
+    renderSourceList(list);
+    const active = list.find(s => s.active);
     const displayName = active ? active.name : (newSourceName || "");
-    setSrc(displayName, hintKey || 'src.hint.file', sources.length > 0);
+    setSrc(displayName, hintKey || 'src.hint.file', Boolean(active));
+  }
+
+  function resetSourceState() {
+    state.schemaText = "";
+    state.sources = [];
+    state._previewData = null;
+    state._previewCache = {};
+    state._previewSid = null;
+    state.analysisContext = null;
+    renderSourceList([]);
+    setSrc(null, 'sidebar.hint.noconn', false);
   }
 
   // ── Toggle a source active/inactive ───────────────────────────────────────
@@ -144,10 +165,7 @@
   // ── Disconnect ALL sources ─────────────────────────────────────────────────
   async function disconnectSrc() {
     await fetch(`/api/session/${state.SID}/datasource`, { method: "DELETE" });
-    state.schemaText = "";
-    state.sources = [];
-    setSrc(null, 'sidebar.hint.noconn', false);
-    renderSourceList([]);
+    resetSourceState();
     toast(t('toast.disconnected'));
   }
 
@@ -393,7 +411,7 @@
 
   window.BAA.datasource = {
     setSrc, renderSourceList, onSourcesUpdated,
-    loadDatasourceConfigs, disconnectSrc,
+    loadDatasourceConfigs, disconnectSrc, resetSourceState,
     onXlFile, uploadXl, connectDB, connectGSheets, connectAPI, toggleApiAuthValue,
   };
 

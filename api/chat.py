@@ -14,6 +14,60 @@ log = logging.getLogger(__name__)
 bp = Blueprint("chat", __name__)
 
 
+def _resolve_data_context(sess, raw) -> dict | None:
+    """Validate preview-selected tables against the session's active sources."""
+    if not isinstance(raw, dict):
+        return None
+    requested = raw.get("tables")
+    if not isinstance(requested, list):
+        requested = [raw] if raw.get("table") else []
+    requested = requested[:20]
+    if not requested or not hasattr(sess, "_active_entries"):
+        return None
+
+    active = sess._active_entries()
+    active_by_id = {entry.get("id"): (idx, entry.get("source"))
+                    for idx, entry in enumerate(active, start=1)}
+    source_tables = {}
+    all_names = []
+    for source_id, (_, src) in active_by_id.items():
+        try:
+            source_tables[source_id] = src.list_tables()
+            all_names.extend(source_tables[source_id])
+        except Exception:
+            source_tables[source_id] = []
+    collision = len(all_names) != len(set(all_names))
+
+    valid_source_ids = {
+        str(item.get("source_id") or "")
+        for item in requested if isinstance(item, dict)
+        and str(item.get("table") or "").strip()
+           in source_tables.get(str(item.get("source_id") or ""), [])
+    }
+    cross_source = len(valid_source_ids) > 1
+
+    resolved = []
+    seen = set()
+    for item in requested:
+        if not isinstance(item, dict):
+            continue
+        source_id = str(item.get("source_id") or "")
+        table = str(item.get("table") or "").strip()
+        if (source_id, table) in seen or source_id not in active_by_id:
+            continue
+        idx, src = active_by_id[source_id]
+        if table not in source_tables.get(source_id, []):
+            continue
+        seen.add((source_id, table))
+        resolved.append({
+            "source_id": source_id,
+            "source_name": getattr(src, "name", "未命名"),
+            "table": table,
+            "query_table": f"src{idx}__{table}" if (collision or cross_source) else table,
+        })
+    return {"tables": resolved} if resolved else None
+
+
 def _build_agent(sess) -> BusinessAgent:
     provider = sess.model_provider or config_manager.get_default_provider()
     if not provider:
@@ -156,6 +210,7 @@ def chat_stream(sid: str):
 
     sess = session_manager.get_or_create(sid)
     sess.cancel_requested = False
+    data_context = _resolve_data_context(sess, d.get("data_context"))
 
     from api.saved_sessions import _visible_msg_count
     _turn_start = time.monotonic()
@@ -205,6 +260,7 @@ def chat_stream(sid: str):
                 report_title=report_title, report_sections=report_sections,
                 dashboard_name=dashboard_name, dashboard_widgets=dashboard_widgets,
                 temp_prompt=active_temp_prompt,
+                data_context=data_context,
             ):
                 if sess.cancel_requested:
                     sess.cancel_requested = False

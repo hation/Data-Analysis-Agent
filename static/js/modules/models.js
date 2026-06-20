@@ -87,20 +87,21 @@
     if (dot) dot.classList.remove("on", "testing");
   }
 
-  function _setProviderRowState(provider, state, message) {
-    // Settings modal — show the test outcome inline below the provider card,
-    // reusing the .provider-msg element saveBuiltin() also writes to.
-    const msgEl = $(`pmsg-${provider}`);
-    if (!msgEl) return;
-    if (state === "testing") {
-      msgEl.className = "provider-msg";
-      msgEl.textContent = t('settings.testing') || "测试中…";
-    } else if (state === "ok") {
-      msgEl.className = "provider-msg ok";
-      msgEl.textContent = message || (t('settings.test_ok') || "连接成功");
-    } else if (state === "fail") {
-      msgEl.className = "provider-msg err";
-      msgEl.textContent = message || (t('settings.test_fail') || "连接失败");
+  function _setProviderRowState(provider, st, message) {
+    const vs = window.BAA.vueSettings;
+    if (!vs || !vs.isAvailable()) {
+      console.warn("[models] vueSettings unavailable, _setProviderRowState skipped");
+      return;
+    }
+    if (st === "testing") {
+      vs.setProviderBusy(provider, "test");
+      vs.setProviderStatus(provider, "", t('settings.testing') || "测试中…");
+    } else if (st === "ok") {
+      vs.setProviderBusy(provider, null);
+      vs.setProviderStatus(provider, "ok", message || (t('settings.test_ok') || "连接成功"));
+    } else if (st === "fail") {
+      vs.setProviderBusy(provider, null);
+      vs.setProviderStatus(provider, "err", message || (t('settings.test_fail') || "连接失败"));
     }
   }
 
@@ -113,15 +114,16 @@
     _setDotState(provider, "testing");
     _setProviderRowState(provider, "testing");
 
-    // 优先使用输入框中当前填写的值（未保存状态也能测试）；
-    // 输入框不存在（如从侧边栏触发）时退回到已保存配置。
+    // 优先使用 Vue state 中的 fields（未保存状态也能测试）；
+    // fields 不存在（如从侧边栏触发）时用已保存配置。
     const body = { provider };
-    const pkEl  = $(`pk-${provider}`);
-    const puEl  = $(`pu-${provider}`);
-    const pmEl  = $(`pm-${provider}`);
-    if (pkEl?.value.trim())  body.api_key  = pkEl.value.trim();
-    if (puEl?.value.trim())  body.base_url = puEl.value.trim();
-    if (pmEl?.value.trim())  body.model    = pmEl.value.trim();
+    const vs = window.BAA.vueSettings;
+    const fields = vs && vs.isAvailable() ? vs.getProviderFields(provider) : null;
+    if (fields) {
+      if (fields.apiKey.trim())  body.api_key  = fields.apiKey.trim();
+      if (fields.baseUrl.trim()) body.base_url = fields.baseUrl.trim();
+      if (fields.model.trim())   body.model    = fields.model.trim();
+    }
 
     let data;
     try {
@@ -171,137 +173,64 @@
   }
 
   function renderBuiltinProviders(configs, defaults) {
-    const container = $("builtin-providers");
-    container.innerHTML = "";
-    for (const [key, def] of Object.entries(defaults)) {
-      const meta   = BUILTIN_META[key] || { label: key, icon: "/Images/icon.png" };
-      const cfg    = configs[key] || {};
-      const hasKey = cfg.has_api_key;
-      container.innerHTML += `
-        <div class="provider-card">
-          <div class="provider-head">
-            <img class="provider-icon" src="${meta.icon}" alt="${meta.label}">
-            <span class="provider-name">${meta.label}</span>
-            <span class="provider-status ${hasKey ? "set" : "unset"}" id="ps-${key}">
-              ${hasKey ? t('settings.configured') : t('settings.not_configured')}
-            </span>
-          </div>
-          <div class="provider-fields">
-            <div class="pf-row">
-              <label>${t('settings.api_key')}</label>
-              <input type="password" id="pk-${key}" placeholder="${t('settings.api_key_ph')}">
-            </div>
-            <div class="pf-row">
-              <label>${t('settings.base_url')}</label>
-              <input type="text" id="pu-${key}" value="${cfg.base_url || def.base_url}" placeholder="${def.base_url}">
-            </div>
-            <div class="pf-row">
-              <label>${t('settings.model')}</label>
-              <input type="text" id="pm-${key}" value="${cfg.model || def.model}" placeholder="${def.model}">
-            </div>
-            <div class="pf-row">
-              <label>${t('settings.ctx_window')}</label>
-              <input type="number" id="pctx-${key}" value="${cfg.context_window ?? def.context_window ?? ''}" placeholder="${t('settings.ctx_ph')}">
-            </div>
-            <div class="pf-row">
-              <label>${t('settings.max_output')}</label>
-              <input type="number" id="pout-${key}" value="${cfg.max_output_tokens ?? def.max_output_tokens ?? ''}" placeholder="${t('settings.out_ph')}">
-            </div>
-            <div class="pf-row" style="align-items:center">
-              <label>${t('settings.thinking')}</label>
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;color:#475569">
-                <input type="checkbox" id="pthink-${key}" ${cfg.enable_thinking ? "checked" : ""}
-                  data-action="toggleThinkBudget:${key}">
-                ${t('settings.thinking_label')}
-              </label>
-            </div>
-            <div class="pf-row" id="pbudget-row-${key}" style="display:${cfg.enable_thinking ? 'flex' : 'none'};align-items:center">
-              <label>${t('settings.budget') || '思考预算（tokens）'}</label>
-              <input type="number" id="pbudget-${key}" value="${cfg.thinking_budget ?? 8000}" min="1000" max="100000" step="1000">
-            </div>
-          </div>
-          <div class="provider-actions">
-            <button class="btn-sm btn-sm-danger"  data-action="clearBuiltin:${key}">${t('settings.clear')}</button>
-            <button class="btn-sm btn-sm-ghost"   data-action="testProvider:${key}">${t('settings.test') || '测试'}</button>
-            <button class="btn-sm btn-sm-primary" data-action="saveBuiltin:${key}">${t('settings.save')}</button>
-          </div>
-          <div class="provider-msg" id="pmsg-${key}"></div>
-        </div>`;
+    if (!window.BAA.vueSettings || !window.BAA.vueSettings.isAvailable()) {
+      console.warn("[models] vueSettings unavailable, renderBuiltinProviders skipped");
+      return;
     }
+    window.BAA.vueSettings.sync(configs, defaults, {
+      onSave:        (key) => saveBuiltin(key),
+      onTest:        (key) => testModel(key),
+      onClear:       (key) => clearBuiltin(key),
+      onEditCustom:  (key) => editCustomModel(key),
+      onDeleteCustom:(key) => deleteCustom(key),
+      onTestCustom:  (key) => testModel(key),
+      onSubmitForm:  () => addCustomModel(),
+      onCancelForm:  () => toggleAddCustom(),
+    });
   }
 
   function renderCustomList(configs) {
-    const list    = $("custom-list");
-    const customs = Object.entries(configs).filter(([, v]) => v.is_custom);
-    if (!customs.length) {
-      list.innerHTML = `<div class="custom-empty">${t('custom_empty')}</div>`;
+    if (!window.BAA.vueSettings || !window.BAA.vueSettings.isAvailable()) {
+      console.warn("[models] vueSettings unavailable, renderCustomList skipped");
       return;
     }
-    list.innerHTML = customs.map(([key, cfg]) => `
-      <div class="custom-item">
-        <span class="ci-name">${cfg.name || cfg.model || key}</span>
-        <span class="ci-model">${cfg.model || cfg.base_url || ""}</span>
-        <button class="btn-sm btn-sm-ghost"  data-action="testProvider:${key}">${t('settings.test') || '测试'}</button>
-        <button class="btn-sm btn-sm-ghost"  data-action="editCustom:${key}">${t('settings.edit_custom') || '编辑'}</button>
-        <button class="btn-sm btn-sm-danger" data-action="deleteCustom:${key}">${t('settings.del_custom')}</button>
-      </div>`).join("");
+    window.BAA.vueSettings.refreshCustoms(configs);
   }
 
   function editCustomModel(provider) {
+    const vs = window.BAA.vueSettings;
+    if (!vs || !vs.isAvailable()) {
+      console.warn("[models] vueSettings unavailable, editCustomModel skipped");
+      return;
+    }
     state._editingCustomProvider = provider;
-    const f = $("add-custom-form");
-    if (!f.classList.contains("show")) f.classList.add("show");
-
     fetch("/api/models").then(r => r.json()).then(configs => {
       const cfg = configs[provider];
       if (!cfg) return;
-      $("ac-name").value   = (cfg.name || "");    // 供应商名称（显示用）
-      $("ac-url").value    = (cfg.base_url || "");
-      $("ac-model").value  = (cfg.model || "");   // Model ID（传入 API）
-      $("ac-key").value    = "";
-      $("ac-ctx").value    = cfg.context_window != null ? cfg.context_window : "";
-      $("ac-output").value = cfg.max_output_tokens != null ? cfg.max_output_tokens : "";
-      $("ac-think").checked = !!cfg.enable_thinking;
-      $("ac-budget").value  = cfg.thinking_budget ?? 8000;
-      $("ac-budget-row").style.display = cfg.enable_thinking ? "flex" : "none";
-      $("ac-err").textContent = "";
-      $("ac-ok").textContent  = t('settings.editing_hint') || `编辑中：${provider}`;
-      f.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      vs.openForm(provider, cfg);
     });
   }
 
   async function addCustomModel() {
-    const ctxRaw    = $("ac-ctx").value.trim();
-    const outRaw    = $("ac-output").value.trim();
-    const budgetRaw = $("ac-budget").value.trim();
-    const data = {
-      name:            $("ac-name").value.trim(),
-      base_url:        $("ac-url").value.trim(),
-      model_name:      $("ac-model").value.trim(),
-      api_key:         $("ac-key").value.trim(),
-      enable_thinking: $("ac-think").checked,
-      thinking_budget: budgetRaw ? parseInt(budgetRaw) : 8000,
-      ...(ctxRaw ? { context_window:    parseInt(ctxRaw) } : {}),
-      ...(outRaw ? { max_output_tokens: parseInt(outRaw) } : {}),
-    };
-    $("ac-err").textContent = "";
-    $("ac-ok").textContent  = "";
+    const vs = window.BAA.vueSettings;
+    if (!vs || !vs.isAvailable()) {
+      console.warn("[models] vueSettings unavailable, addCustomModel skipped");
+      return;
+    }
+    const f = vs.getFormValues();
+    const ctxRaw    = f.ctx.trim();
+    const outRaw    = f.output.trim();
+    const budgetRaw = f.budget.trim();
+    vs.setFormMsg("", "");
 
-    const resetForm = () => {
-      ["ac-name", "ac-url", "ac-model", "ac-key", "ac-ctx", "ac-output", "ac-budget"]
-        .forEach(id => $(id).value = "");
-      $("ac-think").checked = false;
-      $("ac-budget-row").style.display = "none";
-    };
-
-    if (state._editingCustomProvider) {
+    if (f.editingKey) {
       const body = {
-        provider:        state._editingCustomProvider,
-        base_url:        data.base_url,
-        model_name:      data.model_name,
-        api_key:         data.api_key,
-        enable_thinking: data.enable_thinking,
-        thinking_budget: data.thinking_budget,
+        provider:        f.editingKey,
+        base_url:        f.url.trim(),
+        model_name:      f.model.trim(),
+        api_key:         f.key.trim(),
+        enable_thinking: f.think,
+        thinking_budget: budgetRaw ? parseInt(budgetRaw) : 8000,
         ...(ctxRaw ? { context_window:    parseInt(ctxRaw) } : {}),
         ...(outRaw ? { max_output_tokens: parseInt(outRaw) } : {}),
       };
@@ -311,52 +240,77 @@
       });
       const d = await r.json();
       if (d.error) {
-        $("ac-err").textContent = d.error;
+        vs.setFormMsg(d.error, "");
       } else {
-        $("ac-ok").textContent = d.message || t('settings.save_ok');
+        vs.setFormMsg("", d.message || t('settings.save_ok'));
         state._editingCustomProvider = null;
-        resetForm();
         await Promise.all([loadModels(), loadBuiltinProviders()]);
-        setTimeout(toggleAddCustom, 1200);
+        setTimeout(() => vs.closeForm(), 1200);
       }
       return;
     }
 
+    const data = {
+      name:            f.name.trim(),
+      base_url:        f.url.trim(),
+      model_name:      f.model.trim(),
+      api_key:         f.key.trim(),
+      enable_thinking: f.think,
+      thinking_budget: budgetRaw ? parseInt(budgetRaw) : 8000,
+      ...(ctxRaw ? { context_window:    parseInt(ctxRaw) } : {}),
+      ...(outRaw ? { max_output_tokens: parseInt(outRaw) } : {}),
+    };
     const r = await fetch("/api/models/add", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
     const d = await r.json();
     if (d.error) {
-      $("ac-err").textContent = d.error;
+      vs.setFormMsg(d.error, "");
     } else {
-      $("ac-ok").textContent = d.message;
-      resetForm();
+      vs.setFormMsg("", d.message);
       await Promise.all([loadModels(), loadBuiltinProviders()]);
-      setTimeout(toggleAddCustom, 1200);
+      setTimeout(() => vs.closeForm(), 1200);
     }
   }
 
   function toggleAddCustom() {
+    const vs = window.BAA.vueSettings;
+    if (!vs || !vs.isAvailable()) {
+      console.warn("[models] vueSettings unavailable, toggleAddCustom skipped");
+      return;
+    }
     state._editingCustomProvider = null;
-    const f = $("add-custom-form");
-    f.classList.toggle("show");
-    if (f.classList.contains("show")) $("ac-name").focus();
+    vs.toggleForm();
   }
 
   async function saveBuiltin(key) {
-    const apiKey  = $(`pk-${key}`).value.trim();
-    const baseUrl = $(`pu-${key}`).value.trim();
-    const model   = $(`pm-${key}`).value.trim();
-    const ctxRaw  = $(`pctx-${key}`).value.trim();
-    const outRaw  = $(`pout-${key}`).value.trim();
-    const msgEl   = $(`pmsg-${key}`);
-    if (!apiKey) { msgEl.className = "provider-msg err"; msgEl.textContent = t('settings.api_key_empty'); return; }
-    msgEl.textContent = t('settings.saving');
-    const budgetRaw = $(`pbudget-${key}`)?.value.trim();
+    const vs = window.BAA.vueSettings;
+    if (!vs || !vs.isAvailable()) {
+      console.warn("[models] vueSettings unavailable, saveBuiltin skipped");
+      return;
+    }
+    const f = vs.getProviderFields(key);
+    if (!f) return;
+    const apiKey   = f.apiKey.trim();
+    const baseUrl  = f.baseUrl.trim();
+    const model    = f.model.trim();
+    const ctxRaw   = f.ctx.trim();
+    const outRaw   = f.output.trim();
+    const think    = f.think;
+    const budgetRaw = f.budget.trim();
+
+    if (!apiKey) {
+      vs.setProviderStatus(key, "err", t('settings.api_key_empty'));
+      return;
+    }
+
+    vs.setProviderBusy(key, "save");
+    vs.setProviderStatus(key, "", t('settings.saving'));
+
     const body = {
       provider: key, api_key: apiKey, base_url: baseUrl, model,
-      enable_thinking: $(`pthink-${key}`).checked,
+      enable_thinking: think,
       thinking_budget: budgetRaw ? parseInt(budgetRaw) : 8000,
     };
     if (ctxRaw) body.context_window    = parseInt(ctxRaw);
@@ -367,29 +321,33 @@
     });
     const d = await r.json();
     if (d.ok) {
-      msgEl.className = "provider-msg ok"; msgEl.textContent = t('settings.save_ok');
-      $(`ps-${key}`).className = "provider-status set";
-      $(`ps-${key}`).textContent = t('settings.configured');
-      $(`pk-${key}`).value = "";
+      vs.setProviderBusy(key, null);
+      vs.setProviderStatus(key, "ok", t('settings.save_ok'));
       await loadModels();
+      await loadBuiltinProviders();   // 刷新 hasKey + fields（保留用户输入，仅清 apiKey）
+      vs.clearProviderApiKey(key);
     } else {
-      msgEl.className = "provider-msg err"; msgEl.textContent = d.error || t('update.fail');
+      vs.setProviderBusy(key, null);
+      vs.setProviderStatus(key, "err", d.error || t('update.fail'));
     }
   }
 
   async function clearBuiltin(key) {
     if (!confirm(t('confirm.clear_builtin', { label: BUILTIN_META[key]?.label || key }))) return;
+    const vs = window.BAA.vueSettings;
+    if (!vs || !vs.isAvailable()) {
+      console.warn("[models] vueSettings unavailable, clearBuiltin skipped");
+      return;
+    }
     const r = await fetch("/api/models/clear-builtin", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ provider: key }),
     });
     const d = await r.json();
     if (d.ok) {
-      $(`ps-${key}`).className   = "provider-status unset";
-      $(`ps-${key}`).textContent = t('settings.not_configured');
-      const msgEl = $(`pmsg-${key}`);
-      msgEl.className = "provider-msg ok"; msgEl.textContent = t('settings.cleared');
+      vs.setProviderStatus(key, "ok", t('settings.cleared'));
       await loadModels();
+      await loadBuiltinProviders();   // 刷新 hasKey=false，setProviders 检测到清除会重置 fields
     }
   }
 

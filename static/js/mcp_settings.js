@@ -7,9 +7,7 @@ const MCP_STATUS_ICON = {
   error:        "🔴",
 };
 
-let _mcpFormOpen = false;
-let _mcpEditId   = null; // server_id currently being edited (null = add mode)
-let _mcpActiveTab = "local"; // "local" | "paste"
+let _mcpActiveTab = "local"; // "local" | "paste" — smart-fill 区用
 
 function switchMcpTab(tab) {
   _mcpActiveTab = tab;
@@ -25,92 +23,35 @@ function openMcpSettings() {
 }
 
 function toggleMcpAddForm() {
-  _mcpFormOpen = !_mcpFormOpen;
-  _mcpEditId   = null;
-  const form   = document.getElementById("mcp-add-form");
-  const toggle = document.getElementById("mcp-add-toggle");
-  form.style.display = _mcpFormOpen ? "flex" : "none";
-  toggle.textContent = _mcpFormOpen ? "▲ 折叠" : "＋ 添加 MCP 服务器";
-  document.getElementById("mcp-form-title").textContent = "添加服务器";
-  document.getElementById("mcp-id-row").style.display = "";
-  if (_mcpFormOpen) {
-    document.getElementById("mcp-add-err").textContent = "";
-    document.getElementById("mcp-add-ok").textContent  = "";
-  } else {
-    _clearMcpForm();
-  }
+  if (window.BAA && window.BAA.vueMcp) window.BAA.vueMcp.toggleForm();
 }
 
 function openMcpEditForm(server) {
-  _mcpEditId   = server.server_id;
-  _mcpFormOpen = true;
-
-  const form   = document.getElementById("mcp-add-form");
-  const toggle = document.getElementById("mcp-add-toggle");
-  form.style.display = "flex";
-  toggle.textContent = "▲ 折叠";
-  document.getElementById("mcp-form-title").textContent = `编辑：${_esc(server.label)}`;
-  document.getElementById("mcp-id-row").style.display   = "none"; // ID is immutable
-
-  document.getElementById("mcp-label").value = server.label || "";
-  document.getElementById("mcp-id").value    = server.server_id || "";
-  document.getElementById("mcp-desc").value  = server.description || "";
-
-  const transport = server.transport || "stdio";
-  document.querySelector(`input[name="mcp-transport"][value="${transport}"]`).checked = true;
-  onMcpTransportChange();
-
-  if (transport === "stdio") {
-    document.getElementById("mcp-command").value = server.command || "";
-    document.getElementById("mcp-args").value    = (server.args || []).join(" ");
-    document.getElementById("mcp-env").value     = Object.entries(server.env || {}).map(([k,v]) => `${k}=${v}`).join(", ");
-  } else {
-    document.getElementById("mcp-url").value     = server.url || "";
-    document.getElementById("mcp-headers").value = Object.entries(server.headers || {}).map(([k,v]) => `${k}:${v}`).join(", ");
+  if (window.BAA && window.BAA.vueMcp) {
+    window.BAA.vueMcp.openForm({ mode: "edit", editId: server.server_id, server });
   }
-
-  document.getElementById("mcp-add-err").textContent = "";
-  document.getElementById("mcp-add-ok").textContent  = "";
-
-  if (transport === "stdio") updateMcpCmdPreview();
-
-  form.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function onMcpTransportChange() {
-  const transport = document.querySelector('input[name="mcp-transport"]:checked').value;
-  const stdioEl = document.getElementById("mcp-stdio-fields");
-  const sseEl   = document.getElementById("mcp-sse-fields");
-  if (transport === "stdio") {
-    stdioEl.style.display = "flex";
-    stdioEl.style.flexDirection = "column";
-    stdioEl.style.gap = "8px";
-    sseEl.style.display = "none";
-    updateMcpCmdPreview();
-  } else {
-    stdioEl.style.display = "none";
-    sseEl.style.display = "flex";
-    sseEl.style.flexDirection = "column";
-    sseEl.style.gap = "8px";
-    const previewEl = document.getElementById("mcp-cmd-preview");
-    if (previewEl) previewEl.style.display = "none";
-  }
+  // Vue 路径下 transport 由 Vue @change 直接调 setTransport 管理
+  // 此函数仅保留给 smart-fill 区 _legacyOpenMcpEditForm 内部调用（已删，留空壳防 HTML data-action 引用）
 }
 
 /* ── list ─────────────────────────────────────────────────────── */
 
 async function loadMcpServers() {
-  const listEl = document.getElementById("mcp-server-list");
-  listEl.innerHTML = '<div style="font-size:12px;color:#64748b;padding:4px 0">加载中…</div>';
-  // Invalidate tool cache so expanded views refresh after reconnect
-  Object.keys(_mcpToolsCache).forEach(k => delete _mcpToolsCache[k]);
+  if (!window.BAA || !window.BAA.vueMcp) return;
+  const vueMcp = window.BAA.vueMcp;
+  vueMcp.setListStatus({ loading: true, err: "" });
   try {
     const res = await fetch("/api/mcp/servers");
     const data = await res.json();
-    renderMcpServerList(data.servers || []);
-    _updateMcpSidebarStatus(data.servers || []);
+    const servers = data.servers || [];
+    vueMcp.setServers(servers);
+    vueMcp.setListStatus({ loading: false, err: "" });
+    _updateMcpSidebarStatus(servers);
   } catch (e) {
-    listEl.innerHTML = `<div style="font-size:12px;color:#ef4444;padding:4px 0">加载失败: ${e.message}</div>`;
+    vueMcp.setListStatus({ loading: false, err: e.message });
   }
 }
 
@@ -139,216 +80,140 @@ function _updateMcpSidebarStatus(servers) {
 }
 
 function renderMcpServerList(servers) {
-  const listEl = document.getElementById("mcp-server-list");
-  if (!servers.length) {
-    listEl.innerHTML = '<div style="font-size:12px;color:#94a3b8;padding:4px 0">暂无配置的服务器</div>';
-    return;
-  }
-  listEl.innerHTML = servers.map(s => {
-    const icon = MCP_STATUS_ICON[s.status] || "⚪";
-    const toolCount = s.tool_count != null ? `${s.tool_count} 个工具` : "";
-    const errMsg = s.last_error ? `<div style="font-size:11px;color:#ef4444;margin-top:2px">${_esc(s.last_error)}</div>` : "";
-    const enabledChecked = s.enabled ? "checked" : "";
-    const serverJson = _esc(JSON.stringify(s));
-    const canShowTools = s.status === "connected" && s.tool_count > 0;
-    return `
-    <div class="custom-model-item" style="display:flex;flex-direction:column;gap:0;padding:8px 10px">
-      <div style="display:flex;align-items:flex-start;gap:8px">
-        <div style="flex:1;min-width:0">
-          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-            <span style="font-size:14px">${icon}</span>
-            <strong style="font-size:13px">${_esc(s.label)}</strong>
-            <code style="font-size:11px;color:#64748b;background:#f1f5f9;padding:1px 5px;border-radius:4px">${_esc(s.server_id)}</code>
-            <span style="font-size:11px;color:#94a3b8">${_esc(s.transport)}</span>
-            ${toolCount ? `<span style="font-size:11px;color:#10b981">${toolCount}</span>` : ""}
-          </div>
-          ${s.description ? `<div style="font-size:12px;color:#64748b;margin-top:2px">${_esc(s.description)}</div>` : ""}
-          ${errMsg}
-        </div>
-        <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
-          <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#475569;cursor:pointer" title="启用/禁用">
-            <input type="checkbox" ${enabledChecked} onchange="toggleMcpEnabled('${_esc(s.server_id)}', this.checked)">
-            启用
-          </label>
-          ${canShowTools ? `<button class="btn-sm btn-sm-ghost" style="padding:2px 8px;font-size:11px" onclick="toggleMcpTools('${_esc(s.server_id)}', this)">查看工具 ▾</button>` : ""}
-          <button class="btn-sm btn-sm-ghost" style="padding:2px 8px;font-size:11px"
-            onclick='openMcpEditForm(${serverJson})'>编辑</button>
-          ${s.status !== "connected" && s.status !== "connecting"
-            ? `<button class="btn-sm btn-sm-ghost" style="padding:2px 8px;font-size:11px" onclick="connectMcpServer('${_esc(s.server_id)}')">连接</button>`
-            : ""}
-          <button class="btn-sm" style="padding:2px 8px;font-size:11px;background:#fee2e2;color:#dc2626;border:none;border-radius:5px;cursor:pointer"
-            onclick="removeMcpServer('${_esc(s.server_id)}')">删除</button>
-        </div>
-      </div>
-      <div id="mcp-tools-${_esc(s.server_id)}" class="mcp-tool-list" style="display:none"></div>
-    </div>`;
-  }).join("");
+  if (window.BAA && window.BAA.vueMcp) window.BAA.vueMcp.setServers(servers);
 }
 
 /* ── tool detail expand ───────────────────────────────────────── */
 
-const _mcpToolsCache = {};
-
 async function toggleMcpTools(serverId, btn) {
-  const toolsEl = document.getElementById(`mcp-tools-${serverId}`);
-  if (!toolsEl) return;
-
-  const isOpen = toolsEl.style.display !== "none";
-  if (isOpen) {
-    toolsEl.style.display = "none";
-    btn.textContent = "查看工具 ▾";
-    return;
-  }
-
-  btn.textContent = "收起工具 ▴";
-  toolsEl.style.display = "flex";
-
-  if (_mcpToolsCache[serverId]) {
-    _renderMcpTools(toolsEl, _mcpToolsCache[serverId]);
-    return;
-  }
-
-  toolsEl.innerHTML = '<div style="font-size:11px;color:#64748b">加载中…</div>';
+  if (!window.BAA || !window.BAA.vueMcp) return;
+  const vueMcp = window.BAA.vueMcp;
+  const server = vueMcp.getServer(serverId);
+  if (!server) return;
+  const willOpen = !server.toolsOpen;
+  vueMcp.toggleToolsOpen(serverId);
+  if (!willOpen) return; // 收起，不加载
+  if (server.tools && server.tools.length) return; // 已缓存
+  vueMcp.setToolsLoading(serverId, true);
   try {
     const res  = await fetch(`/api/mcp/servers/${encodeURIComponent(serverId)}/tools`);
     const data = await res.json();
-    const tools = data.tools || [];
-    _mcpToolsCache[serverId] = tools;
-    _renderMcpTools(toolsEl, tools);
+    vueMcp.setTools(serverId, data.tools || []);
   } catch (e) {
-    toolsEl.innerHTML = `<div style="font-size:11px;color:#ef4444">加载失败: ${_esc(e.message)}</div>`;
+    vueMcp.setToolsErr(serverId, e.message);
   }
-}
-
-function _renderMcpTools(container, tools) {
-  if (!tools.length) {
-    container.innerHTML = '<div style="font-size:11px;color:#94a3b8">暂无工具</div>';
-    return;
-  }
-  container.innerHTML = tools.map(t => {
-    const schema   = t.inputSchema || {};
-    const props    = schema.properties || {};
-    const required = new Set(schema.required || []);
-    const params   = Object.entries(props).map(([k, v]) => {
-      const cls = required.has(k) ? "mcp-tool-param required" : "mcp-tool-param";
-      const tip = v.description ? ` title="${_esc(v.description)}"` : "";
-      return `<span class="${cls}"${tip}>${_esc(k)}${required.has(k) ? "*" : ""}</span>`;
-    }).join("");
-    return `
-    <div class="mcp-tool-item">
-      <div class="mcp-tool-name">${_esc(t.name)}</div>
-      ${t.description ? `<div class="mcp-tool-desc">${_esc(t.description)}</div>` : ""}
-      ${params ? `<div class="mcp-tool-params">${params}</div>` : ""}
-    </div>`;
-  }).join("");
 }
 
 /* ── add / edit ───────────────────────────────────────────────── */
 
 async function addMcpServer() {
-  const errEl = document.getElementById("mcp-add-err");
-  const okEl  = document.getElementById("mcp-add-ok");
-  errEl.textContent = "";
-  okEl.textContent  = "";
+  if (!window.BAA || !window.BAA.vueMcp) return;
+  const vueMcp = window.BAA.vueMcp;
+  const v = vueMcp.getFormValues();
+  const fs = vueMcp.getFormState();
+  const isEdit = fs.mode === "edit";
+  const editId = fs.editId;
 
-  const transport = document.querySelector('input[name="mcp-transport"]:checked').value;
-  const label     = document.getElementById("mcp-label").value.trim();
-  const server_id = document.getElementById("mcp-id").value.trim();
-  const desc      = document.getElementById("mcp-desc").value.trim();
+  vueMcp.setFormErr("");
+  vueMcp.setFormOk("");
 
-  const isEdit = _mcpEditId !== null;
-
-  if (!label)                           { errEl.textContent = "请填写服务器名称"; return; }
-  if (!isEdit && !server_id)            { errEl.textContent = "请填写服务器 ID";  return; }
-  if (!isEdit && !/^[a-zA-Z0-9_]+$/.test(server_id)) {
-    errEl.textContent = "服务器 ID 只能包含字母、数字和下划线";
-    return;
+  if (!v.label)                           { vueMcp.setFormErr("请填写服务器名称"); return; }
+  if (!isEdit && !v.id)                   { vueMcp.setFormErr("请填写服务器 ID");  return; }
+  if (!isEdit && !/^[a-zA-Z0-9_]+$/.test(v.id)) {
+    vueMcp.setFormErr("服务器 ID 只能包含字母、数字和下划线"); return;
   }
 
-  const payload = { label, description: desc, transport };
+  const payload = { label: v.label, description: v.desc, transport: v.transport };
 
-  if (transport === "stdio") {
-    const command = document.getElementById("mcp-command").value.trim();
-    const argsRaw = document.getElementById("mcp-args").value.trim();
-    const envRaw  = document.getElementById("mcp-env").value.trim();
-    if (!command) { errEl.textContent = "请填写命令"; return; }
-    payload.command = command;
-    payload.args    = argsRaw ? argsRaw.split(/\s+/).filter(Boolean) : [];
-    payload.env     = _parseKV(envRaw, "=");
+  if (v.transport === "stdio") {
+    if (!v.command) { vueMcp.setFormErr("请填写命令"); return; }
+    payload.command = v.command;
+    payload.args    = v.args ? v.args.split(/\s+/).filter(Boolean) : [];
+    payload.env     = _parseKV(v.env, "=");
   } else {
-    const url     = document.getElementById("mcp-url").value.trim();
-    const hdrsRaw = document.getElementById("mcp-headers").value.trim();
-    if (!url) { errEl.textContent = "请填写 SSE 端点 URL"; return; }
-    payload.url     = url;
-    payload.headers = _parseKV(hdrsRaw, ":");
+    if (!v.url) { vueMcp.setFormErr("请填写 SSE 端点 URL"); return; }
+    payload.url     = v.url;
+    payload.headers = _parseKV(v.headers, ":");
   }
 
+  vueMcp.setFormBusy(true);
   try {
     let res;
     if (isEdit) {
-      res = await fetch(`/api/mcp/servers/${encodeURIComponent(_mcpEditId)}`, {
-        method:  "PUT",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify(payload),
+      res = await fetch(`/api/mcp/servers/${encodeURIComponent(editId)}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
       });
     } else {
-      payload.server_id = server_id;
+      payload.server_id = v.id;
       res = await fetch("/api/mcp/servers", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify(payload),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
       });
     }
     const data = await res.json();
-    if (!res.ok) { errEl.textContent = data.error || (isEdit ? "更新失败" : "添加失败"); return; }
-    okEl.textContent = isEdit ? "已更新，正在重连…" : "已保存，正在尝试连接…";
+    if (!res.ok) { vueMcp.setFormErr(data.error || (isEdit ? "更新失败" : "添加失败")); return; }
+    vueMcp.setFormOk(isEdit ? "已更新，正在重连…" : "已保存，正在尝试连接…");
     setTimeout(() => {
-      if (_mcpFormOpen) toggleMcpAddForm();
+      if (vueMcp.getFormState().open) vueMcp.closeForm();
       _clearMcpForm();
       loadMcpServers();
     }, 800);
   } catch (e) {
-    errEl.textContent = "请求失败: " + e.message;
+    vueMcp.setFormErr("请求失败: " + e.message);
+  } finally {
+    vueMcp.setFormBusy(false);
   }
 }
 
 /* ── remove ───────────────────────────────────────────────────── */
 
 async function removeMcpServer(serverId) {
+  if (!window.BAA || !window.BAA.vueMcp) return;
   if (!confirm(`确定要删除服务器 "${serverId}" 吗？`)) return;
+  const vueMcp = window.BAA.vueMcp;
+  vueMcp.removeServer(serverId); // 乐观删除
   try {
     const res = await fetch(`/api/mcp/servers/${encodeURIComponent(serverId)}`, { method: "DELETE" });
     if (!res.ok) {
       const data = await res.json();
       showToast(data.error || "删除失败", "error");
+      loadMcpServers(); // 回滚
       return;
     }
-    loadMcpServers();
+    loadMcpServers(); // 刷新 sidebar 状态
   } catch (e) {
     showToast("请求失败: " + e.message, "error");
+    loadMcpServers(); // 回滚
   }
 }
 
 /* ── connect ──────────────────────────────────────────────────── */
 
 async function connectMcpServer(serverId) {
+  if (window.BAA && window.BAA.vueMcp) window.BAA.vueMcp.updateServer(serverId, { busy: true });
   try {
     await fetch(`/api/mcp/servers/${encodeURIComponent(serverId)}/connect`, { method: "POST" });
     showToast("正在连接…", "info");
     setTimeout(loadMcpServers, 1500);
   } catch (e) {
     showToast("连接请求失败: " + e.message, "error");
+    if (window.BAA && window.BAA.vueMcp) window.BAA.vueMcp.updateServer(serverId, { busy: false });
   }
 }
 
 /* ── enable/disable ───────────────────────────────────────────── */
 
 async function toggleMcpEnabled(serverId, enabled) {
+  if (!window.BAA || !window.BAA.vueMcp) return;
+  const vueMcp = window.BAA.vueMcp;
+  // 乐观更新：先翻转 enabled
+  vueMcp.updateServer(serverId, { enabled });
   const action = enabled ? "enable" : "disable";
   try {
     await fetch(`/api/mcp/servers/${encodeURIComponent(serverId)}/${action}`, { method: "POST" });
-    if (!enabled) setTimeout(loadMcpServers, 300);
+    if (!enabled) setTimeout(loadMcpServers, 300); // 禁用后刷新状态
   } catch (e) {
+    // 回滚
+    vueMcp.updateServer(serverId, { enabled: !enabled });
     showToast("操作失败: " + e.message, "error");
   }
 }
@@ -379,23 +244,21 @@ function _parseKV(raw, sep) {
 }
 
 function _clearMcpForm() {
-  ["mcp-label","mcp-id","mcp-desc","mcp-command","mcp-args","mcp-env","mcp-url","mcp-headers"]
-    .forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
-  const radios = document.querySelectorAll('input[name="mcp-transport"]');
-  if (radios.length) radios[0].checked = true;
-  onMcpTransportChange();
-  _mcpEditId = null;
-  updateMcpCmdPreview();
-  // Reset tab to default
-  switchMcpTab("local");
-  // Reset scan area
+  if (!window.BAA || !window.BAA.vueMcp) return;
+  // Vue 路径：重置 Vue state
+  window.BAA.vueMcp.resetForm();
+  // 同时清 smart-fill 区旧 DOM（不在 Vue 挂载点内）
+  _clearSmartFillDom();
+}
+
+function _clearSmartFillDom() {
+  // 清 smart-fill 区 DOM（smart-fill 区 Vue 不接管）
   const sp = document.getElementById("mcp-scan-path");
   if (sp) sp.value = "";
   const sc = document.getElementById("mcp-scan-status");
   if (sc) { sc.textContent = ""; sc.style.color = ""; sc.innerHTML = ""; }
   const scw = document.getElementById("mcp-scan-warnings");
   if (scw) scw.style.display = "none";
-  // Reset smart parse area
   const si = document.getElementById("mcp-smart-input");
   if (si) si.value = "";
   const ss = document.getElementById("mcp-smart-status");
@@ -404,26 +267,14 @@ function _clearMcpForm() {
   if (sw) sw.style.display = "none";
   const sh = document.getElementById("mcp-smart-llm-hint");
   if (sh) sh.style.display = "none";
+  // Reset smart-fill tab to local
+  if (typeof switchMcpTab === "function") switchMcpTab("local");
 }
 
 /* ── command preview ──────────────────────────────────────────── */
 
 function updateMcpCmdPreview() {
-  const previewEl = document.getElementById("mcp-cmd-preview");
-  const textEl    = document.getElementById("mcp-cmd-preview-text");
-  if (!previewEl || !textEl) return;
-
-  const cmd  = (document.getElementById("mcp-command")?.value || "").trim();
-  const args = (document.getElementById("mcp-args")?.value   || "").trim();
-
-  if (!cmd) {
-    previewEl.style.display = "none";
-    return;
-  }
-
-  const parts = [cmd, ...args.split(/\s+/).filter(Boolean)];
-  textEl.textContent = parts.join(" ");
-  previewEl.style.display = "";
+  // Vue 路径下命令预览由 _renderForm computed 自动渲染，此函数保留为空壳防 HTML data-action 引用
 }
 
 /* ── local scan ───────────────────────────────────────────────── */
@@ -492,36 +343,36 @@ async function scanLocalMcp() {
   }
 }
 
-// Shared helper: apply a parsed/scanned config object into the form fields
 function _applyMcpConfig(cfg, { overwriteLabel = true } = {}) {
-  const radio = document.querySelector(`input[name="mcp-transport"][value="${cfg.transport}"]`);
-  if (radio) { radio.checked = true; onMcpTransportChange(); }
-
+  if (!window.BAA || !window.BAA.vueMcp) return;
+  // 桥接：写入 Vue state
+  const vueMcp = window.BAA.vueMcp;
+  const fs = vueMcp.getFormState();
+  const out = {};
+  if (cfg.transport) out.transport = cfg.transport;
   // server_id only fillable in add mode (immutable when editing)
-  if (_mcpEditId === null && cfg.server_id) {
-    _setIfEmpty("mcp-id", cfg.server_id);
+  if (fs.mode === "add" && cfg.server_id) {
+    const cur = vueMcp.getFormValues();
+    if (!cur.id) out.id = cfg.server_id;
   }
-
-  // Scan always overwrites; smart-parse only fills if empty (user may have typed already)
   if (overwriteLabel) {
-    if (cfg.label)       document.getElementById("mcp-label").value = cfg.label;
-    if (cfg.description) document.getElementById("mcp-desc").value  = cfg.description;
+    if (cfg.label != null) out.label = cfg.label;
+    if (cfg.description != null) out.desc = cfg.description;
   } else {
-    _setIfEmpty("mcp-label", cfg.label);
-    _setIfEmpty("mcp-desc",  cfg.description);
+    const cur = vueMcp.getFormValues();
+    if (!cur.label && cfg.label != null) out.label = cfg.label;
+    if (!cur.desc && cfg.description != null) out.desc = cfg.description;
   }
-
   if (cfg.transport === "stdio") {
-    document.getElementById("mcp-command").value = cfg.command || "";
-    document.getElementById("mcp-args").value    = (cfg.args || []).join(" ");
-    document.getElementById("mcp-env").value     =
-      Object.entries(cfg.env || {}).map(([k, v]) => `${k}=${v}`).join(", ");
-    updateMcpCmdPreview();
+    if (cfg.command != null) out.command = cfg.command;
+    if (cfg.args != null) out.args = (cfg.args || []).join(" ");
+    if (cfg.env != null) out.env = Object.entries(cfg.env || {}).map(([k, v]) => `${k}=${v}`).join(", ");
   } else {
-    document.getElementById("mcp-url").value     = cfg.url || "";
-    document.getElementById("mcp-headers").value =
-      Object.entries(cfg.headers || {}).map(([k, v]) => `${k}:${v}`).join(", ");
+    if (cfg.url != null) out.url = cfg.url;
+    if (cfg.headers != null) out.headers = Object.entries(cfg.headers || {}).map(([k, v]) => `${k}:${v}`).join(", ");
   }
+  // setFields 需要支持部分写入，用 setField 逐个写
+  Object.entries(out).forEach(([k, v]) => vueMcp.setField(k, v));
 }
 
 /* ── smart parse ──────────────────────────────────────────────── */
@@ -588,7 +439,18 @@ async function parseMcpConfig() {
   }
 }
 
-function _setIfEmpty(id, value) {
-  const el = document.getElementById(id);
-  if (el && !el.value.trim()) el.value = value || "";
-}
+// ── Vue island callbacks 注入 ──────────────────────────────────
+(function () {
+  if (!window.BAA || !window.BAA.vueMcp) return;
+  window.BAA.vueMcp.sync({
+    onToggleEnabled: (id, enabled) => toggleMcpEnabled(id, enabled),
+    onToggleTools:   (id) => toggleMcpTools(id, null),
+    onOpenEdit: (id) => {
+      const s = window.BAA.vueMcp.getServer(id);
+      if (s) openMcpEditForm(s);
+    },
+    onConnect: (id) => connectMcpServer(id),
+    onRemove:  (id) => removeMcpServer(id),
+    onCancel:  () => _clearMcpForm(),
+  });
+})();

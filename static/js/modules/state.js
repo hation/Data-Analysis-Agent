@@ -19,6 +19,8 @@
     _previewData: null,
     _previewCache: {},
     _previewSid: null,
+    // Table explicitly selected from Data Preview for subsequent Agent turns.
+    analysisContext: null,
     _modalResizing: false,
   };
 

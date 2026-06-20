@@ -35,6 +35,9 @@
   }
 
   function toast(msg, type = "") {
+    if (window.BAA.ui && typeof window.BAA.ui.toast === "function") {
+      return window.BAA.ui.toast(msg, type);
+    }
     const el = $("toast");
     if (!el) return;
     el.textContent = msg;

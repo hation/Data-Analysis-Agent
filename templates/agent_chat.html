@@ -52,6 +52,15 @@
       </button>
       <span id="mcp-status-hint" hidden>点击管理 MCP 工具服务器</span>
 
+      <!-- Workspace (workdir mount) status row -->
+      <button class="sb-status-row" id="ws-sidebar-card" data-action="openWorkspace"
+              title="点击挂载 / 查看工作目录">
+        <span class="sb-status-dot" id="ws-dot"></span>
+        <span class="sb-status-label" data-i18n="sidebar.workspace">工作目录</span>
+        <span class="sb-status-value" id="ws-status-text" data-i18n="workspace.unmounted">未挂载</span>
+        <span class="sb-status-chev">›</span>
+      </button>
+
       <!-- Auto-save status -->
       <div class="sb-autosave-row" id="autosave-status" style="display:none"></div>
     </section>
@@ -71,6 +80,8 @@
           <button class="sb-dropdown-item" data-action="openOverlay:ov-db"      data-i18n="sidebar.connect_db">🗄️ 连接 SQL 数据库</button>
           <button class="sb-dropdown-item" data-action="openOverlay:ov-gsheets" data-i18n="sidebar.connect_gsheets">📊 连接 Google Sheets</button>
           <button class="sb-dropdown-item" data-action="openOverlay:ov-api"     data-i18n="sidebar.connect_api">🔗 连接自定义 API</button>
+          <hr class="sb-dropdown-sep">
+          <button class="sb-dropdown-item" data-action="openOverlay:ov-workspace" data-i18n="sidebar.mount_workspace">📁 挂载工作目录</button>
           <hr class="sb-dropdown-sep" id="sb-disc-sep" hidden>
           <button class="sb-dropdown-item sb-dropdown-item--danger"
                   id="btn-disc" hidden data-action="disconnectSrc"
@@ -115,7 +126,7 @@
 
     <!-- ── Footer ────────────────────────────────────────────── -->
     <footer class="sb-footer">
-      <div class="sb-footer-meta">v5.1 · Zafer_Liu</div>
+      <div class="sb-footer-meta">v1.0.0 LTS · Zafer_Liu</div>
       <div class="sb-footer-actions">
         <button class="sb-iconbtn" id="theme-toggle" data-action="toggleTheme" title="Dark mode">🌙</button>
         <button class="sb-iconbtn" id="lang-toggle"  data-action="toggleLang">EN</button>
@@ -141,7 +152,7 @@
 
     <div class="messages" id="messages">
       <div class="welcome" id="welcome">
-        <div class="big-icon">🔍</div>
+        <img src="/static/Images/icon.png" alt="智析 Agent" class="welcome-brand-logo">
         <h2 data-i18n="welcome.title">开始您的数据分析</h2>
         <p data-i18n-html="welcome.desc">连接数据库或上传 Excel，用自然语言提问，AI 会自动查询、分析并生成图表。<br>
            输入 <strong>/</strong> 可快速选择专属命令。</p>
@@ -158,6 +169,7 @@
           <div class="hint-chip" data-action="fillHint">/dashboard 生成可交互销售分析看板</div>
         </div>
       </div>
+      <div id="chat-vue-root" class="chat-vue-root"></div>
     </div>
 
     <!-- Input area -->
@@ -372,6 +384,8 @@
       </div>
     </div>
     <div class="modal-footer">
+      <span class="preview-context-status" id="preview-context-status"></span>
+      <button class="btn-sm btn-sm-primary" id="preview-use-table" disabled>请先选择表</button>
       <button class="btn-sm btn-sm-ghost" data-action="closeOverlay:ov-schema" data-i18n="modal.close">关闭</button>
     </div>
   </div>
@@ -444,6 +458,62 @@
   </div>
 </div>
 
+<!-- Rename saved session dialog -->
+<div class="overlay" id="ov-rename">
+  <div class="modal session-rename-modal">
+    <div class="modal-title" data-i18n="modal.rename.title">重命名对话</div>
+    <div class="session-rename-hint" data-i18n="modal.rename.hint">
+      仅修改历史列表中的显示名称，不会重新加载数据源。
+    </div>
+    <div class="f-row">
+      <label data-i18n="modal.rename.label">新的对话名称</label>
+      <input type="text" id="rename-name" data-i18n-ph="modal.rename.ph"
+        placeholder="输入新的对话名称" maxlength="80">
+    </div>
+    <div class="msg-err" id="rename-err"></div>
+    <div class="modal-footer">
+      <button class="btn-sm btn-sm-ghost" data-action="closeOverlay:ov-rename" data-i18n="modal.cancel">取消</button>
+      <button class="btn-sm btn-sm-primary" data-action="submitRenameSession" data-i18n="modal.rename.btn">重命名</button>
+    </div>
+  </div>
+</div>
+
+<!-- Delete saved session confirmation -->
+<div class="overlay" id="ov-delete-session">
+  <div class="modal session-delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-session-title">
+    <div class="session-delete-head">
+      <div class="session-delete-icon" aria-hidden="true">!</div>
+      <div class="modal-title" id="delete-session-title">删除这条对话？</div>
+    </div>
+    <div class="session-delete-copy" id="delete-session-name"></div>
+    <div class="session-delete-warning">删除后无法恢复，请确认不再需要这条记录。</div>
+    <div class="msg-err" id="delete-session-err"></div>
+    <div class="modal-footer">
+      <button class="btn-sm btn-sm-ghost" data-action="closeOverlay:ov-delete-session">取消</button>
+      <button class="btn-sm session-delete-confirm" id="delete-session-confirm" data-action="confirmDeleteSession">确认删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- Loading saved session overlay -->
+<div class="session-load-mask" id="session-load-mask" hidden>
+  <div class="session-load-panel">
+    <div class="session-load-spinner" aria-hidden="true"></div>
+    <div class="session-load-copy">
+      <div class="session-load-title" data-i18n="session_load.title">正在加载历史对话</div>
+      <div class="session-load-name" id="session-load-name"></div>
+      <div class="session-load-sub" data-i18n="session_load.sub">正在恢复消息、图表和数据源，数据文件较大时可能需要一些时间。</div>
+      <div class="session-load-meta">
+        <span data-i18n="session_load.elapsed_label">已用时</span>
+        <span id="session-load-elapsed">0s</span>
+      </div>
+    </div>
+    <button class="btn-sm btn-sm-ghost session-load-cancel"
+            data-action="cancelLoadSession"
+            data-i18n="session_load.cancel">终止加载</button>
+  </div>
+</div>
+
 <!-- MCP Settings modal -->
 <div class="overlay" id="ov-mcp">
   <div class="modal mcp-modal">
@@ -473,8 +543,8 @@
 
           <!-- Tab bar -->
           <div class="mcp-fill-tabs">
-            <button class="mcp-fill-tab active" id="mcp-tab-local"  onclick="switchMcpTab('local')">📁 本地包目录</button>
-            <button class="mcp-fill-tab"        id="mcp-tab-paste"  onclick="switchMcpTab('paste')">📋 粘贴内容</button>
+            <button class="mcp-fill-tab active" id="mcp-tab-local"  data-action="switchMcpTab:local">📁 本地包目录</button>
+            <button class="mcp-fill-tab"        id="mcp-tab-paste"  data-action="switchMcpTab:paste">📋 粘贴内容</button>
           </div>
 
           <!-- Tab: local path -->
@@ -483,7 +553,7 @@
             <div style="display:flex;gap:6px;align-items:center">
               <input type="text" id="mcp-scan-path" style="flex:1;margin:0"
                 placeholder="例如：C:\Users\you\MCP\playwright">
-              <button class="btn-sm btn-sm-primary" id="mcp-scan-btn" onclick="scanLocalMcp()">扫描</button>
+              <button class="btn-sm btn-sm-primary" id="mcp-scan-btn" data-action="scanLocalMcp">扫描</button>
             </div>
             <span id="mcp-scan-status"   style="font-size:11px;color:#64748b;margin-top:5px;display:block;min-height:16px"></span>
             <div  id="mcp-scan-warnings" style="display:none;margin-top:4px;font-size:11px;color:#f59e0b;background:#fef3c7;border-radius:6px;padding:6px 10px;line-height:1.6"></div>
@@ -495,7 +565,7 @@
             <textarea id="mcp-smart-input" class="mcp-smart-input"
               placeholder="例如：npx -y @modelcontextprotocol/server-filesystem /your/path&#10;或粘贴 JSON 配置、README 片段、curl 示例…"></textarea>
             <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
-              <button class="btn-sm btn-sm-primary" id="mcp-smart-btn" onclick="parseMcpConfig()">解析并填充</button>
+              <button class="btn-sm btn-sm-primary" id="mcp-smart-btn" data-action="parseMcpConfig">解析并填充</button>
               <span id="mcp-smart-status" style="font-size:11px;color:#64748b"></span>
             </div>
             <div id="mcp-smart-warnings" style="display:none;margin-top:6px;font-size:11px;color:#f59e0b;background:#fef3c7;border-radius:6px;padding:6px 10px;line-height:1.6"></div>
@@ -503,6 +573,9 @@
           </div>
         </div>
         <div class="mcp-smart-divider"><span>或手动填写</span></div>
+
+        <div id="mcp-form-fields">
+        <div style="font-size:13px;font-weight:600;color:#1e293b;margin-bottom:4px" id="mcp-form-title">添加服务器</div>
 
         <input type="text" id="mcp-label"   placeholder="服务器名称（显示用）">
         <div id="mcp-id-row">
@@ -525,8 +598,8 @@
           <div style="font-size:11px;color:#f59e0b;background:#fef3c7;border-radius:6px;padding:6px 10px">
             ⚠️ 安全提示：仅允许运行 uvx / uv / npx / node / python / python3 / deno 命令。args 和 env 中不得含有 Shell 元字符或危险环境变量。
           </div>
-          <input type="text" id="mcp-command" placeholder="命令，例如 npx 或 uvx" oninput="updateMcpCmdPreview()">
-          <input type="text" id="mcp-args"    placeholder="参数（空格分隔），例如 -y @modelcontextprotocol/server-filesystem /tmp" oninput="updateMcpCmdPreview()">
+          <input type="text" id="mcp-command" placeholder="命令，例如 npx 或 uvx" data-input="updateMcpCmdPreview">
+          <input type="text" id="mcp-args"    placeholder="参数（空格分隔），例如 -y @modelcontextprotocol/server-filesystem /tmp" data-input="updateMcpCmdPreview">
           <input type="text" id="mcp-env"     placeholder="环境变量（变量名=值，逗号分隔），例如：ATLASCLOUD_API_KEY=apikey-xxx, OTHER_KEY=yyy">
           <div id="mcp-cmd-preview" class="mcp-cmd-preview" style="display:none">
             <div class="cmd-label">命令预览</div>
@@ -545,6 +618,7 @@
 
         <div class="msg-err" id="mcp-add-err"></div>
         <div class="msg-ok"  id="mcp-add-ok"></div>
+        </div><!-- /#mcp-form-fields -->
         <div style="display:flex;gap:7px;justify-content:flex-end;">
           <button class="btn-sm btn-sm-ghost"   data-action="toggleMcpAddForm">取消</button>
           <button class="btn-sm btn-sm-primary" data-action="addMcpServer">保存并连接</button>
@@ -617,7 +691,7 @@
     <div class="modal-title">🧠 业务知识库</div>
 
     <!-- Tab bar -->
-    <div class="kb-tabs">
+    <div class="kb-tabs" id="kb-tabs">
       <button class="kb-tab active"     data-action="kbSwitchTab:metrics">📐 指标定义</button>
       <button class="kb-tab"             data-action="kbSwitchTab:rules">🛡 业务规则</button>
       <button class="kb-tab"             data-action="kbSwitchTab:notes">📝 背景知识</button>
@@ -755,11 +829,58 @@
   </div>
 </div>
 
+<!-- ══ Workspace (workdir mount) Modal ══════════════════════════════ -->
+<div class="overlay" id="ov-workspace">
+  <div class="modal" style="width:560px">
+    <div class="modal-title" data-i18n="modal.workspace.title">📁 挂载工作目录</div>
+
+    <!-- Safety notice -->
+    <div class="ws-safety-notice">
+      <div class="ws-safety-icon">⚠️</div>
+      <div class="ws-safety-text">
+        <div class="ws-safety-title" data-i18n="modal.workspace.safety_title">安全提示</div>
+        <div class="ws-safety-desc" data-i18n="modal.workspace.safety_desc">挂载后，Agent 将能读取该目录下的所有文件（.env / .ssh / .git / *.key 等敏感文件会被自动屏蔽）。请勿挂载包含系统文件或敏感配置的目录。</div>
+      </div>
+    </div>
+
+    <!-- Current mount state — Vue island #6 接管：#ws-current-state -->
+    <div id="ws-current-state">
+      <!-- injected by vue_app.js IIFE #6 -->
+    </div>
+
+    <!-- Path input -->
+    <div class="f-row">
+      <label>
+        <span data-i18n="modal.workspace.path_label">工作目录路径</span>
+        <span style="color:#ef4444"> *</span>
+      </label>
+      <div style="display:flex;gap:6px">
+        <input type="text" id="ws-path-input" style="flex:1"
+               data-i18n-ph="modal.workspace.path_ph"
+               placeholder="例如：C:\Users\xxx\projects\财务分析">
+        <input type="file" id="ws-file-input" webkitdirectory directory multiple style="display:none">
+        <button class="btn-sm btn-sm-ghost" data-action="pickWorkdir" data-i18n="modal.workspace.browse">浏览</button>
+      </div>
+      <div class="f-hint" id="ws-path-hint" data-i18n="modal.workspace.hint">输入项目文件夹的完整绝对路径，Agent 将直接读取目录内文件（无需上传）。与上传并行，可同时使用。</div>
+    </div>
+
+    <div class="msg-err" id="ws-err"></div>
+    <div class="msg-ok"  id="ws-ok"></div>
+
+    <div class="modal-footer">
+      <button class="btn-sm btn-sm-ghost"   data-action="closeOverlay:ov-workspace" data-i18n="modal.close">关闭</button>
+      <button class="btn-sm btn-sm-primary" id="ws-mount-btn" data-action="mountWorkspace" data-i18n="modal.workspace.mount_btn">挂载</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Inline edit form (shared, floats over modal) ── -->
 <div class="overlay" id="ov-kb-form">
   <div class="modal" style="width:520px">
     <div class="modal-title" id="kb-form-title">新增指标</div>
 
+    <!-- Vue kb island 接管：#kb-form-body 内部由 vue_app.js IIFE #5 渲染 -->
+    <div id="kb-form-body">
     <!-- metrics fields -->
     <div id="kb-fields-metrics">
       <div class="f-row">
@@ -824,6 +945,8 @@
     </div>
 
     <div class="msg-err" id="kb-form-err"></div>
+    </div><!-- /#kb-form-body -->
+
     <div class="modal-footer">
       <button class="btn-sm btn-sm-ghost"   data-action="closeOverlay:ov-kb-form">取消</button>
       <button class="btn-sm btn-sm-primary" data-action="kbSubmitForm">保存</button>
@@ -831,11 +954,13 @@
   </div>
 </div>
 
+<div id="global-ui-root"></div>
 <div class="toast" id="toast"></div>
 
 <!-- ── Vendor libs (markdown + sanitizer) ─────────────────────────── -->
 <script src="{{ url_for('static', filename='vendor/marked.min.js') }}"></script>
 <script src="{{ url_for('static', filename='vendor/purify.min.js') }}"></script>
+<script src="https://unpkg.com/vue@3.4.38/dist/vue.global.prod.js"></script>
 
 <!-- ── Core (i18n must come first; provides global t()) ───────────── -->
 <script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
@@ -846,6 +971,7 @@
 <script src="{{ url_for('static', filename='js/modules/theme.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/markdown.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/overlay.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/vue_app.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/msg.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/slash.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/models.js') }}"></script>
@@ -855,6 +981,7 @@
 <script src="{{ url_for('static', filename='js/modules/sessions.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/autosave.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/update.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/workspace.js') }}"></script>
 
 <!-- ── External panels (decorate window.openOverlay; must come AFTER overlay.js) -->
 <script src="{{ url_for('static', filename='js/mcp_settings.js') }}"></script>

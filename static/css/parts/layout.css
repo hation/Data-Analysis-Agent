@@ -41,17 +41,36 @@
   display: flex; align-items: center; gap: 12px;
   padding: 4px 6px 14px;
   border-bottom: 1px solid var(--color-sidebar-divider);
+  position: relative;
 }
+/* Subtle background mesh gradient */
+.sb-brand::before {
+  content: "";
+  position: absolute;
+  inset: -10px -13px 0;
+  background: radial-gradient(circle at 30% 20%, rgba(59, 130, 246, .08) 0%, transparent 60%),
+              radial-gradient(circle at 70% 80%, rgba(99, 102, 241, .06) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+}
+.sb-brand > * { position: relative; z-index: 1; }
+
 .sb-brand-icon {
   width: 36px; height: 36px;
   object-fit: contain; flex-shrink: 0;
-  filter: drop-shadow(0 2px 6px rgba(96, 165, 250, .40));
+  filter: drop-shadow(0 2px 4px rgba(96, 165, 250, .3));
   border-radius: 6px;
 }
+
 .sb-brand-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .sb-brand-name {
-  font-size: var(--fs-xl); font-weight: 700; color: #fff;
+  font-size: var(--fs-xl); font-weight: 700;
   letter-spacing: .02em; line-height: 1.15;
+  background: linear-gradient(135deg, #f1f5f9 0%, #60a5fa 70%, #818cf8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .2));
 }
 .sb-brand-tagline {
   font-size: var(--fs-xs); font-weight: 400;
@@ -365,8 +384,29 @@
 /* ── Main ─────────────────────────────────────────────────────── */
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
 
-.chat-header { background: var(--color-surface); border-bottom: 1px solid var(--color-border);
-  padding: 13px 22px; display: flex; align-items: center; justify-content: space-between; }
+.chat-header {
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  padding: 12px 22px;
+  display: flex; align-items: center; justify-content: space-between;
+  box-shadow: 0 1px 0 var(--color-border),
+              0 2px 8px rgba(15, 23, 42, .04);
+  position: relative;
+  z-index: 5;
+}
+/* Subtle top accent line */
+.chat-header::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0%, #3b82f6 30%, #6366f1 70%, transparent 100%);
+  opacity: .5;
+}
+[data-theme="dark"] .chat-header::before {
+  background: linear-gradient(90deg, transparent 0%, #60a5fa 30%, #818cf8 70%, transparent 100%);
+  opacity: .4;
+}
 .chat-header-title { font-size: var(--fs-lg); font-weight: 600; color: var(--color-text); }
 .chat-header-sub { font-size: var(--fs-sm); color: var(--color-text-dim); margin-top: 1px; }
 .header-btns { display: flex; gap: 7px; }
