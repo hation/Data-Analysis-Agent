@@ -11,15 +11,13 @@ from flask import Blueprint, request, jsonify
 from .state import session_manager, config_manager
 from data.connector import ExcelDataSource, CSVDataSource
 from agent.reasoning import split_reasoning_tags
+from infrastructure.paths import data_path
 
 log = logging.getLogger(__name__)
 
 bp = Blueprint("saved_sessions", __name__)
 
-if os.environ.get("VERCEL"):
-    SAVE_DIR = Path("/tmp/outputs/Session")
-else:
-    SAVE_DIR = Path(__file__).parent.parent / "outputs" / "Session"
+SAVE_DIR = data_path("outputs", "Session")
 
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -84,6 +82,51 @@ def _ds_info(sess) -> dict | None:
     if isinstance(ds, (ExcelDataSource, CSVDataSource)):
         info["file_path"] = ds.file_path
     return info
+
+
+def _workspace_info(sid: str) -> dict | None:
+    from data.workspace import workspace_manager
+    runtime = workspace_manager.get(sid)
+    if runtime is None:
+        return None
+    return {
+        "workdir": str(runtime.workdir),
+        "permission": runtime.permission,
+        "workspace_id": runtime.workspace_id,
+    }
+
+
+def _recovery_state(sess) -> dict:
+    return {
+        "recent_sql": list(getattr(sess, "recent_sql", []))[-5:],
+        "recent_artifacts": list(getattr(sess, "recent_artifacts", []))[-20:],
+        "active_sources": [
+            item for item in sess.list_sources() if item.get("active")
+        ],
+        "turn_activations": list(getattr(sess, "turn_activations", []))[-100:],
+    }
+
+
+def sync_autosave_after_rewind(sess) -> None:
+    """Replace stale future autosave content after conversation time travel."""
+    path = SAVE_DIR / f"autosave_{sess.session_id}.json"
+    if not sess.history:
+        path.unlink(missing_ok=True)
+        return
+    payload = {
+        "name": f"自动保存_{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "autosave": True,
+        "session_id": sess.session_id,
+        "model_provider": sess.model_provider,
+        "history": sess.history,
+        "total_input_tokens": sess.total_input_tokens,
+        "total_output_tokens": sess.total_output_tokens,
+        "data_source": _ds_info(sess),
+        "workspace": _workspace_info(sess.session_id),
+        "recovery_state": _recovery_state(sess),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _restore_ds(info: dict):
@@ -181,6 +224,8 @@ def autosave_session(sid: str):
         "total_input_tokens": sess.total_input_tokens,
         "total_output_tokens":sess.total_output_tokens,
         "data_source":        _ds_info(sess),
+        "workspace":          _workspace_info(sid),
+        "recovery_state":     _recovery_state(sess),
     }
 
     # If the user loaded from an existing file, overwrite that file directly
@@ -234,11 +279,14 @@ def save_session(sid: str):
     payload = {
         "name":               name,
         "saved_at":           datetime.now().isoformat(timespec="seconds"),
+        "session_id":         sid,
         "model_provider":     sess.model_provider,
         "history":            sess.history,
         "total_input_tokens": sess.total_input_tokens,
         "total_output_tokens":sess.total_output_tokens,
         "data_source":        _ds_info(sess),
+        "workspace":          _workspace_info(sid),
+        "recovery_state":     _recovery_state(sess),
     }
 
     stem = _safe_stem(name)
@@ -282,11 +330,66 @@ def load_session(sid: str):
 
     sess.chart_ids = _collect_chart_ids(sess.history)
 
-    ds_info = data.get("data_source")
-    ds      = _restore_ds(ds_info)
-    sess.data_source = ds
+    recovery = data.get("recovery_state") or {}
+    sess.recent_sql = [str(item)[:4000] for item in recovery.get("recent_sql", [])][-5:]
+    sess.recent_artifacts = []
+    for artifact in recovery.get("recent_artifacts", [])[-20:]:
+        if not isinstance(artifact, dict):
+            continue
+        item = dict(artifact)
+        if item.get("artifact_id"):
+            item["url"] = f"/api/session/{sid}/tool-results/{item['artifact_id']}"
+        sess.recent_artifacts.append(item)
+    sess.turn_activations = [
+        dict(item) for item in recovery.get("turn_activations", [])[-100:]
+        if isinstance(item, dict)
+    ]
 
-    ds_status = "connected" if ds else ("lost" if ds_info else "none")
+    # Restore the workspace first. Its persistent DuckDB and cache contain the
+    # active tables and B6 result artifacts referenced by the saved session.
+    from data.workspace import workspace_manager
+    workspace_info = data.get("workspace") or {}
+    workspace_restored = False
+    workspace_lost = False
+    workspace_identity_mismatch = False
+    sess.data_source = None
+    sess.workspace_id = ""
+    if workspace_info.get("workdir"):
+        ok, _message, runtime = workspace_manager.mount(
+            sid,
+            str(workspace_info.get("workdir")),
+            permission=str(workspace_info.get("permission") or "read_only"),
+        )
+        if ok and runtime is not None:
+            saved_workspace_id = str(workspace_info.get("workspace_id") or "")
+            saved_session_id = str(data.get("session_id") or "")
+            # Before C0 workspace_id was simply session_id (also a UUID), so
+            # that exact legacy value is a compatibility hint, not identity.
+            is_legacy_identity = bool(
+                saved_workspace_id and saved_workspace_id == saved_session_id
+            )
+            if (
+                saved_workspace_id
+                and not is_legacy_identity
+                and saved_workspace_id != runtime.workspace_id
+            ):
+                workspace_manager.unmount(sid)
+                workspace_lost = True
+                workspace_identity_mismatch = True
+            else:
+                sess.workspace_id = runtime.workspace_id
+                from api.workspace import _register_workdir_files
+                reg = _register_workdir_files(sid, runtime)
+                workspace_restored = not bool(reg.get("errors")) or bool(reg.get("reused"))
+        else:
+            workspace_lost = True
+
+    ds_info = data.get("data_source")
+    ds = sess.data_source if workspace_restored else _restore_ds(ds_info)
+    if not workspace_restored:
+        sess.data_source = ds
+
+    ds_status = "connected" if ds else ("lost" if ds_info or workspace_lost else "none")
     log.info("[session] loaded  sid=%s  file=%s  name=%r  msg_count=%d  ds=%s  "
              "in_tokens=%d  out_tokens=%d",
              sid, filename, data.get("name", ""), _visible_msg_count(sess.history),
@@ -303,6 +406,9 @@ def load_session(sid: str):
         "ds_connected":    ds is not None,
         "ds_name":         ds.name if ds else (ds_info or {}).get("display_name", ""),
         "ds_lost":         ds is None and ds_info is not None,
+        "workspace_restored": workspace_restored,
+        "workspace_lost": workspace_lost,
+        "workspace_identity_mismatch": workspace_identity_mismatch,
     })
 
 

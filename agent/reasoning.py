@@ -1,4 +1,7 @@
-"""Helpers for separating provider-emitted ``<think>`` blocks from answers."""
+"""Helpers for separating provider-emitted ``💭`` blocks from answers."""
+import logging
+
+log = logging.getLogger(__name__)
 
 
 class ThinkTagStreamParser:

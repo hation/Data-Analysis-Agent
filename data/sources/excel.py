@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""ExcelDataSource — multi-sheet .xlsx/.xls loader (calamine, falls back to openpyxl)."""
+"""Excel data source plus the B2 cancellable, per-sheet parse worker."""
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import List, Optional, Tuple
 
+import duckdb
 import pandas as pd
 
 from ._utils import (
@@ -14,6 +18,110 @@ from ._utils import (
 from .base import DataSource
 
 log = logging.getLogger(__name__)
+
+# Files below this size keep the existing low-latency synchronous path.
+EXCEL_JOB_THRESHOLD_BYTES = int(os.environ.get("BAA_EXCEL_JOB_THRESHOLD", 5_000_000))
+
+
+def excel_requires_job(path: str) -> bool:
+    """Return whether an Excel upload should use the background parser."""
+    try:
+        return Path(path).stat().st_size > EXCEL_JOB_THRESHOLD_BYTES
+    except OSError:
+        return False
+
+
+def _excel_engine(path: str) -> Tuple[str, List[str]]:
+    """Choose the fastest installed engine and return workbook sheet names."""
+    try:
+        import python_calamine  # noqa: F401
+        engine = "calamine"
+    except ImportError:
+        engine = "openpyxl"
+        log.warning("[ExcelDS] python_calamine unavailable; using openpyxl")
+    meta = pd.ExcelFile(path, engine=engine)
+    try:
+        return engine, list(meta.sheet_names)
+    finally:
+        meta.close()
+
+
+def parse_excel_job(ctx, file_path: str, db_path: str, filename: str) -> dict:
+    """Parse an Excel workbook into a dedicated persistent DuckDB database.
+
+    This function is intentionally self-contained for ``JobRunner`` workers:
+    it opens and closes its own connection, reports progress after each sheet,
+    and observes cancellation only at safe sheet boundaries.
+    """
+    target = Path(db_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    complete = False
+    conn = None
+    try:
+        ctx.set_progress(2, f"正在读取 {filename} 的工作表")
+        ctx.check_canceled()
+        engine, sheet_names = _excel_engine(file_path)
+        if not sheet_names:
+            raise ValueError("Excel 文件中未发现工作表。")
+
+        total = len(sheet_names)
+        completed = 0
+
+        def _sheet_done(sheet, done, _total):
+            nonlocal completed
+            completed = done
+            ctx.set_progress(
+                5 + int(done * 78 / total),
+                f"已解析工作表 {done}/{total}：{sheet}",
+            )
+
+        parsed = _parse_sheets_parallel(
+            file_path,
+            sheet_names,
+            engine,
+            check_canceled=ctx.check_canceled,
+            on_complete=_sheet_done,
+        )
+        ctx.check_canceled()
+
+        conn = duckdb.connect(str(target))
+        conn.execute("PRAGMA threads=4")
+        tables: List[str] = []
+        for index, (sheet, df) in enumerate(parsed, start=1):
+            if df is not None:
+                table = _clean_identifier(sheet) or f"sheet{index}"
+                # A workbook may contain sheet names that normalize identically.
+                base, suffix = table, 2
+                while table in tables:
+                    table = f"{base}_{suffix}"
+                    suffix += 1
+                _register(conn, table, df)
+                tables.append(table)
+            ctx.set_progress(
+                83 + int(index * 14 / total),
+                f"正在注册工作表 {index}/{total}：{sheet}",
+            )
+
+        if not tables:
+            raise ValueError("Excel 文件中未发现有效工作表。")
+        complete = True
+        ctx.set_progress(100, f"{filename} 解析完成，共 {len(tables)} 个工作表")
+        return {
+            "file_path": str(Path(file_path).resolve()),
+            "db_path": str(target.resolve()),
+            "filename": filename,
+            "tables": tables,
+            "sheet_count": total,
+        }
+    finally:
+        if conn is not None:
+            conn.close()
+        if not complete:
+            for partial in (target, Path(str(target) + ".wal")):
+                try:
+                    partial.unlink(missing_ok=True)
+                except OSError:
+                    log.warning("[ExcelDS] failed to clean incomplete job artifact: %s", partial)
 
 
 def _is_wide_pivoted(raw: pd.DataFrame) -> bool:
@@ -153,8 +261,18 @@ def _parse_sheet(path: str, sheet: str, engine: str) -> Tuple[str, Optional[pd.D
             # Fall through to normal parsing if pivot detection failed
 
         header_idx = _detect_header_row(raw.values.tolist())
-        df = pd.read_excel(path, sheet_name=sheet, engine=engine,
-                           header=header_idx, skiprows=range(header_idx) if header_idx else None)
+        # ``raw`` already contains every cell.  Re-reading the same sheet with
+        # ``header=...`` roughly doubled large-workbook parsing time.  Build the
+        # framed table from that first read instead.
+        header_values = []
+        for col_index, value in enumerate(raw.iloc[header_idx].tolist()):
+            if pd.isna(value) or not str(value).strip():
+                header_values.append(f"Unnamed_{col_index}")
+            else:
+                header_values.append(value)
+        df = raw.iloc[header_idx + 1:].copy().reset_index(drop=True)
+        df.columns = header_values
+        df = df.infer_objects()
         log.info("[ExcelDS] sheet %r: header at row %d", sheet, header_idx)
         df.columns = _dedup_columns([_clean_identifier(c) for c in df.columns])
         df = df.dropna(how="all")
@@ -164,6 +282,42 @@ def _parse_sheet(path: str, sheet: str, engine: str) -> Tuple[str, Optional[pd.D
     except Exception as exc:
         log.warning("[ExcelDS] sheet %r parse failed: %s", sheet, exc)
         return sheet, None
+
+
+def _parse_sheets_parallel(
+    path: str,
+    sheet_names: List[str],
+    engine: str,
+    *,
+    check_canceled=None,
+    on_complete=None,
+) -> List[Tuple[str, Optional[pd.DataFrame]]]:
+    """Parse sheets with a bounded pool and return them in workbook order."""
+    if not sheet_names:
+        return []
+
+    def _work(sheet):
+        if check_canceled:
+            check_canceled()
+        result = _parse_sheet(path, sheet, engine)
+        if check_canceled:
+            check_canceled()
+        return result
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=min(4, len(sheet_names))) as pool:
+        futures = {pool.submit(_work, sheet): sheet for sheet in sheet_names}
+        done = 0
+        for future in as_completed(futures):
+            sheet = futures[future]
+            if check_canceled:
+                check_canceled()
+            parsed_sheet, df = future.result()
+            results[parsed_sheet] = df
+            done += 1
+            if on_complete:
+                on_complete(sheet, done, len(sheet_names))
+    return [(sheet, results.get(sheet)) for sheet in sheet_names]
 
 
 class ExcelDataSource(DataSource):
@@ -176,34 +330,26 @@ class ExcelDataSource(DataSource):
         self._tables: List[str] = []
         self._load(file_path)
 
+    @classmethod
+    def from_database(cls, file_path: str, filename: str, db_path: str):
+        """Attach a completed job database using a fresh request-thread connection."""
+        obj = cls.__new__(cls)
+        obj.name = filename
+        obj.file_path = file_path
+        obj._db_path = Path(db_path)
+        obj._conn = duckdb.connect(str(obj._db_path))
+        obj._tables = _list_tables(obj._conn)
+        if not obj._tables:
+            obj._conn.close()
+            raise ValueError("解析数据库中没有可用工作表。")
+        return obj
+
     def _load(self, path: str):
-        from concurrent.futures import ThreadPoolExecutor
-
-        # calamine (Rust-based) is 5-10× faster than openpyxl; fall back if unavailable
-        try:
-            import python_calamine  # noqa: F401
-            engine = "calamine"
-        except ImportError:
-            log.warning(
-                "[ExcelDS] python_calamine not installed, falling back to openpyxl "
-                "(significantly slower for large files — run: pip install python-calamine)"
-            )
-            engine = "openpyxl"
-
-        # Read sheet names only (fast metadata call)
-        xl_meta = pd.ExcelFile(path, engine=engine)
-        sheet_names = xl_meta.sheet_names
-        xl_meta.close()
+        engine, sheet_names = _excel_engine(path)
         log.info("[ExcelDS] engine=%s  sheets=%s", engine, sheet_names)
 
-        # Parse all sheets in parallel
-        with ThreadPoolExecutor(max_workers=min(4, len(sheet_names))) as pool:
-            futures = {pool.submit(_parse_sheet, path, s, engine): s for s in sheet_names}
-
-        # Register in original sheet order
-        for sheet in sheet_names:
-            future = next(f for f, s in futures.items() if s == sheet)
-            _, df = future.result()
+        # Parse in parallel, then register in original sheet order.
+        for sheet, df in _parse_sheets_parallel(path, sheet_names, engine):
             if df is None:
                 log.info("[ExcelDS] sheet %r skipped (no data)", sheet)
                 continue

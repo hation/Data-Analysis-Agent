@@ -11,7 +11,22 @@
     // Slash / chat
     onSendOrStop: ()    => window.BAA.chatStream.onSendOrStop(),
     clearCmd:     ()    => window.BAA.slash.clearCmd(),
+    clearSkill:   ()    => window.BAA.skills.clearSkill(),
+    openSkillPicker: () => window.BAA.skills.open(),
+    closeSkillPicker: () => window.BAA.skills.close(),
     fillHint:     (el)  => window.BAA.slash.fillHint(el),
+    toggleComposerExpanded: () => {
+      const shell = document.querySelector(".composer-shell");
+      const button = $("composer-expand-btn");
+      const input = $("msg-input");
+      const expanded = !shell.classList.contains("expanded");
+      shell.classList.toggle("expanded", expanded);
+      button.setAttribute("aria-expanded", String(expanded));
+      button.title = t(expanded ? "composer.collapse" : "composer.expand");
+      if (expanded) input.style.height = "220px";
+      else window.BAA.slash.autoResize(input);
+      input.focus();
+    },
     newChat:      ()    => window.BAA.chatStream.newChat(),
 
     // Overlay
@@ -21,6 +36,7 @@
     // Sidebar / header
     disconnectSrc:     () => window.BAA.datasource.disconnectSrc(),
     openSchemaView:    () => window.BAA.preview.openSchemaView(),
+    openJobHistory:    () => window.BAA.jobHistory.open(),
     openSaveDialog:    () => window.BAA.sessions.openSaveDialog(),
     loadSavedList:     () => window.BAA.sessions.loadSavedList(),
     openMcpSettings:   () => window.openMcpSettings(),
@@ -229,7 +245,18 @@
   // Model select change
   const modelSel = document.getElementById("model-sel");
   if (modelSel) {
-    modelSel.addEventListener("change", () => window.BAA.models.onModelChange());
+    modelSel.addEventListener("change", e => window.BAA.models.onModelChange(e.currentTarget.value));
+  }
+  const sidebarModelSel = document.getElementById("model-sel-sidebar");
+  if (sidebarModelSel) {
+    sidebarModelSel.addEventListener("change", e => window.BAA.models.onModelChange(e.currentTarget.value));
+  }
+
+  const workspacePermission = document.getElementById("workspace-permission-select");
+  if (workspacePermission) {
+    workspacePermission.addEventListener("change", e => {
+      window.BAA.workspace.onPermissionChange(e.currentTarget.value);
+    });
   }
 
   // Excel file picker change
@@ -259,9 +286,10 @@
       $('src-hint').textContent = t(state.srcHintKey);
       $('hdr-sub').textContent  = t('connected_to', { name: state.srcName });
     }
-    const sel = $('model-sel');
-    if (sel && sel.options.length > 0 && sel.options[0].value === '') {
-      sel.options[0].textContent = t('sidebar.model_placeholder');
+    for (const sel of [$('model-sel'), $('model-sel-sidebar')]) {
+      if (sel && sel.options.length > 0 && sel.options[0].value === '') {
+        sel.options[0].textContent = t('sidebar.model_placeholder');
+      }
     }
     const sendBtn = $('send-btn');
     if (sendBtn && !sendBtn.classList.contains('stopping')) sendBtn.title = t('send.title');
@@ -275,13 +303,11 @@
       if (wsTxt) wsTxt.textContent = t('workspace.unmounted');
     }
     if (window.BAA.slash.isSlashOpen()) window.BAA.slash.buildSlashPopup();
+    if (window.BAA.skills?.isOpen()) window.BAA.skills.render();
   });
 
   // ── Bootstrap ─────────────────────────────────────────────────────
   (async () => {
-    window.BAA.slash.buildSlashPopup();
-    await window.BAA.slash.loadSkills();
-
     // Try to reuse the previous session (so autosave + in-memory history survive refresh)
     const prevSID = localStorage.getItem("baa_session_id");
     let sessionRestored = false;
@@ -295,6 +321,13 @@
             sessionRestored = true;
           }
         }
+        if (!sessionRestored && window.BAA.jobHistory) {
+          const hasJobs = await window.BAA.jobHistory.hasHistory(prevSID);
+          if (hasJobs) {
+            state.SID = prevSID;
+            sessionRestored = true;
+          }
+        }
       } catch (_) { /* session gone — fall through to new */ }
     }
 
@@ -304,10 +337,18 @@
     }
     localStorage.setItem("baa_session_id", state.SID);
     sessionStorage.setItem("baa_session_id", state.SID);
+    await Promise.all([
+      window.BAA.slash.loadCommands(),
+      window.BAA.skills.loadSkills(),
+    ]);
+    if (window.BAA.jobHistory) await window.BAA.jobHistory.init(state.SID);
     await window.BAA.models.loadModels();
     await window.BAA.models.loadBuiltinProviders();
     await window.BAA.sessions.loadSavedList();
     await window.BAA.datasource.loadDatasourceConfigs();
+    // Reflect packaged builds without bundled MCP resources immediately;
+    // external MCP configuration remains available through the settings panel.
+    if (window.loadMcpServers) await window.loadMcpServers();
     // Restore any sources that survived a page reload (new session = empty, that's fine)
     try {
       const sr = await fetch(`/api/session/${state.SID}/sources`);

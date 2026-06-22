@@ -20,11 +20,17 @@
 
   function _hydrateSelectionFromContext() {
     selectedTables = new Map();
+    if (!state._previewData?.requires_table_selection) return;
     for (const ctxTable of _contextTables()) {
       const meta = state._previewData?.tables?.find(
         tb => tb.source_id === ctxTable.source_id && tb.name === ctxTable.table
       );
       if (meta) selectedTables.set(_tableKey(meta), meta);
+    }
+    if (!selectedTables.size) {
+      for (const meta of state._previewData?.tables || []) {
+        if (meta.selected_for_analysis) selectedTables.set(_tableKey(meta), meta);
+      }
     }
   }
 
@@ -40,6 +46,14 @@
     if (tableMeta !== undefined) currentTableMeta = tableMeta || null;
     const btn = $("preview-use-table");
     const status = $("preview-context-status");
+    const requiresSelection = Boolean(state._previewData?.requires_table_selection);
+    if (state._previewData?.requires_table_selection === false) {
+      selectedTables.clear();
+      state.analysisContext = null;
+    }
+    if (btn) btn.style.display = requiresSelection ? "" : "none";
+    if (status) status.style.display = requiresSelection ? "" : "none";
+    if (!requiresSelection) return;
     const count = selectedTables.size;
     if (btn) {
       btn.disabled = count === 0;
@@ -51,18 +65,33 @@
       : "点击表名前的方框选择一张或多张分析表";
   }
 
-  function useSelectedTablesForAnalysis() {
+  async function useSelectedTablesForAnalysis() {
     if (!selectedTables.size) return;
     const tables = [...selectedTables.values()].map(tb => ({
       source_id: tb.source_id || "",
       source_name: tb.source_name || "",
       table: tb.name,
     }));
-    state.analysisContext = {
-      tables,
-    };
+    const sqlSourceIds = [...new Set((state._previewData?.tables || [])
+      .filter(tb => tb.selectable_for_analysis).map(tb => tb.source_id).filter(Boolean))];
+    try {
+      await Promise.all(sqlSourceIds.map(async sourceId => {
+        const selected = tables.filter(item => item.source_id === sourceId).map(item => item.table);
+        const response = await fetch(`/api/session/${state.SID}/sources/${sourceId}/analysis-tables`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tables: selected }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || "保存 SQL 分析表失败");
+      }));
+    } catch (error) {
+      window.BAA.overlay.toast(error.message || "保存 SQL 分析表失败", "error");
+      return;
+    }
+    state.analysisContext = { tables };
     _syncContextControls();
-    window.BAA.overlay.toast(`后续分析将优先使用已选的 ${tables.length} 张表`, "ok");
+    window.BAA.overlay.toast(`已限定后续分析仅使用选中的 ${tables.length} 张表`, "ok");
     if (window.BAA.overlay) window.BAA.overlay.closeOverlay("ov-schema");
   }
 
@@ -182,16 +211,6 @@
       const row = document.createElement("div");
       row.className = "preview-tab-row";
 
-      const selectBtn = document.createElement("button");
-      const selected = selectedTables.has(_tableKey(tb));
-      selectBtn.className = "preview-tab-select" + (selected ? " selected" : "");
-      selectBtn.type = "button";
-      selectBtn.setAttribute("aria-pressed", String(selected));
-      selectBtn.setAttribute("aria-label", `选择 ${tb.name} 用于分析`);
-      selectBtn.title = selected ? "取消选择" : "选择用于分析";
-      selectBtn.innerHTML = '<span aria-hidden="true">✓</span>';
-      selectBtn.addEventListener("click", () => _toggleTableSelection(tb, selectBtn));
-
       const tab = document.createElement("button");
       tab.className = "preview-tab" + (i === 0 ? " active" : "");
       tab.dataset.idx = i;
@@ -203,7 +222,19 @@
         ${rowHint ? `<span class="preview-tab-rows">${rowHint}</span>` : ""}`;
       tab.title = tb.name + (rowHint ? ` (${rowHint} 行)` : "");
       tab.addEventListener("click", () => _switchTab(i, tab));
-      row.append(selectBtn, tab);
+      if (tb.selectable_for_analysis) {
+        const selectBtn = document.createElement("button");
+        const selected = selectedTables.has(_tableKey(tb));
+        selectBtn.className = "preview-tab-select" + (selected ? " selected" : "");
+        selectBtn.type = "button";
+        selectBtn.setAttribute("aria-pressed", String(selected));
+        selectBtn.setAttribute("aria-label", `选择 ${tb.name} 用于分析`);
+        selectBtn.title = selected ? "取消选择" : "选择用于分析";
+        selectBtn.innerHTML = '<span aria-hidden="true">✓</span>';
+        selectBtn.addEventListener("click", () => _toggleTableSelection(tb, selectBtn));
+        row.append(selectBtn);
+      }
+      row.append(tab);
       tabs.appendChild(row);
     });
 

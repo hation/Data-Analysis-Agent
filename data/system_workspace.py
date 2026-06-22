@@ -8,6 +8,9 @@ index, and never injects file contents into an LLM prompt automatically.
 """
 from __future__ import annotations
 
+import logging
+log = logging.getLogger(__name__)
+
 import fnmatch
 import json
 import os
@@ -40,18 +43,26 @@ class SystemRootPolicy:
 class SystemWorkspace:
     """Virtual, policy-controlled view of selected project directories."""
 
-    def __init__(self, project_root: Path) -> None:
+    def __init__(
+        self,
+        project_root: Path,
+        *,
+        data_root_path: Path | None = None,
+        resource_root_path: Path | None = None,
+    ) -> None:
         project_root = project_root.resolve()
         self.project_root = project_root
+        writable_root = (data_root_path or project_root).resolve()
+        resources = (resource_root_path or project_root).resolve()
         self.roots: dict[str, SystemRootPolicy] = {
-            "uploads": SystemRootPolicy("uploads", project_root / "uploads"),
-            "outputs": SystemRootPolicy("outputs", project_root / "outputs", writable=True),
+            "uploads": SystemRootPolicy("uploads", writable_root / "uploads"),
+            "outputs": SystemRootPolicy("outputs", writable_root / "outputs", writable=True),
             "mcp": SystemRootPolicy(
-                "mcp", project_root / "MCP",
+                "mcp", resources / "MCP",
                 skip_dirs=frozenset({"dist", "build", "coverage"}),
             ),
         }
-        self._state_dir = project_root / "outputs" / ".workspace"
+        self._state_dir = writable_root / "outputs" / ".workspace"
         self._index_path = self._state_dir / "system-index.json"
         self._lock = threading.RLock()
         self._last_refresh: dict[str, float] = {}
@@ -61,7 +72,8 @@ class SystemWorkspace:
         try:
             data = json.loads(self._index_path.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else {"version": 1, "roots": {}}
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as e:
+            log.debug("[system_workspace] failed to load index, using default: %s", e)
             return {"version": 1, "roots": {}}
 
     def _save_index(self) -> None:
@@ -135,7 +147,8 @@ class SystemWorkspace:
                         safe = item.resolve()
                         rel = safe.relative_to(root_resolved)
                         stat = safe.stat()
-                    except (OSError, ValueError):
+                    except (OSError, ValueError) as e:
+                        log.debug("[system_workspace] skipping file %s: %s", item, e)
                         continue
                     entries[rel.as_posix()] = {
                         "size": stat.st_size,

@@ -42,6 +42,10 @@
       showLoading: legacyShowLoading,
       hideLoading: legacyHideLoading,
       updateLoading() {},
+      confirm() {
+        legacyToast("当前界面尚未就绪，请稍后重试", "err");
+        return Promise.resolve(false);
+      },
     };
     return;
   }
@@ -62,6 +66,15 @@
       onCancel: null,
       startedAt: 0,
       timer: null,
+    },
+    confirm: {
+      visible: false,
+      title: "",
+      message: "",
+      confirmText: "",
+      cancelText: "",
+      danger: false,
+      resolve: null,
     },
   };
   let toastSeq = 0;
@@ -138,10 +151,66 @@
     ]);
   }
 
+  function settleConfirm(accepted) {
+    const resolve = state.confirm.resolve;
+    Object.assign(state.confirm, {
+      visible: false,
+      title: "",
+      message: "",
+      confirmText: "",
+      cancelText: "",
+      danger: false,
+      resolve: null,
+    });
+    renderUi();
+    if (typeof resolve === "function") resolve(Boolean(accepted));
+  }
+
+  function renderConfirm() {
+    const dialog = state.confirm;
+    if (!dialog.visible) return null;
+    return h("div", {
+      class: "global-confirm-mask",
+      role: "presentation",
+      onClick: () => settleConfirm(false),
+      onKeydown: event => {
+        if (event.key === "Escape") settleConfirm(false);
+      },
+    }, [
+      h("section", {
+        class: "global-confirm-panel",
+        role: "alertdialog",
+        "aria-modal": "true",
+        "aria-labelledby": "global-confirm-title",
+        "aria-describedby": "global-confirm-message",
+        onClick: event => event.stopPropagation(),
+      }, [
+        h("div", { class: "global-confirm-copy" }, [
+          h("h3", { id: "global-confirm-title", class: "global-confirm-title" }, dialog.title),
+          h("p", { id: "global-confirm-message", class: "global-confirm-message" }, dialog.message),
+        ]),
+        h("div", { class: "global-confirm-actions" }, [
+          h("button", {
+            class: "btn-sm btn-sm-ghost",
+            type: "button",
+            onClick: () => settleConfirm(false),
+          }, dialog.cancelText || "取消"),
+          h("button", {
+            class: dialog.danger ? "btn-sm global-confirm-danger" : "btn-sm btn-sm-primary",
+            type: "button",
+            autofocus: true,
+            onClick: () => settleConfirm(true),
+          }, dialog.confirmText || "确认"),
+        ]),
+      ]),
+    ]);
+  }
+
   function renderUi() {
     render(h("div", { class: "global-ui" }, [
       h("div", { class: "global-toast-stack", "aria-live": "polite" }, state.toasts.map(renderToast)),
       renderLoading(),
+      renderConfirm(),
     ]), root);
   }
 
@@ -207,8 +276,329 @@
     renderUi();
   }
 
-  window.BAA.ui = { isVue: true, toast, showLoading, hideLoading, updateLoading };
+  function confirm(options = {}) {
+    if (state.confirm.visible) settleConfirm(false);
+    return new Promise(resolve => {
+      Object.assign(state.confirm, {
+        visible: true,
+        title: String(options.title || "请确认操作"),
+        message: String(options.message || ""),
+        confirmText: String(options.confirmText || "确认"),
+        cancelText: String(options.cancelText || "取消"),
+        danger: Boolean(options.danger),
+        resolve,
+      });
+      renderUi();
+    });
+  }
+
+  window.BAA.ui = { isVue: true, toast, showLoading, hideLoading, updateLoading, confirm };
   renderUi();
+})();
+
+// ── IIFE #7: durable Job history panel (B5) ─────────────────────────────
+(function () {
+  window.BAA = window.BAA || {};
+  const Vue = window.Vue;
+  const root = document.getElementById("job-history-root");
+  if (!root || !Vue?.h || !Vue?.render || !Vue?.reactive) {
+    window.BAA.vueJobHistory = null;
+    return;
+  }
+
+  const { h, render, reactive } = Vue;
+  const state = reactive({ open: false, loading: false, error: "", jobs: [] });
+  let callbacks = {};
+
+  function text(key, fallback, params) {
+    if (!window.t) return fallback;
+    const value = window.t(key, params);
+    return value && value !== key ? value : fallback;
+  }
+
+  function normalizeSteps(events) {
+    const steps = new Map();
+    for (const event of (Array.isArray(events) ? events : [])) {
+      const id = event.step_id || `step-${event.step_number || steps.size + 1}`;
+      const current = steps.get(id) || {
+        id, number: Number(event.step_number) || steps.size + 1,
+        tool: event.tool || "unknown", display: event.display || event.tool || "unknown",
+        status: "running", elapsed: null, error: "",
+      };
+      if (event.type === "conversation_step_finished") {
+        current.status = event.status || "succeeded";
+        current.elapsed = Number(event.elapsed_seconds) || 0;
+        current.error = event.error || "";
+      }
+      steps.set(id, current);
+    }
+    return [...steps.values()].sort((a, b) => a.number - b.number);
+  }
+
+  function normalize(job) {
+    return {
+      id: job.id || job.job_id || "",
+      type: job.type || job.job_type || "",
+      label: job.label || "",
+      status: job.status || "created",
+      progress: Number(job.progress) || 0,
+      message: job.message || "",
+      error: job.error || "",
+      result: job.result || null,
+      activation: job.activation || job.result?.activation || null,
+      workspace: job.workspace || null,
+      workspaceId: job.workspace_id || "",
+      artifacts: Array.isArray(job.artifacts) ? [...job.artifacts] : [],
+      steps: normalizeSteps(job.steps),
+      createdAt: job.created_at || "",
+      updatedAt: job.updated_at || "",
+      finishedAt: job.finished_at || "",
+      cancelPending: false,
+      expanded: Boolean(job.expanded),
+    };
+  }
+
+  function findJob(jobId) {
+    return state.jobs.find(job => job.id === jobId);
+  }
+
+  function sortJobs() {
+    state.jobs.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  }
+
+  function setJobs(jobs, nextCallbacks = {}) {
+    const old = new Map(state.jobs.map(job => [job.id, job]));
+    state.jobs = (Array.isArray(jobs) ? jobs : []).map(raw => {
+      const job = normalize(raw);
+      const previous = old.get(job.id);
+      if (previous?.artifacts?.length) job.artifacts = previous.artifacts;
+      if (previous) job.expanded = previous.expanded;
+      return job;
+    });
+    callbacks = nextCallbacks || callbacks;
+    sortJobs();
+    draw();
+  }
+
+  function applyEvent(ev) {
+    if (!ev?.job_id) return false;
+    let job = findJob(ev.job_id);
+    if (!job) {
+      job = normalize({
+        id: ev.job_id,
+        type: ev.job_type,
+        label: ev.label,
+        status: ev.status,
+        created_at: ev.created_at,
+      });
+      state.jobs.unshift(job);
+    }
+    if (ev.job_type) job.type = ev.job_type;
+    if (ev.label) job.label = ev.label;
+    if (ev.status) job.status = ev.status;
+    if (ev.progress !== undefined) job.progress = Number(ev.progress) || 0;
+    if (ev.message !== undefined) job.message = ev.message || "";
+    if (ev.type === "conversation_activation" && ev.activation) job.activation = ev.activation;
+    if (ev.created_at && !job.createdAt) job.createdAt = ev.created_at;
+    if (ev.type === "conversation_step_started") {
+      if (!job.steps.some(step => step.id === ev.step_id)) {
+        job.steps.push({
+          id: ev.step_id, number: Number(ev.step_number) || job.steps.length + 1,
+          tool: ev.tool || "unknown", display: ev.display || ev.tool || "unknown",
+          status: "running", elapsed: null, error: "",
+        });
+      }
+    } else if (ev.type === "conversation_step_finished") {
+      const step = job.steps.find(item => item.id === ev.step_id);
+      if (step) {
+        step.status = ev.status || "succeeded";
+        step.elapsed = Number(ev.elapsed_seconds) || 0;
+        step.error = ev.error || "";
+      }
+    }
+    if (ev.type === "artifact_created" && ev.artifact) {
+      const signature = JSON.stringify(ev.artifact);
+      if (!job.artifacts.some(item => JSON.stringify(item) === signature)) {
+        job.artifacts.push(ev.artifact);
+      }
+    } else if (ev.type === "job_done") {
+      job.status = ev.status || "succeeded";
+      job.progress = 100;
+      job.result = ev.result;
+      if (ev.result?.activation) job.activation = ev.result.activation;
+      job.cancelPending = false;
+    } else if (ev.type === "job_error") {
+      job.status = ev.status || "failed";
+      job.error = ev.error || "Job failed";
+      job.cancelPending = false;
+    } else if (ev.type === "job_canceled") {
+      job.status = ev.status || "canceled";
+      job.cancelPending = false;
+    }
+    sortJobs();
+    draw();
+    return true;
+  }
+
+  function formatTime(value) {
+    if (!value) return "";
+    try { return new Date(value).toLocaleString(); } catch (_) { return value; }
+  }
+
+  function renderArtifact(artifact, index) {
+    const typeName = {
+      chart: "分析图表", file: "生成文件", export: "导出文件",
+      tool_result: "完整工具结果", schema: "数据结构", report: "分析报告",
+      ppt: "演示文稿", dashboard: "仪表盘", checkpoint: "工作目录检查点",
+    }[String(artifact.type || "").toLowerCase()] || "任务结果";
+    const name = artifact.filename || artifact.name || artifact.label || `${typeName} ${index + 1}`;
+    const href = artifact.url || artifact.download_url || "";
+    return href
+      ? h("a", { class: "job-history-artifact", href, target: "_blank", rel: "noopener" }, `↗ ${name}`)
+      : h("span", { class: "job-history-artifact" }, `✓ ${name}`);
+  }
+
+  function renderStep(step) {
+    const duration = step.elapsed === null ? "" : `${step.elapsed.toFixed(2)}s`;
+    return h("li", { class: `job-history-step job-history-step-${step.status}` }, [
+      h("span", { class: "job-history-step-state", "aria-hidden": "true" },
+        step.status === "running" ? "⟳" : step.status === "succeeded" ? "✓" : "!"),
+      h("span", { class: "job-history-step-name" }, step.display || step.tool),
+      h("code", { class: "job-history-step-tool" }, step.tool),
+      duration ? h("span", { class: "job-history-step-duration" }, duration) : null,
+      step.error ? h("div", { class: "job-history-step-error" }, step.error) : null,
+    ]);
+  }
+
+  function renderJob(job) {
+    const terminal = ["succeeded", "failed", "canceled"].includes(job.status);
+    const canCancel = !terminal && job.status !== "canceling" && job.type !== "filehistory_rewind";
+    const progress = Math.max(0, Math.min(100, Number(job.progress) || 0));
+    const title = job.label || job.type || text("job.default_label", "Background job");
+    const isConversation = job.type === "conversation_analysis";
+    const answer = typeof job.result === "object" ? (job.result?.answer || "") : "";
+    const detailCount = job.steps.length || Number(job.result?.step_count) || 0;
+    const activation = job.activation || job.result?.activation;
+    const children = [
+      h("div", { class: "job-history-card-head" }, [
+        h("div", { class: "job-history-card-title" }, title),
+        h("span", { class: `job-status job-status-${job.status}` },
+          text(`job.status.${job.status}`, job.status)),
+      ]),
+      h("div", { class: "job-history-time" }, formatTime(job.createdAt)),
+      job.workspaceId ? h("div", {
+        class: "job-history-workspace",
+        title: job.workspace?.path || job.workspaceId,
+      }, `📁 ${text("job.workspace", "工作目录")}：${job.workspace?.name || job.workspaceId.slice(0, 8)}`) : null,
+      h("div", { class: "job-progress", role: "progressbar", "aria-valuenow": String(progress) }, [
+        h("span", { class: "job-progress-fill", style: { width: `${progress}%` } }),
+      ]),
+      h("div", { class: "job-card-meta" }, [
+        h("span", { class: "job-progress-value" },
+          isConversation ? `已执行 ${detailCount} 个步骤` : `${progress}%`),
+        job.message && !isConversation ? h("span", { class: "job-message" }, job.message) : null,
+      ]),
+    ];
+    if (activation?.kind && activation.kind !== "none") {
+      const prefix = activation.kind === "skill" ? "分析技能" : activation.kind === "command" ? "命令" : "内部操作";
+      children.splice(2, 0, h("div", {
+        class: `job-activation job-activation-${activation.kind}`,
+      }, `${prefix}: ${activation.name || ""}`));
+    }
+    if (job.artifacts.length) {
+      children.push(h("div", { class: "job-history-artifacts" }, [
+        h("div", { class: "job-history-artifacts-title" }, "任务结果"),
+        ...job.artifacts.map(renderArtifact),
+      ]));
+    }
+    if (job.error) children.push(h("div", { class: "job-error" }, job.error));
+    if (isConversation && (job.steps.length || answer)) {
+      children.push(h("button", {
+        class: "job-history-expand", type: "button",
+        "aria-expanded": String(job.expanded),
+        onClick: () => { job.expanded = !job.expanded; draw(); },
+      }, `${job.expanded ? "收起" : "展开"}执行详情 (${detailCount})`));
+      if (job.expanded) {
+        children.push(h("div", { class: "job-history-detail" }, [
+          job.steps.length
+            ? h("ol", { class: "job-history-steps" }, job.steps.map(renderStep))
+            : null,
+          answer ? h("div", { class: "job-history-answer" }, [
+            h("div", { class: "job-history-answer-title" }, "最终答案"),
+            h("div", { class: "job-history-answer-body" }, answer),
+          ]) : null,
+        ]));
+      }
+    }
+    if (canCancel) {
+      children.push(h("button", {
+        class: "job-cancel-btn",
+        type: "button",
+        disabled: job.cancelPending,
+        onClick: async () => {
+          if (!callbacks.onCancel || job.cancelPending) return;
+          job.cancelPending = true;
+          job.status = "canceling";
+          draw();
+          try { await callbacks.onCancel(job.id); }
+          catch (error) {
+            job.cancelPending = false;
+            job.error = error?.message || text("job.cancel_failed", "Could not cancel job");
+            draw();
+          }
+        },
+      }, text("job.cancel", "Cancel")));
+    }
+    return h("article", { class: `job-history-card job-history-card-${job.status}`, key: job.id }, children);
+  }
+
+  function draw() {
+    if (!state.open) {
+      render(null, root);
+      return;
+    }
+    const body = state.loading && !state.jobs.length
+      ? h("div", { class: "job-history-empty" }, text("job.history.loading", "Loading…"))
+      : state.error
+        ? h("div", { class: "job-history-error" }, state.error)
+        : state.jobs.length
+          ? h("div", { class: "job-history-list" }, state.jobs.map(renderJob))
+          : h("div", { class: "job-history-empty" }, text("job.history.empty", "No background jobs yet"));
+    render(h("div", {
+      class: "overlay open",
+      role: "dialog",
+      "aria-modal": "true",
+      onClick: event => { if (event.target === event.currentTarget) setOpen(false); },
+    }, [h("section", { class: "modal job-history-modal" }, [
+      h("header", { class: "job-history-head" }, [
+        h("div", null, [
+          h("div", { class: "modal-title" }, text("job.history.title", "Job history")),
+          h("div", { class: "job-history-summary" },
+            text("job.history.summary", `${state.jobs.length} jobs`, { count: state.jobs.length })),
+        ]),
+        h("div", { class: "job-history-actions" }, [
+          h("button", { class: "btn-sm btn-sm-danger", type: "button", disabled: state.loading,
+            onClick: () => callbacks.onClearCompleted?.() },
+          text("job.history.clear_completed", "清除已完成")),
+          h("button", { class: "btn-sm btn-sm-ghost", type: "button", disabled: state.loading,
+            onClick: () => callbacks.onRefresh?.() }, text("job.history.refresh", "Refresh")),
+          h("button", { class: "job-history-close", type: "button", onClick: () => setOpen(false),
+            "aria-label": text("modal.close", "Close") }, "×"),
+        ]),
+      ]),
+      body,
+    ])]), root);
+  }
+
+  function setOpen(open) { state.open = Boolean(open); draw(); }
+  function setLoading(loading) { state.loading = Boolean(loading); draw(); }
+  function setError(error) { state.error = error || ""; draw(); }
+  function reset() { state.jobs = []; state.error = ""; state.loading = false; draw(); }
+
+  window.BAA.vueJobHistory = {
+    setOpen, setLoading, setError, setJobs, applyEvent, reset,
+    isOpen: () => state.open,
+  };
 })();
 
 // Progressive Vue island for the chat message list.
@@ -218,6 +608,7 @@
   window.BAA = window.BAA || {};
 
   const root = document.getElementById("chat-vue-root");
+  const composerQueueRoot = document.getElementById("composer-queue-root");
   const Vue = window.Vue;
   if (!root || !Vue || !Vue.h || !Vue.render) {
     window.BAA.vueChat = null;
@@ -230,6 +621,7 @@
   let toolSeq = 0;
   let chartSeq = 0;
   let cardSeq = 0;
+  let jobSeq = 0;
   const MIN_TOOL_VISIBLE_MS = 650;
   const ACTIVITY_KIND = "activity";
 
@@ -271,7 +663,9 @@
         msg.role === "user" ? "👤" : _assistantAvatar(),
       ]),
       h("div", { class: "msg-body" }, [
+        _renderTurnQueueState(msg),
         h("div", { class: "tool-steps" }),
+        h("div", { class: "job-list" }),
         h("div", { class: "chart-list" }),
         h("div", { class: "msg-bubble" }),
         h("div", { class: "card-list" }),
@@ -279,9 +673,102 @@
     ]);
   }
 
+  function _queueText(key, fallback, params) {
+    if (!window.t) return fallback;
+    const value = t(key, params);
+    return value && value !== key ? value : fallback;
+  }
+
+  function _renderTurnQueueState(msg) {
+    if (!msg.queueStatus) return null;
+    let label = _queueText("queue.processing", "Starting…");
+    if (msg.queueStatus === "queued") {
+      label = _queueText("queue.waiting", `Waiting · position ${msg.queuePosition}`, {
+        position: msg.queuePosition,
+      });
+    } else if (msg.queueStatus === "canceled") {
+      label = _queueText("queue.canceled", "Removed from queue");
+    }
+    const children = [
+      h("span", { class: "turn-queue-icon", "aria-hidden": "true" }, msg.queueStatus === "queued" ? "⏳" : "·"),
+      h("span", { class: "turn-queue-label" }, label),
+    ];
+    if (msg.queueStatus === "queued" && msg.queueCallbacks?.onCancel) {
+      children.push(h("button", {
+        type: "button",
+        class: "turn-queue-cancel",
+        onClick: () => msg.queueCallbacks.onCancel(),
+      }, _queueText("queue.cancel", "Cancel queued message")));
+    }
+    return h("div", {
+      class: `turn-queue-state turn-queue-${msg.queueStatus}`,
+      role: "status",
+      "aria-live": "polite",
+    }, children);
+  }
+
+  function renderComposerQueue(items, callbacks) {
+    if (!composerQueueRoot) return false;
+    const queue = Array.isArray(items) ? items : [];
+    if (!queue.length) {
+      render(null, composerQueueRoot);
+      return true;
+    }
+    const first = queue[0];
+    const countText = _queueText("queue.count", `${queue.length} messages queued`, { count: queue.length });
+    const icon = (paths) => h("svg", {
+      viewBox: "0 0 24 24",
+      width: "20",
+      height: "20",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "1.9",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      "aria-hidden": "true",
+    }, paths.map(path => h("path", { d: path })));
+    const children = [
+      h("span", { class: "composer-queue-grip", "aria-hidden": "true" }, "⠿"),
+      h("div", { class: "composer-queue-copy" }, [
+        h("span", { class: "composer-queue-message" }, first.displayText || first.message || ""),
+        h("span", { class: "composer-queue-count" }, countText),
+      ]),
+      h("div", { class: "composer-queue-actions" }, [
+        h("button", {
+          type: "button",
+          class: "composer-queue-action composer-queue-send-now",
+          title: _queueText("queue.send_now", "Send now and stop the current response"),
+          "aria-label": _queueText("queue.send_now", "Send now and stop the current response"),
+          onClick: () => callbacks?.onSendNow?.(first.id),
+        }, [icon(["M5 4h14", "M12 20V8", "m7.5 12.5 4.5-4.5 4.5 4.5"])]),
+        h("button", {
+          type: "button",
+          class: "composer-queue-action composer-queue-edit",
+          title: _queueText("queue.edit", "Edit queued message"),
+          "aria-label": _queueText("queue.edit", "Edit queued message"),
+          onClick: () => callbacks?.onEdit?.(first.id),
+        }, [icon(["M12 20h9", "M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"])]),
+        h("button", {
+          type: "button",
+          class: "composer-queue-action composer-queue-delete",
+          title: _queueText("queue.delete", "Delete queued message"),
+          "aria-label": _queueText("queue.delete", "Delete queued message"),
+          onClick: () => callbacks?.onCancel?.(first.id),
+        }, [icon(["M3 6h18", "M8 6V4h8v2", "M19 6l-1 14H6L5 6", "M10 11v5", "M14 11v5"])]),
+      ]),
+    ];
+    render(h("div", {
+      class: "composer-queue-bar",
+      role: "status",
+      "aria-live": "polite",
+    }, children), composerQueueRoot);
+    return true;
+  }
+
   function _render() {
     render(h("div", { class: "chat-vue-list" }, messages.map(_messageNode)), root);
     messages.forEach(_renderToolsFor);
+    messages.forEach(_renderJobsFor);
     messages.forEach(_renderChartsFor);
     messages.forEach(_renderCardsFor);
   }
@@ -325,6 +812,12 @@
     const id = _messageIdFrom(target);
     const el = id ? _find(id) : null;
     return el ? el.querySelector(".card-list") : null;
+  }
+
+  function _jobListFor(target) {
+    const id = _messageIdFrom(target);
+    const el = id ? _find(id) : null;
+    return el ? el.querySelector(".job-list") : null;
   }
 
   function _removeTyping(typing) {
@@ -535,6 +1028,144 @@
       return;
     }
     render(h(Fragment, null, charts.map(_renderChartFrame)), list);
+  }
+
+  function _jobText(key, fallback) {
+    if (!window.t) return fallback;
+    const value = t(key);
+    return value && value !== key ? value : fallback;
+  }
+
+  function _artifactNode(artifact, index) {
+    const typeName = {
+      chart: "分析图表", file: "生成文件", export: "导出文件",
+      tool_result: "完整工具结果", schema: "数据结构", report: "分析报告",
+      ppt: "演示文稿", dashboard: "仪表盘", checkpoint: "工作目录检查点",
+    }[String(artifact.type || "").toLowerCase()] || "任务结果";
+    const name = artifact.filename || artifact.name || artifact.label || `${typeName} ${index + 1}`;
+    const href = artifact.url || artifact.download_url || "";
+    const attrs = { class: "job-artifact", key: `${name}-${index}` };
+    if (href) {
+      return h("a", { ...attrs, href, target: "_blank", rel: "noopener noreferrer" }, `↗ ${name}`);
+    }
+    return h("span", attrs, `✓ ${name}`);
+  }
+
+  function _renderJobCard(job) {
+    const terminal = ["succeeded", "failed", "canceled"].includes(job.status);
+    const canCancel = !terminal && job.status !== "canceling" && job.jobType !== "filehistory_rewind";
+    const progress = Math.max(0, Math.min(100, Number(job.progress) || 0));
+    const statusText = _jobText(`job.status.${job.status}`, job.status || "created");
+    const children = [
+      h("div", { class: "job-card-head" }, [
+        h("div", { class: "job-card-title" }, [
+          h("span", { class: "job-card-icon", "aria-hidden": "true" }, terminal ? (job.status === "succeeded" ? "✓" : "!") : "⟳"),
+          h("span", null, job.label || job.jobType || _jobText("job.default_label", "Background job")),
+        ]),
+        h("span", { class: `job-status job-status-${job.status}` }, statusText),
+      ]),
+      h("div", {
+        class: "job-progress",
+        role: "progressbar",
+        "aria-label": job.label || job.jobType || "Job progress",
+        "aria-valuemin": "0",
+        "aria-valuemax": "100",
+        "aria-valuenow": String(progress),
+      }, [h("span", { class: "job-progress-fill", style: { width: `${progress}%` } })]),
+      h("div", { class: "job-card-meta" }, [
+        h("span", { class: "job-progress-value" }, `${progress}%`),
+        job.message ? h("span", { class: "job-message" }, job.message) : null,
+      ]),
+    ];
+    if (job.artifacts.length) {
+      children.push(h("div", { class: "job-artifacts" }, job.artifacts.map(_artifactNode)));
+    }
+    if (job.error) children.push(h("div", { class: "job-error", role: "alert" }, job.error));
+    if (canCancel) {
+      children.push(h("button", {
+        type: "button",
+        class: "job-cancel-btn",
+        disabled: job.cancelPending,
+        onClick: async () => {
+          if (job.cancelPending || !job.callbacks?.onCancel) return;
+          job.previousStatus = job.status;
+          job.cancelPending = true;
+          job.status = "canceling";
+          _renderJobsFor(job._msg);
+          try {
+            await job.callbacks.onCancel(job.jobId);
+          } catch (error) {
+            job.cancelPending = false;
+            job.status = job.previousStatus || "running";
+            job.error = error?.message || _jobText("job.cancel_failed", "Could not cancel job");
+            _renderJobsFor(job._msg);
+          }
+        },
+      }, _jobText("job.cancel", "Cancel")));
+    }
+    return h("section", {
+      key: job.id,
+      class: `job-card job-card-${job.status}`,
+      "data-job-id": job.jobId,
+    }, children);
+  }
+
+  function _renderJobsFor(msg) {
+    if (!msg || msg.kind !== "message") return;
+    const list = _jobListFor(msg.id);
+    if (!list) return;
+    const jobs = msg.jobs || [];
+    render(jobs.length ? h(Fragment, null, jobs.map(_renderJobCard)) : null, list);
+  }
+
+  function updateJob(target, ev, callbacks) {
+    const msg = _stateFor(target);
+    if (!msg || !ev || !ev.job_id) return false;
+    msg.jobs = msg.jobs || [];
+    let job = msg.jobs.find(item => item.jobId === ev.job_id);
+    if (!job) {
+      job = {
+        id: `job-${++jobSeq}`,
+        jobId: ev.job_id,
+        jobType: ev.job_type || "",
+        label: ev.label || "",
+        status: ev.status || "created",
+        progress: 0,
+        message: "",
+        artifacts: [],
+        result: null,
+        error: "",
+        cancelPending: false,
+        callbacks: callbacks || {},
+        _msg: msg,
+      };
+      msg.jobs.push(job);
+    }
+    job.previousStatus = job.status;
+    if (callbacks) job.callbacks = callbacks;
+    if (ev.job_type) job.jobType = ev.job_type;
+    if (ev.label) job.label = ev.label;
+    if (ev.status) job.status = ev.status;
+    if (ev.progress !== undefined) job.progress = ev.progress;
+    if (ev.message !== undefined) job.message = ev.message || "";
+    if (ev.type === "artifact_created" && ev.artifact) job.artifacts.push(ev.artifact);
+    if (ev.type === "job_done") {
+      job.status = ev.status || "succeeded";
+      job.progress = 100;
+      job.result = ev.result;
+      job.cancelPending = false;
+    }
+    if (ev.type === "job_error") {
+      job.status = ev.status || "failed";
+      job.error = ev.error || "Job failed";
+      job.cancelPending = false;
+    }
+    if (ev.type === "job_canceled") {
+      job.status = ev.status || "canceled";
+      job.cancelPending = false;
+    }
+    _renderJobsFor(msg);
+    return true;
   }
 
   function _renderOutlineCard(item) {
@@ -777,6 +1408,10 @@
       tools: [],
       charts: [],
       cards: [],
+      jobs: [],
+      queueStatus: "",
+      queuePosition: 0,
+      queueCallbacks: null,
       error: "",
       stopped: false,
     });
@@ -809,6 +1444,39 @@
 
   function countMessages() {
     return messages.filter(m => m.kind === "message").length;
+  }
+
+  function setTurnQueueState(target, status, position, callbacks) {
+    const msg = _stateFor(target);
+    if (!msg || msg.kind !== "message") return false;
+    msg.queueStatus = status || "";
+    msg.queuePosition = Number(position) || 0;
+    msg.queueCallbacks = callbacks || null;
+    _render();
+    return true;
+  }
+
+  function setMessageText(target, text) {
+    const msg = _stateFor(target);
+    if (!msg || msg.kind !== "message") return false;
+    msg.text = String(text || "");
+    _render();
+    const bubble = _bubbleFor(msg.id);
+    if (bubble) {
+      bubble.innerHTML = window.renderMd(msg.text);
+      _bindImages(bubble);
+    }
+    return true;
+  }
+
+  function removeMessages(targets) {
+    const ids = new Set((Array.isArray(targets) ? targets : [targets]).map(_messageIdFrom).filter(Boolean));
+    if (!ids.size) return false;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (ids.has(messages[index].id)) messages.splice(index, 1);
+    }
+    _render();
+    return true;
   }
 
   function appendTextDelta(target, content, typing) {
@@ -1159,6 +1827,10 @@
     sysMsg,
     clear,
     countMessages,
+    setTurnQueueState,
+    renderComposerQueue,
+    setMessageText,
+    removeMessages,
     appendTextDelta,
     setMarkdown,
     setError,
@@ -1174,6 +1846,7 @@
     setDataRefs,
     setToolAudit,
     addChartRef,
+    updateJob,
     addOutlineCard,
     addAskUserCard,
   };
@@ -2614,11 +3287,21 @@
 
   const state = reactive({
     mounted: false,
+    workspace_id: "",
+    name: "",
     workdir: "",
     artifacts_dir: "",
+    permission: "read_only",
     mounted_at: null,
     busy: false,        // true while mount/unmount in flight
     busyKind: "",       // "mount" | "unmount"
+    knownWorkspaces: [],
+    knownError: "",
+    editingWorkspaceId: "",
+    editingWorkspaceName: "",
+    renameBusy: false,
+    renameError: "",
+    removingWorkspaceId: "",
   });
 
   function isAvailable() { return true; }
@@ -2648,12 +3331,20 @@
         h("span", { class: "ws-state-label" }, window.t("workspace.path_label")),
         h("span", { class: "ws-state-path" }, state.workdir || ""),
       ]),
+      state.name ? h("div", { class: "ws-state-row" }, [
+        h("span", { class: "ws-state-label" }, window.t("workspace.name_label")),
+        h("span", { class: "ws-state-value" }, state.name),
+      ]) : null,
       state.artifacts_dir
         ? h("div", { class: "ws-state-row" }, [
             h("span", { class: "ws-state-label" }, window.t("workspace.artifacts_label")),
             h("span", { class: "ws-state-path" }, state.artifacts_dir),
           ])
         : null,
+      h("div", { class: "ws-state-row" }, [
+        h("span", { class: "ws-state-label" }, window.t("workspace.permission_label")),
+        h("span", { class: "ws-state-value" }, window.t(`workspace.permission.${state.permission}`)),
+      ]),
       state.mounted_at
         ? h("div", { class: "ws-state-row" }, [
             h("span", { class: "ws-state-label" }, "mounted at"),
@@ -2687,6 +3378,141 @@
     ]);
   }
 
+  function _renderKnownWorkspaces() {
+    const rows = state.knownWorkspaces || [];
+    return h("section", { class: "ws-known" }, [
+      h("div", { class: "ws-known-title" }, window.t("workspace.known_title")),
+      state.knownError
+        ? h("div", { class: "ws-known-error" }, state.knownError)
+        : rows.length
+          ? h("div", { class: "ws-known-list" }, rows.map(workspace => {
+            const editing = state.editingWorkspaceId === workspace.workspace_id;
+            return h("div", {
+              class: `ws-known-item${workspace.current ? " current" : ""}${workspace.available ? "" : " unavailable"}`,
+              key: workspace.workspace_id,
+            }, [
+              h("div", { class: "ws-known-main" }, [
+                editing
+                  ? h("div", { class: "ws-rename-editor" }, [
+                      h("input", {
+                        class: "ws-rename-input",
+                        value: state.editingWorkspaceName,
+                        maxlength: 80,
+                        disabled: state.renameBusy,
+                        "aria-label": window.t("workspace.rename_input_label"),
+                        onInput: event => { state.editingWorkspaceName = event.target.value; },
+                        onKeydown: event => {
+                          if (event.key === "Enter") _saveWorkspaceRename(workspace);
+                          if (event.key === "Escape") _cancelWorkspaceRename();
+                        },
+                      }),
+                      h("button", { class: "btn-sm btn-sm-primary", type: "button",
+                        disabled: state.renameBusy || !state.editingWorkspaceName.trim(),
+                        onClick: () => _saveWorkspaceRename(workspace),
+                      }, window.t("common.save")),
+                      h("button", { class: "btn-sm btn-sm-ghost", type: "button",
+                        disabled: state.renameBusy, onClick: _cancelWorkspaceRename,
+                      }, window.t("common.cancel")),
+                    ])
+                  : h("div", { class: "ws-known-name" }, [
+                      workspace.name || workspace.workspace_id.slice(0, 8),
+                      workspace.current ? h("span", { class: "ws-known-badge" }, window.t("workspace.known_current")) : null,
+                    ]),
+                editing && state.renameError
+                  ? h("div", { class: "ws-rename-error" }, state.renameError)
+                  : null,
+                h("div", { class: "ws-known-path", title: workspace.root_path }, workspace.root_path),
+                h("div", { class: "ws-known-meta" }, [
+                  h("span", null, window.t(`workspace.permission.${workspace.permission || "read_only"}`)),
+                  workspace.active_job_count
+                    ? h("span", null, window.t("workspace.known_active_jobs", { count: workspace.active_job_count }))
+                    : null,
+                  !workspace.available
+                    ? h("span", { class: "ws-known-missing" }, window.t("workspace.known_unavailable"))
+                    : null,
+                ]),
+              ]),
+              editing ? null : h("div", { class: "ws-known-actions" }, [
+                h("button", {
+                  class: "btn-sm btn-sm-ghost",
+                  type: "button",
+                  disabled: !workspace.available || workspace.current || state.busy,
+                  onClick: () => window.BAA.workspace?.activateKnownWorkspace?.(workspace),
+                }, workspace.current
+                  ? window.t("workspace.known_connected")
+                  : state.mounted
+                    ? window.t("workspace.known_switch")
+                    : window.t("workspace.known_connect")),
+                h("button", {
+                  class: "btn-sm btn-sm-ghost",
+                  type: "button",
+                  disabled: !workspace.available || state.busy,
+                  onClick: () => _startWorkspaceRename(workspace),
+                }, window.t("workspace.rename_action")),
+                h("button", {
+                  class: "btn-sm btn-sm-ghost ws-known-remove",
+                  type: "button",
+                  disabled: workspace.current || state.busy || !!state.removingWorkspaceId,
+                  title: workspace.current ? window.t("workspace.remove_current_hint") : "",
+                  onClick: () => _removeKnownWorkspace(workspace),
+                }, state.removingWorkspaceId === workspace.workspace_id
+                  ? window.t("workspace.remove_running")
+                  : window.t("workspace.remove_action")),
+              ]),
+            ]);
+          }))
+          : h("div", { class: "ws-known-empty" }, window.t("workspace.known_empty")),
+    ]);
+  }
+
+  function _startWorkspaceRename(workspace) {
+    state.editingWorkspaceId = workspace.workspace_id;
+    state.editingWorkspaceName = workspace.name || "";
+    state.renameError = "";
+    _render();
+  }
+
+  function _cancelWorkspaceRename() {
+    state.editingWorkspaceId = "";
+    state.editingWorkspaceName = "";
+    state.renameError = "";
+    _render();
+  }
+
+  async function _saveWorkspaceRename(workspace) {
+    const name = state.editingWorkspaceName.trim();
+    if (!name || state.renameBusy) return;
+    state.renameBusy = true;
+    state.renameError = "";
+    _render();
+    try {
+      await window.BAA.workspace?.renameKnownWorkspace?.(workspace.workspace_id, name);
+      _cancelWorkspaceRename();
+    } catch (error) {
+      state.renameError = String(error.message || error);
+      _render();
+    } finally {
+      state.renameBusy = false;
+      _render();
+    }
+  }
+
+  async function _removeKnownWorkspace(workspace) {
+    if (state.removingWorkspaceId) return;
+    state.removingWorkspaceId = workspace.workspace_id;
+    state.knownError = "";
+    _render();
+    try {
+      await window.BAA.workspace?.removeKnownWorkspace?.(workspace);
+    } catch (error) {
+      state.knownError = String(error.message || error);
+      window.BAA.overlay?.toast?.(state.knownError, "err");
+    } finally {
+      state.removingWorkspaceId = "";
+      _render();
+    }
+  }
+
   function _render() {
     let body;
     if (state.mounted) {
@@ -2694,7 +3520,7 @@
     } else {
       body = _renderEmpty();
     }
-    render(body, root);
+    render(h("div", null, [body, _renderKnownWorkspaces()]), root);
   }
 
   function renderAll() {
@@ -2706,8 +3532,11 @@
   function setState(payload) {
     if (!payload) return;
     if (typeof payload.mounted === "boolean") state.mounted = payload.mounted;
+    if (typeof payload.workspace_id === "string") state.workspace_id = payload.workspace_id;
+    if (typeof payload.name === "string") state.name = payload.name;
     if (typeof payload.workdir === "string") state.workdir = payload.workdir;
     if (typeof payload.artifacts_dir === "string") state.artifacts_dir = payload.artifacts_dir;
+    if (["read_only", "read_write"].includes(payload.permission)) state.permission = payload.permission;
     if (payload.mounted_at !== undefined) state.mounted_at = payload.mounted_at;
     _render();
   }
@@ -2718,6 +3547,17 @@
     _render();
   }
 
+  function setKnownWorkspaces(workspaces) {
+    state.knownWorkspaces = Array.isArray(workspaces) ? workspaces : [];
+    state.knownError = "";
+    _render();
+  }
+
+  function setKnownError(error) {
+    state.knownError = String(error || "");
+    _render();
+  }
+
   // Initial render (empty state until loadStatus populates it).
   renderAll();
 
@@ -2725,6 +3565,8 @@
     isAvailable,
     setState,
     setBusy,
+    setKnownWorkspaces,
+    setKnownError,
     renderAll,
   };
 })();

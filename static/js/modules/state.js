@@ -10,8 +10,12 @@
     // Multi-source: [{id, name, type, active}]
     sources: [],
     isStreaming: false,
+    pendingMessages: [],
+    editingQueuedId: "",
     activeCommand: "",
+    activeSkill: "",
     slashPopupIndex: 0,
+    skillPickerIndex: 0,
     tokenState: { promptTokens: 0, totalInput: 0, totalOutput: 0, contextWindow: null },
     modelConfigs: {},
     _streamReader: null,

@@ -7,6 +7,35 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+_TIME_SERIES_PREFIX = "Time_Series_"
+_ANALYSIS_JOB_ROW_THRESHOLD = 1000
+
+
+def _execute_analysis(
+    analysis_name: str,
+    df,
+    target_column: str,
+    groupby_column: str,
+    n_deciles: int,
+    progress_callback=None,
+):
+    """Run one analysis without holding an Agent or data-source reference."""
+    from Function.Analyze.registry import get as get_analysis
+
+    entry = get_analysis(analysis_name)
+    run_fn = entry.get("run")
+    if run_fn is None:
+        raise RuntimeError(f"Analysis module '{analysis_name}' failed to load.")
+    kwargs = {
+        "df": df,
+        "target_column": target_column,
+        "groupby_column": groupby_column or None,
+        "n_deciles": n_deciles,
+    }
+    if progress_callback is not None and analysis_name.startswith(_TIME_SERIES_PREFIX):
+        kwargs["progress_callback"] = progress_callback
+    return entry, run_fn(**kwargs)
+
 
 class DataToolsMixin:
     """All methods here rely on self.data_source, self._schema_cache,
@@ -359,26 +388,114 @@ class DataToolsMixin:
             return "Query returned no rows — cannot run analysis."
 
         try:
-            from Function.Analyze.registry import get as get_analysis
-            entry = get_analysis(analysis_name)
+            entry, ret = _execute_analysis(
+                analysis_name,
+                df,
+                target_column,
+                groupby_column,
+                n_deciles,
+            )
         except KeyError as exc:
             return str(exc)
         except Exception as exc:
-            return f"Failed to load analysis module '{analysis_name}': {exc}"
-
-        run_fn = entry.get("run")
-        if run_fn is None:
-            return f"Analysis module '{analysis_name}' failed to load."
-
-        try:
-            ret = run_fn(
-                df=df,
-                target_column=target_column,
-                groupby_column=groupby_column or None,
-                n_deciles=n_deciles,
-            )
-        except Exception as exc:
             return f"Analysis error: {exc}"
+
+        return self._finalize_analysis_result(
+            entry, ret, analysis_name, sql, target_column, n_deciles
+        )
+
+    def _tool_run_analysis_with_jobs(
+        self,
+        analysis_name: str,
+        sql: str,
+        target_column: str,
+        groupby_column: str = "",
+        n_deciles: int = 10,
+    ):
+        """Run large time-series analyses as cancellable JobRunner work."""
+        if not self.data_source:
+            return "No data source connected."
+
+        df, error = self.data_source.execute_query(sql)
+        if error:
+            return f"SQL Error while fetching data: {error}"
+        if df.empty:
+            return "Query returned no rows — cannot run analysis."
+
+        should_job = (
+            analysis_name.startswith(_TIME_SERIES_PREFIX)
+            and len(df) >= _ANALYSIS_JOB_ROW_THRESHOLD
+            and self._job_runner is not None
+        )
+        if not should_job:
+            try:
+                entry, ret = _execute_analysis(
+                    analysis_name, df, target_column, groupby_column, n_deciles
+                )
+            except KeyError as exc:
+                return str(exc)
+            except Exception as exc:
+                return f"Analysis error: {exc}"
+            return self._finalize_analysis_result(
+                entry, ret, analysis_name, sql, target_column, n_deciles
+            )
+
+        result_holder = {}
+
+        def _worker(ctx):
+            def _progress(pct: int, message: str = ""):
+                ctx.check_canceled()
+                ctx.set_progress(pct, message)
+
+            _progress(2, "正在准备时序分析")
+            entry, ret = _execute_analysis(
+                analysis_name,
+                df,
+                target_column,
+                groupby_column,
+                n_deciles,
+                progress_callback=_progress,
+            )
+            ctx.check_canceled()
+            result_holder["entry"] = entry
+            result_holder["ret"] = ret
+            return {
+                "analysis_name": analysis_name,
+                "input_rows": len(df),
+                "output_tables": list(entry.get("output_tables", [])),
+            }
+
+        job = yield from self._run_as_job(
+            _worker,
+            job_type="time_series_analysis",
+            label=f"{analysis_name} · {len(df)} rows",
+        )
+        if job.get("status") == "canceled":
+            return "Analysis canceled."
+        if job.get("status") != "succeeded":
+            return f"Analysis error: {job.get('error') or 'background job failed'}"
+        if "ret" not in result_holder:
+            return "Analysis error: background result was not available."
+
+        return self._finalize_analysis_result(
+            result_holder["entry"],
+            result_holder["ret"],
+            analysis_name,
+            sql,
+            target_column,
+            n_deciles,
+        )
+
+    def _finalize_analysis_result(
+        self,
+        entry,
+        ret,
+        analysis_name: str,
+        sql: str,
+        target_column: str,
+        n_deciles: int,
+    ) -> str:
+        """Persist computed tables on the request thread and format the result."""
 
         if len(ret) == 4:
             result_df, breakdown_df, extra_df, markdown = ret

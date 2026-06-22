@@ -65,6 +65,10 @@ class SQLDataSource(DataSource):
         self._large_tables: Set[str] = set()
         # Analysis/derived tables created by create_analysis_table
         self._cache_tables: Set[str] = set()
+        # Remote SQL catalogs are potentially huge.  A newly connected source
+        # exposes metadata to the preview UI, but exposes no source table to the
+        # agent until the user explicitly selects an analysis scope.
+        self._analysis_tables: Set[str] = set()
 
     # ── Schema helpers ────────────────────────────────────────────────────────
 
@@ -92,6 +96,61 @@ class SQLDataSource(DataSource):
         except Exception:
             dialect = ""
         return f"`{name}`" if dialect in ("mysql", "mariadb") else f'"{name}"'
+
+    def list_catalog_tables(self) -> List[str]:
+        """Full remote catalog for preview/selection validation only."""
+        return self._all_table_names()
+
+    def get_analysis_tables(self) -> List[str]:
+        """Remote tables currently authorized for agent analysis."""
+        catalog = self._all_table_names()
+        allowed = getattr(self, "_analysis_tables", set())
+        return [name for name in catalog if name in allowed]
+
+    def set_analysis_tables(self, table_names: List[str]) -> List[str]:
+        """Replace the agent-visible SQL table scope after strict validation."""
+        catalog = self._all_table_names()
+        catalog_set = set(catalog)
+        requested = list(dict.fromkeys(str(name).strip() for name in table_names if str(name).strip()))
+        unknown = [name for name in requested if name not in catalog_set]
+        if unknown:
+            raise ValueError(f"数据库中不存在这些表：{', '.join(unknown)}")
+        if len(requested) > 20:
+            raise ValueError("一次最多选择 20 张 SQL 分析表")
+        self._analysis_tables = set(requested)
+        return [name for name in catalog if name in self._analysis_tables]
+
+    def _assert_analysis_scope(self, sql: str) -> List[str]:
+        referenced = self._tables_in_sql(sql)
+        allowed = set(getattr(self, "_analysis_tables", set()))
+        denied = [name for name in referenced if name not in allowed]
+        if denied:
+            raise PermissionError(
+                f"SQL 表未加入当前分析范围：{', '.join(denied)}。请先在数据预览中选择分析表。"
+            )
+        if not allowed and self._all_table_names():
+            raise PermissionError("尚未选择 SQL 分析表，请先在数据预览中选择一张或多张表。")
+        return referenced
+
+    def _remote_schema_with_sample(self, table: str) -> str:
+        """Return metadata plus at most two remote rows, without COUNT/full pull."""
+        cols = self._inspect.get_columns(table)
+        lines = [f"  {c['name']}  {c['type']}" for c in cols]
+        try:
+            from sqlalchemy import MetaData, Table, select
+            remote = Table(table, MetaData(), autoload_with=self._engine)
+            with self._engine.connect() as conn:
+                df = pd.read_sql(select(remote).limit(2), conn)
+            if not df.empty:
+                lines.append("  -- sample data (first 2 rows) --")
+                for row in df.itertuples(index=False, name=None):
+                    lines.append("  | " + " | ".join(
+                        str(value).replace("\n", " ")[:30] if value is not None else "NULL"
+                        for value in row
+                    ))
+        except Exception as exc:
+            log.warning("[SQLDataSource] sample fetch failed for %r: %s", table, exc)
+        return f"Table: {table}\n" + "\n".join(lines)
 
     # ── On-demand table loading ───────────────────────────────────────────────
 
@@ -196,7 +255,7 @@ class SQLDataSource(DataSource):
     # ── DataSource interface ──────────────────────────────────────────────────
 
     def get_schema(self) -> str:
-        all_tables = self._all_table_names()
+        all_tables = self.get_analysis_tables()
         n = len(all_tables)
         MAX_FULL = 20
         parts: List[str] = []
@@ -216,9 +275,10 @@ class SQLDataSource(DataSource):
         for table in detail_tables:
             cached = " [已缓存]" if table in self._loaded else ""
             try:
-                cols = self._inspect.get_columns(table)
-                col_str = ", ".join(f"{c['name']} ({c['type']})" for c in cols)
-                parts.append(f"Table: {table}{cached}  [{col_str}]")
+                detail = self._remote_schema_with_sample(table)
+                if cached:
+                    detail = detail.replace(f"Table: {table}", f"Table: {table}{cached}", 1)
+                parts.append(detail)
             except Exception:
                 parts.append(f"Table: {table}{cached}  (schema unavailable)")
 
@@ -230,10 +290,12 @@ class SQLDataSource(DataSource):
             except Exception:
                 parts.append(f"Table: {t}  (analysis cache)")
 
-        return "\n\n".join(parts) if parts else "No tables found."
+        return "\n\n".join(parts) if parts else ""
 
     def get_table_detail(self, table_name: str) -> str:
         """Full column list + row count for a single table."""
+        if table_name not in set(self.get_analysis_tables()) and table_name not in self._cache_tables:
+            return f"Error: SQL 表 {table_name} 未加入当前分析范围。"
         try:
             self._inspect.clear_cache()
         except Exception:
@@ -260,9 +322,8 @@ class SQLDataSource(DataSource):
                 pass
 
         try:
-            cols = self._inspect.get_columns(table_name)
-            col_lines = [f"  {c['name']}  {c['type']}" for c in cols]
-            return f"Table: {table_name}{row_hint}\n" + "\n".join(col_lines)
+            detail = self._remote_schema_with_sample(table_name)
+            return detail.replace(f"Table: {table_name}", f"Table: {table_name}{row_hint}", 1)
         except Exception as exc:
             return f"Table: {table_name}  — error: {exc}"
 
@@ -275,7 +336,10 @@ class SQLDataSource(DataSource):
         subsequent analysis tables can JOIN against it.
         """
         # Identify which known tables this SQL references
-        referenced = self._tables_in_sql(sql)
+        try:
+            referenced = self._assert_analysis_scope(sql)
+        except PermissionError as exc:
+            return pd.DataFrame(), str(exc)
 
         # Separate large tables (remote-only) from small ones (pull into DuckDB)
         large_refs = [t for t in referenced if t in self._large_tables]
@@ -323,6 +387,10 @@ class SQLDataSource(DataSource):
             rows = len(_df)
         else:
             # Ensure source tables in this SQL are loaded first
+            try:
+                self._assert_analysis_scope(sql)
+            except PermissionError as exc:
+                return f"Error building analysis table: {exc}"
             self._ensure_sql_tables_loaded(sql)
             try:
                 self._duck.execute(
@@ -338,8 +406,8 @@ class SQLDataSource(DataSource):
         return _table_schema_str(self._duck, table_name, rows)
 
     def list_tables(self) -> List[str]:
-        """All source tables + analysis cache tables."""
-        tables = self._all_table_names()
+        """Agent-visible selected source tables + analysis cache tables."""
+        tables = self.get_analysis_tables()
         for t in sorted(self._cache_tables):
             if t not in tables:
                 tables.append(t)

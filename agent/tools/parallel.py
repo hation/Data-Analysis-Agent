@@ -2,6 +2,10 @@
 """Conservative parallelization policy for tool batches."""
 from __future__ import annotations
 
+import logging
+
+log = logging.getLogger(__name__)
+
 from .registry import get_tool_spec
 
 

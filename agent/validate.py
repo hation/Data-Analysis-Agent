@@ -41,7 +41,10 @@ DuckDB connection-level lockdown (second layer, in _utils.py, post-A4):
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from data.workspace import WorkspacePathAuthorization
 
 log = logging.getLogger(__name__)
 
@@ -206,6 +209,17 @@ def _validate_file_read_paths(stmt, allowed_roots: List[Path]) -> Optional[str]:
                 return (f"禁止非字面量路径参数：{node.name}() 的路径参数必须是"
                         "字符串字面量，不接受变量/列引用/拼接表达式。")
 
+        # DuckDB accepts SELECT * FROM 'file.csv' as a file scan. sqlglot
+        # parses it as a quoted Table identifier rather than ReadCSV, so it
+        # must pass through the same Workspace whitelist.
+        elif isinstance(node, exp.Table):
+            identifier = getattr(node, "this", None)
+            quoted = bool(getattr(identifier, "args", {}).get("quoted"))
+            name = str(getattr(node, "name", "") or "")
+            if quoted and _looks_like_file_table(name):
+                is_read_node = True
+                paths = [name]
+
         if not is_read_node:
             continue
 
@@ -216,6 +230,18 @@ def _validate_file_read_paths(stmt, allowed_roots: List[Path]) -> Optional[str]:
                 return err
 
     return None
+
+
+def _looks_like_file_table(value: str) -> bool:
+    lowered = str(value or "").strip().lower()
+    return (
+        "/" in lowered
+        or "\\" in lowered
+        or lowered.endswith((
+            ".csv", ".tsv", ".parquet", ".json", ".jsonl",
+            ".xlsx", ".xls", ".txt",
+        ))
+    )
 
 
 def _check_single_path(path_str: str, norm_roots: List[Path]) -> Optional[str]:
@@ -366,8 +392,8 @@ def _default_allowed_roots() -> List[Path]:
     包含 uploads/ 和 Information/，让 read_csv 能读已上传文件。
     不包含工作目录（未挂载时不存在）。
     """
-    proj_root = Path(__file__).parent.parent.resolve()
-    return [proj_root / "uploads", proj_root / "Information"]
+    from infrastructure.paths import data_path, resource_path
+    return [data_path("uploads"), resource_path("Information")]
 
 
 def _validate_sql_heuristic(sql: str) -> Optional[str]:
@@ -435,8 +461,12 @@ def _validate_sql_heuristic(sql: str) -> Optional[str]:
     return None
 
 
-def validate_tool_args(name: str, args: Dict[str, Any],
-                       allowed_roots: Optional[List[Path]] = None) -> Optional[str]:
+def validate_tool_args(
+    name: str,
+    args: Dict[str, Any],
+    allowed_roots: Optional[List[Path]] = None,
+    workspace_authorization: Optional["WorkspacePathAuthorization"] = None,
+) -> Optional[str]:
     """Return an error string if args are obviously invalid, else None.
 
     Policy:
@@ -449,11 +479,16 @@ def validate_tool_args(name: str, args: Dict[str, Any],
     Args:
         name: tool name.
         args: tool arguments dict.
-        allowed_roots: optional list of Path roots for file-read path whitelist.
+        allowed_roots: legacy optional list of roots for callers without a
+            Workspace identity.
+        workspace_authorization: immutable, workspace_id-bound path capability.
+            When present it is the only source of SQL file-read roots.
             If None, defaults to [uploads/, Information/]. Pass the workspace's
             allowed roots (workdir + uploads + Information + artifacts + cache)
             to enable read_csv('file.xlsx') from the mounted workdir.
     """
+    if workspace_authorization is not None:
+        allowed_roots = list(workspace_authorization.allowed_roots)
     if name in SQL_TOOLS:
         sql = (args.get("sql") or "").strip()
         if not sql:

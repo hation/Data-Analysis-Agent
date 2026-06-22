@@ -5,27 +5,32 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
+import logging
+log = logging.getLogger(__name__)
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
 import zipfile
+from xml.etree import ElementTree
 from pathlib import Path
 from typing import Any
 
 from data.workspace import workspace_manager
 from data.system_workspace import MAX_INDEXED_FILES, MAX_LIST_CHARS, MAX_LIST_LIMIT, MAX_SEARCH_LIMIT
 
-MAX_READ_BYTES = 512_000
+MAX_FILE_BYTES = 20 * 1024 * 1024
+MAX_READ_BYTES = MAX_FILE_BYTES
 MAX_READ_LINES = 400
 MAX_READ_CHARS = 12_000
-MAX_WRITE_BYTES = 2_000_000
+MAX_WRITE_BYTES = MAX_FILE_BYTES
+MAX_DOCX_XML_BYTES = 64 * 1024 * 1024
 MAX_RESULTS = 100
 MAX_SEARCH_FILES = 200
 MAX_SEARCH_FILE_CHARS = 200_000
 MAX_COMMAND_OUTPUT = 20_000
-MAX_CHECKPOINT_BYTES = 20_000_000
 TEXT_SUFFIXES = {
     ".txt", ".md", ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml",
     ".sql", ".py", ".js", ".css", ".html", ".xml", ".toml", ".ini",
@@ -35,6 +40,42 @@ SKIP_DIRS = {".git", ".zhixi", ".baa_cache", "node_modules", "__pycache__", ".ve
 
 class WorkspaceToolError(ValueError):
     pass
+
+
+def _read_docx_text(path: Path) -> str:
+    """Extract ordered paragraph/table-cell text from a bounded DOCX file."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            try:
+                info = archive.getinfo("word/document.xml")
+            except KeyError as exc:
+                raise WorkspaceToolError("DOCX does not contain word/document.xml") from exc
+            if info.file_size > MAX_DOCX_XML_BYTES:
+                raise WorkspaceToolError("DOCX expanded document XML exceeds 64 MiB safety limit")
+            xml_data = archive.read(info)
+    except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+        raise WorkspaceToolError(f"DOCX cannot be opened: {exc}") from exc
+
+    try:
+        root = ElementTree.fromstring(xml_data)
+    except ElementTree.ParseError as exc:
+        raise WorkspaceToolError(f"DOCX document XML is invalid: {exc}") from exc
+
+    namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    lines: list[str] = []
+    for paragraph in root.iter(f"{namespace}p"):
+        parts: list[str] = []
+        for node in paragraph.iter():
+            if node.tag == f"{namespace}t" and node.text:
+                parts.append(node.text)
+            elif node.tag == f"{namespace}tab":
+                parts.append("\t")
+            elif node.tag in {f"{namespace}br", f"{namespace}cr"}:
+                parts.append("\n")
+        text = "".join(parts).strip()
+        if text:
+            lines.extend(text.splitlines())
+    return "\n".join(lines)
 
 
 class WorkspaceFileState:
@@ -56,26 +97,47 @@ class WorkspaceFileState:
         try:
             current = path.stat().st_mtime_ns
         except OSError as exc:
+            log.debug("[files] stat failed for mtime check: %s", exc)
             raise WorkspaceToolError(f"cannot stat file: {exc}") from exc
         if current != prior:
             raise WorkspaceToolError("file changed after it was read; read it again before editing")
 
+    def forget(self, path: Path) -> None:
+        with self._lock:
+            self._entries.pop(str(path), None)
 
-_STATE_BY_SESSION: dict[str, WorkspaceFileState] = {}
+    def move(self, source: Path, destination: Path) -> None:
+        with self._lock:
+            self._entries.pop(str(source), None)
+            self._entries[str(destination)] = destination.stat().st_mtime_ns
+
+
+_STATE_BY_AUTH_SCOPE: dict[tuple[str, str], WorkspaceFileState] = {}
 _STATE_LOCK = threading.Lock()
 
 
-def _state_for(session_id: str) -> WorkspaceFileState:
+def _state_for(workspace_id: str, session_id: str) -> WorkspaceFileState:
+    # Include both identities: switching a session from A to B immediately
+    # starts a fresh read-before-write cache, while two sessions sharing one
+    # Workspace cannot authorize edits from each other's prior reads.
+    key = (workspace_id or "system", session_id)
     with _STATE_LOCK:
-        return _STATE_BY_SESSION.setdefault(session_id, WorkspaceFileState())
+        return _STATE_BY_AUTH_SCOPE.setdefault(key, WorkspaceFileState())
 
 
 class WorkspaceToolService:
-    def __init__(self, session_id: str) -> None:
+    def __init__(self, session_id: str, *, workspace_id: str | None = None) -> None:
         self.session_id = session_id
+        self.workspace_id = (
+            str(workspace_manager.workspace_id_for_session(session_id) or "")
+            if workspace_id is None else str(workspace_id or "")
+        )
+
+    def _file_state(self) -> WorkspaceFileState:
+        return _state_for(self.workspace_id, self.session_id)
 
     def _runtime(self):
-        runtime = workspace_manager.get(self.session_id)
+        runtime = workspace_manager.get_by_workspace(self.workspace_id) if self.workspace_id else None
         if runtime is None:
             raise WorkspaceToolError("no workspace is mounted for this session")
         return runtime
@@ -91,12 +153,24 @@ class WorkspaceToolService:
             try:
                 path = system.resolve(root_name, relative, write=write)
             except ValueError as exc:
+                log.debug("[files] virtual path resolve failed: %s", exc)
                 raise WorkspaceToolError(str(exc)) from exc
             return path, root_name, system.policy(root_name).path.resolve()
         try:
             runtime = self._runtime()
-            return runtime.resolve_tool_path(value, write=write), "user", runtime.workdir
-        except ValueError as exc:
+            normalized = str(value or "").strip().replace("\\", "/")
+            lowered = normalized.lower()
+            if lowered == "workspace://user" or lowered == "user":
+                normalized = "."
+            elif lowered.startswith("workspace://user/"):
+                normalized = normalized[len("workspace://user/"):]
+            elif lowered.startswith("user/"):
+                # ``_display_path`` returns user/<relative>; accept that value
+                # directly so list/search results round-trip into other tools.
+                normalized = normalized[len("user/"):]
+            return runtime.resolve_tool_path(normalized, write=write), "user", runtime.workdir
+        except (ValueError, PermissionError) as exc:
+            log.debug("[files] runtime path resolve failed: %s", exc)
             raise WorkspaceToolError(str(exc)) from exc
 
     def _display_path(self, path: Path) -> str:
@@ -105,22 +179,40 @@ class WorkspaceToolService:
             try:
                 return system.virtual_name(name, path)
             except ValueError:
+                log.debug("[files] display path root mismatch: %s", name)
                 continue
-        runtime = workspace_manager.get(self.session_id)
+        runtime = workspace_manager.get_by_workspace(self.workspace_id) if self.workspace_id else None
         if runtime is not None:
             try:
                 return f"user/{path.resolve().relative_to(runtime.workdir.resolve()).as_posix()}"
             except ValueError:
+                log.debug("[files] display path relative_to failed")
                 pass
         raise WorkspaceToolError("path is outside the workspace")
+
+    def _track_before_mutation(self, *paths: Path) -> None:
+        """Record pre-mutation user-workspace versions for the active turn."""
+        from filehistory import FileHistoryError, for_session
+        history = for_session(self.session_id, self.workspace_id)
+        if history is None:
+            return
+        try:
+            for path in paths:
+                history.track_before_write(path)
+        except FileHistoryError as exc:
+            raise WorkspaceToolError(str(exc)) from exc
 
     @staticmethod
     def _skip(path: Path) -> bool:
         return any(part.lower() in SKIP_DIRS for part in path.parts)
 
     def glob(
-        self, pattern: str, path: str = ".", max_results: int = 20, cursor: int = 0,
+        self, pattern: str, path: str = "", max_results: int = 20, cursor: int = 0,
     ) -> dict:
+        # Omitted path means the mounted user workspace when available. System
+        # roots remain explicitly addressable as uploads, outputs, or mcp.
+        if not str(path or "").strip():
+            path = "." if self.workspace_id else "uploads"
         system = workspace_manager.system_workspace
         virtual = system.parse_virtual_path(path)
         if virtual is not None:
@@ -147,6 +239,7 @@ class WorkspaceToolService:
                 safe.relative_to(root.resolve())
                 stat = safe.stat()
             except (ValueError, OSError):
+                log.debug("[files] glob entry skipped: %s", item)
                 continue
             results.append({
                 "path": self._display_path(safe),
@@ -173,6 +266,7 @@ class WorkspaceToolService:
         try:
             regex = re.compile(pattern)
         except re.error as exc:
+            log.debug("[files] invalid regex pattern: %s", exc)
             raise WorkspaceToolError(f"invalid regex: {exc}") from exc
         base, alias, root = self._location(path)
         if not base.is_dir():
@@ -201,6 +295,7 @@ class WorkspaceToolService:
             try:
                 item.resolve().relative_to(base.resolve())
             except ValueError:
+                log.debug("[files] grep candidate outside base: %s", item)
                 continue
             searched_files += 1
             if searched_files > MAX_SEARCH_FILES:
@@ -213,6 +308,7 @@ class WorkspaceToolService:
                 text = safe.read_text(encoding="utf-8", errors="replace")[:MAX_SEARCH_FILE_CHARS]
                 lines = text.splitlines()
             except (ValueError, OSError):
+                log.debug("[files] grep file read skipped: %s", item)
                 continue
             for number, line in enumerate(lines, 1):
                 if regex.search(line):
@@ -243,14 +339,20 @@ class WorkspaceToolService:
         size = path.stat().st_size
         if size > MAX_READ_BYTES:
             raise WorkspaceToolError(f"file exceeds {MAX_READ_BYTES} byte read limit")
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError as exc:
-            raise WorkspaceToolError("file is not UTF-8 text") from exc
+        if path.suffix.lower() == ".docx":
+            text = _read_docx_text(path)
+            content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        else:
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError as exc:
+                log.debug("[files] file not UTF-8: %s", file_path)
+                raise WorkspaceToolError("file is not UTF-8 text or a supported DOCX document") from exc
+            content_type = "text/plain; charset=utf-8"
         lines = text.splitlines()
         offset = max(0, int(offset))
         limit = max(1, min(int(limit), MAX_READ_LINES))
-        _state_for(self.session_id).record(path)
+        self._file_state().record(path)
         selected = []
         chars = 0
         char_truncated = False
@@ -266,6 +368,7 @@ class WorkspaceToolService:
         consumed = len(selected)
         return {
             "path": self._display_path(path),
+            "content_type": content_type,
             "offset": offset,
             "total_lines": len(lines),
             "content": "\n".join(selected),
@@ -282,10 +385,11 @@ class WorkspaceToolService:
         if path.exists():
             if not path.is_file():
                 raise WorkspaceToolError("target is not a file")
-            _state_for(self.session_id).require_current(path)
+            self._file_state().require_current(path)
+        self._track_before_mutation(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-        _state_for(self.session_id).record(path)
+        self._file_state().record(path)
         virtual = workspace_manager.system_workspace.parse_virtual_path(file_path)
         if virtual is not None:
             workspace_manager.system_workspace.invalidate(virtual[0])
@@ -295,7 +399,7 @@ class WorkspaceToolService:
         path = self._path(file_path, write=True)
         if not path.is_file():
             raise WorkspaceToolError("file not found")
-        _state_for(self.session_id).require_current(path)
+        self._file_state().require_current(path)
         text = path.read_text(encoding="utf-8")
         count = text.count(old_string)
         if count != 1:
@@ -303,12 +407,67 @@ class WorkspaceToolService:
         updated = text.replace(old_string, new_string, 1)
         if len(updated.encode("utf-8")) > MAX_WRITE_BYTES:
             raise WorkspaceToolError("edited content exceeds write limit")
+        self._track_before_mutation(path)
         path.write_text(updated, encoding="utf-8")
-        _state_for(self.session_id).record(path)
+        self._file_state().record(path)
         virtual = workspace_manager.system_workspace.parse_virtual_path(file_path)
         if virtual is not None:
             workspace_manager.system_workspace.invalidate(virtual[0])
         return {"path": self._display_path(path), "replacements": 1}
+
+    def delete_file(self, file_path: str, *, confirm: bool = False) -> dict:
+        """Delete one workspace file without exposing recursive filesystem access."""
+        if not confirm:
+            raise WorkspaceToolError("file deletion requires confirm=true")
+        path = self._path(file_path, write=True)
+        if not path.exists():
+            raise WorkspaceToolError("file not found")
+        if not path.is_file():
+            raise WorkspaceToolError("only files can be deleted; directory deletion is not supported")
+        display_path = self._display_path(path)
+        size = path.stat().st_size
+        self._track_before_mutation(path)
+        path.unlink()
+        self._file_state().forget(path)
+        virtual = workspace_manager.system_workspace.parse_virtual_path(file_path)
+        if virtual is not None:
+            workspace_manager.system_workspace.invalidate(virtual[0])
+        return {"path": display_path, "deleted": True, "bytes": size}
+
+    def move_file(
+        self, source_path: str, destination_path: str, *, confirm_overwrite: bool = False,
+    ) -> dict:
+        """Move or rename one file inside writable workspace roots."""
+        source = self._path(source_path, write=True)
+        destination = self._path(destination_path, write=True)
+        if not source.exists():
+            raise WorkspaceToolError("source file not found")
+        if not source.is_file():
+            raise WorkspaceToolError("only files can be moved; directory moves are not supported")
+        if source == destination:
+            raise WorkspaceToolError("source and destination must be different")
+        destination_existed = destination.exists()
+        if destination_existed:
+            if not destination.is_file():
+                raise WorkspaceToolError("destination is not a file")
+            if not confirm_overwrite:
+                raise WorkspaceToolError("destination exists; overwrite requires confirm_overwrite=true")
+        self._track_before_mutation(source, destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        source_display = self._display_path(source)
+        shutil.move(str(source), str(destination))
+        self._file_state().move(source, destination)
+        system = workspace_manager.system_workspace
+        for raw_path in (source_path, destination_path):
+            virtual = system.parse_virtual_path(raw_path)
+            if virtual is not None:
+                system.invalidate(virtual[0])
+        return {
+            "source_path": source_display,
+            "path": self._display_path(destination),
+            "moved": True,
+            "overwritten": destination_existed,
+        }
 
     def command(self, operation: str, path: str = ".", pattern: str = "", timeout: int = 30) -> dict:
         """Run a fixed, shell-free operation. No user-provided executable exists."""
@@ -350,6 +509,7 @@ class WorkspaceToolService:
                 timeout=timeout, shell=False, check=False, env=command_env,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
+            log.debug("[files] command execution failed: %s", exc)
             raise WorkspaceToolError(f"operation failed: {exc}") from exc
         output = (completed.stdout or "") + (completed.stderr or "")
         return {
@@ -358,64 +518,6 @@ class WorkspaceToolService:
             "output": output[:MAX_COMMAND_OUTPUT],
             "truncated": len(output) > MAX_COMMAND_OUTPUT,
         }
-
-    def checkpoint(
-        self, action: str, name: str = "", patterns: list[str] | None = None, confirm: bool = False,
-    ) -> dict:
-        runtime = self._runtime()
-        checkpoint_dir = runtime.meta_dir / "checkpoints"
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        if action == "list":
-            items = []
-            for path in sorted(checkpoint_dir.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True):
-                items.append({"name": path.stem, "size": path.stat().st_size})
-            return {"checkpoints": items}
-        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name or ""):
-            raise WorkspaceToolError("checkpoint name must use letters, digits, underscore, or dash")
-        archive = checkpoint_dir / f"{name}.zip"
-        if action == "create":
-            selected_patterns = patterns or ["**/*"]
-            files: dict[str, Path] = {}
-            total = 0
-            for glob_pattern in selected_patterns:
-                for path in runtime.workdir.glob(glob_pattern):
-                    if not path.is_file() or self._skip(path):
-                        continue
-                    try:
-                        safe = runtime.resolve_tool_path(str(path))
-                        rel = str(safe.relative_to(runtime.workdir))
-                        size = safe.stat().st_size
-                    except (ValueError, OSError):
-                        continue
-                    if total + size > MAX_CHECKPOINT_BYTES:
-                        raise WorkspaceToolError("checkpoint exceeds 20 MB limit")
-                    files[rel] = safe
-                    total += size
-                    if len(files) > MAX_RESULTS:
-                        raise WorkspaceToolError("checkpoint exceeds 500 file limit")
-            with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                for rel, path in files.items():
-                    zf.write(path, rel)
-            return {"name": name, "files": len(files), "source_bytes": total}
-        if action == "restore":
-            if not confirm:
-                raise WorkspaceToolError("checkpoint restore requires confirm=true")
-            if not archive.is_file():
-                raise WorkspaceToolError("checkpoint not found")
-            restored = 0
-            with zipfile.ZipFile(archive, "r") as zf:
-                for member in zf.infolist():
-                    target = runtime.resolve_tool_path(member.filename, write=True)
-                    if member.is_dir():
-                        continue
-                    if member.file_size > MAX_WRITE_BYTES:
-                        raise WorkspaceToolError("checkpoint member exceeds per-file write limit")
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(zf.read(member))
-                    restored += 1
-            return {"name": name, "restored_files": restored}
-        raise WorkspaceToolError("unsupported checkpoint action")
-
 
 def structured_output(output: Any, required_fields: list[str] | None = None) -> dict:
     if not isinstance(output, (dict, list, str)):

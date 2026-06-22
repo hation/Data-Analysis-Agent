@@ -3,21 +3,27 @@ import logging
 import os
 import shutil
 import stat
+import subprocess
+import sys
 import tempfile
+import threading
 import urllib.request
 import urllib.error
 import zipfile
 from pathlib import Path
 from typing import Tuple, List
+from urllib.parse import urlsplit
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
+from infrastructure.paths import is_frozen, resource_root
 
 log = logging.getLogger(__name__)
 
 bp = Blueprint("system", __name__)
+_directory_picker_lock = threading.Lock()
 
 # Project root: api/system.py → api/ → project root
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = resource_root()
 
 # GitHub archive URL (no git required — works for zip installs too)
 ARCHIVE_URL = "https://github.com/Zafer-Liu/Data-Analysis-Agent/archive/refs/heads/main.zip"
@@ -41,6 +47,124 @@ PROTECTED = {
     ".git",
     "__pycache__",
 }
+
+
+def _is_local_same_origin_request() -> bool:
+    """Only let the browser on this machine open a native folder dialog."""
+    remote = (request.remote_addr or "").split("%", 1)[0]
+    if remote not in {"127.0.0.1", "::1"}:
+        return False
+
+    if request.headers.get("Sec-Fetch-Site", "").lower() == "cross-site":
+        return False
+
+    origin = request.headers.get("Origin")
+    if origin:
+        try:
+            if urlsplit(origin).netloc.lower() != request.host.lower():
+                return False
+        except ValueError:
+            return False
+    return True
+
+
+def _select_directory_windows(initial_dir: str = "") -> str:
+    """Open the Windows-native directory chooser."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except ImportError as exc:
+        raise RuntimeError("当前 Python 未安装 Tk 组件，请手动输入完整绝对路径。") from exc
+
+    start = Path(initial_dir).expanduser() if initial_dir else Path.home()
+    if not start.is_dir():
+        start = Path.home()
+
+    root = tk.Tk()
+    try:
+        root.withdraw()
+        root.attributes("-topmost", True)
+        selected = filedialog.askdirectory(
+            parent=root,
+            initialdir=str(start),
+            mustexist=True,
+            title="选择要挂载的工作目录",
+        )
+    finally:
+        root.destroy()
+
+    return str(Path(selected).resolve()) if selected else ""
+
+
+_MACOS_DIRECTORY_SCRIPT = """
+on run argv
+    set startFolder to POSIX file (item 1 of argv)
+    set selectedFolder to choose folder with prompt "选择要挂载的工作目录" default location startFolder
+    return POSIX path of selectedFolder
+end run
+""".strip()
+
+
+def _select_directory_macos(initial_dir: str = "") -> str:
+    """Open the macOS Finder directory chooser without invoking a shell."""
+    start = Path(initial_dir).expanduser() if initial_dir else Path.home()
+    if not start.is_dir():
+        start = Path.home()
+    completed = subprocess.run(
+        ["osascript", "-e", _MACOS_DIRECTORY_SCRIPT, "--", str(start)],
+        text=True,
+        capture_output=True,
+        timeout=300,
+        check=False,
+    )
+    if completed.returncode != 0:
+        error = (completed.stderr or "").strip()
+        if "-128" in error or "User canceled" in error:
+            return ""
+        raise RuntimeError(f"无法打开 macOS 目录选择器：{error or 'osascript failed'}")
+    selected = completed.stdout.strip()
+    return str(Path(selected).expanduser().resolve()) if selected else ""
+
+
+def _select_directory_native(initial_dir: str = "") -> str:
+    """Open the platform-native directory chooser and return an absolute path."""
+    if sys.platform == "darwin":
+        return _select_directory_macos(initial_dir)
+    if os.name == "nt":
+        return _select_directory_windows(initial_dir)
+    raise RuntimeError("当前平台不支持原生目录选择器，请手动输入完整绝对路径。")
+
+
+@bp.post("/api/system/select-directory")
+def select_directory():
+    """Open a native picker on the local Windows or macOS host.
+
+    A normal browser file input intentionally hides the selected directory's
+    absolute path.  Since this application runs locally, a guarded backend
+    dialog is the only reliable way to obtain the actual mount path.
+    """
+    if os.environ.get("VERCEL") or not _is_local_same_origin_request():
+        return jsonify({
+            "ok": False,
+            "error": "原生目录选择仅允许从运行服务的本机页面调用，请手动输入路径。",
+        }), 403
+
+    body = request.get_json(silent=True) or {}
+    initial_dir = str(body.get("initial_path") or "").strip()
+    if initial_dir and not Path(initial_dir).is_dir():
+        initial_dir = ""
+
+    if not _directory_picker_lock.acquire(blocking=False):
+        return jsonify({"ok": False, "error": "目录选择窗口已打开。"}), 409
+    try:
+        selected = _select_directory_native(initial_dir)
+    except Exception as exc:
+        log.exception("[directory-picker] failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    finally:
+        _directory_picker_lock.release()
+
+    return jsonify({"ok": True, "path": selected, "cancelled": not bool(selected)})
 
 
 def _is_protected(rel: Path) -> bool:
@@ -160,6 +284,18 @@ def zip_update():
     Returns JSON:
       { ok, output, already_up_to_date, updated, added, skipped, error }
     """
+    if is_frozen():
+        message = "桌面安装包不支持覆盖应用文件，请下载并安装新版本。"
+        return jsonify({
+            "ok": False,
+            "output": message,
+            "error": message,
+            "already_up_to_date": False,
+            "updated": [],
+            "added": [],
+            "skipped": [],
+        }), 409
+
     log.info("[update] downloading archive from %s", ARCHIVE_URL)
 
     # Use mkdtemp + manual cleanup so _rmtree_safe handles Windows file locks.

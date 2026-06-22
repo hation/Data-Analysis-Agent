@@ -174,6 +174,14 @@ window.openOverlay = function (id, ...rest) {
   if (_tpOrigOpenOverlay) _tpOrigOpenOverlay(id, ...rest);
 };
 
+window.tpOpenWithText = async function (text = "") {
+  await tpLoad();
+  if (_tpOrigOpenOverlay) _tpOrigOpenOverlay("ov-temp-prompt");
+  const ta = document.getElementById("tp-textarea");
+  if (ta && text) ta.value = text;
+  tpUpdateCount();
+};
+
 // Expose for the data-action registry (app.js).
 window.tpSave   = tpSave;
 window.tpToggle = tpToggle;

@@ -3,34 +3,18 @@
   const { $ } = window.BAA.dom;
   const state = window.BAA.state;
 
-  // descKey / groupKey reference i18n.js keys; t() is resolved at render time.
-  const COMMANDS = [
-    // Analysis & charts
-    { cmd: "chart",      icon: "📊",  descKey: "cmd.chart.desc",      groupKey: "group.analysis", available: true },
-    { cmd: "sql",        icon: "🗄️",  descKey: "cmd.sql.desc",        groupKey: "group.analysis", available: true },
-    { cmd: "decile",     icon: "📉",  descKey: "cmd.decile.desc",     groupKey: "group.analysis", available: true },
-    { cmd: "tree",       icon: "🌳",  descKey: "cmd.tree.desc",       groupKey: "group.analysis", available: true },
-    { cmd: "kmeans",     icon: "🔵",  descKey: "cmd.kmeans.desc",     groupKey: "group.analysis", available: true },
-    { cmd: "logistic",   icon: "📈",  descKey: "cmd.logistic.desc",   groupKey: "group.analysis", available: true },
-    { cmd: "regression", icon: "📐",  descKey: "cmd.regression.desc", groupKey: "group.analysis", available: true },
-    { cmd: "arima",      icon: "〰️",  descKey: "cmd.arima.desc",      groupKey: "group.analysis", available: true },
-    { cmd: "sarima",     icon: "🌊",  descKey: "cmd.sarima.desc",     groupKey: "group.analysis", available: true },
-    { cmd: "var",        icon: "🔗",  descKey: "cmd.var.desc",        groupKey: "group.analysis", available: true },
-    { cmd: "prophet",    icon: "🔮",  descKey: "cmd.prophet.desc",    groupKey: "group.analysis", available: true },
-    { cmd: "gru",        icon: "🧠",  descKey: "cmd.gru.desc",        groupKey: "group.analysis", available: true },
-    // Data cleaning
-    { cmd: "data",       icon: "🔍",  descKey: "cmd.data.desc",       groupKey: "group.clean",    available: true },
-    { cmd: "inset",      icon: "🩹",  descKey: "cmd.inset.desc",      groupKey: "group.clean",    available: true },
-    { cmd: "winsorize",  icon: "✂️",  descKey: "cmd.winsorize.desc",  groupKey: "group.clean",    available: true },
-    { cmd: "trimming",   icon: "🔪",  descKey: "cmd.trimming.desc",   groupKey: "group.clean",    available: true },
-    // Export
-    { cmd: "export",     icon: "📥",  descKey: "cmd.export.desc",     groupKey: "group.export",   available: true },
-    { cmd: "report",     icon: "📄",  descKey: "cmd.report.desc",     groupKey: "group.export",   available: true },
-    { cmd: "ppt",        icon: "🎯",  descKey: "cmd.ppt.desc",        groupKey: "group.export",   available: true },
-    { cmd: "dashboard",  icon: "📊",  descKey: "cmd.dashboard.desc",  groupKey: "group.export",   available: true },
-    // Tools
-    { cmd: "status",     icon: "📡",  descKey: "cmd.status.desc",     groupKey: "group.tools",    available: true },
-  ];
+  // Backend /api/commands is the sole public command catalog.
+  const COMMANDS = [];
+  const GROUP_KEYS = {
+    analysis: "group.analysis", clean: "group.clean",
+    export: "group.export", tools: "group.tools", session: "group.tools",
+    custom: "group.custom",
+  };
+
+  function getCommand(name) {
+    const key = String(name || "").toLowerCase();
+    return COMMANDS.find(c => c.cmd === key || (c.aliases || []).includes(key));
+  }
 
   function _description(c) {
     return c.description || t(c.descKey);
@@ -56,7 +40,8 @@
 
     const term    = filter.toLowerCase();
     const matched = COMMANDS.filter(c =>
-      !term || c.cmd.includes(term) || _description(c).toLowerCase().includes(term)
+      !term || c.cmd.includes(term) || (c.aliases || []).some(a => a.includes(term))
+        || _description(c).toLowerCase().includes(term)
     );
 
     const header = pop.querySelector(".slash-pop-header");
@@ -98,6 +83,7 @@
   }
 
   function openSlashPopup(filter = "") {
+    window.BAA.skills?.close?.();
     buildSlashPopup(filter);
     state.slashPopupIndex = 0;
     updateSlashActive();
@@ -118,8 +104,11 @@
   }
 
   function selectCommand(cmd) {
+    window.BAA.skills?.clearSkill?.();
     state.activeCommand = cmd;
-    const c = COMMANDS.find(x => x.cmd === cmd);
+    const c = getCommand(cmd) || { cmd, icon: "⌘" };
+    cmd = c.cmd;
+    state.activeCommand = cmd;
     const badge = $("cmd-badge");
     $("cmd-badge-text").textContent = `${c.icon} /${cmd}`;
     badge.classList.add("show");
@@ -127,6 +116,7 @@
     input.value = input.value.replace(/^\/\S*\s*/, "");
     closeSlashPopup();
     input.focus();
+    if (window.BAA.chatStream?.syncSendButton) window.BAA.chatStream.syncSendButton();
   }
 
   function clearCmd() {
@@ -142,6 +132,7 @@
   function onInput(e) {
     autoResize(e.target);
     const v = e.target.value;
+    if (window.BAA.chatStream?.syncSendButton) window.BAA.chatStream.syncSendButton();
 
     if (v === "/stop" && state.isStreaming) {
       e.target.value = "";
@@ -151,9 +142,9 @@
     }
 
     // "/cmd " (no args) — select command, clear input
-    const mFull = v.match(/^\/([\w-]+)\s$/);
+    const mFull = v.match(/^\/([\w:-]+)\s$/);
     if (mFull) {
-      const found = COMMANDS.find(c => c.cmd === mFull[1] && c.available);
+      const found = getCommand(mFull[1]);
       if (found) {
         selectCommand(found.cmd);
         e.target.value = "";
@@ -163,9 +154,9 @@
     }
 
     // "/cmd args..." — select command, keep args as input text
-    const mFullCmd = v.match(/^\/([\w-]+)\s+(.+)/);
+    const mFullCmd = v.match(/^\/([\w:-]+)\s+(.+)/);
     if (mFullCmd) {
-      const found = COMMANDS.find(c => c.cmd === mFullCmd[1] && c.available);
+      const found = getCommand(mFullCmd[1]);
       if (found) {
         selectCommand(found.cmd);
         e.target.value = mFullCmd[2];
@@ -174,7 +165,7 @@
       }
     }
 
-    const mSlash = v.match(/^\/([\w-]*)$/);
+    const mSlash = v.match(/^\/([\w:-]*)$/);
     if (mSlash) {
       const term = mSlash[1];
       if (isSlashOpen()) {
@@ -225,9 +216,9 @@
 
   function fillHint(el) {
     const txt = el.textContent;
-    const m = txt.match(/^\/([\w-]+)\s?(.*)/);
+    const m = txt.match(/^\/([\w:-]+)\s?(.*)/);
     if (m) {
-      const found = COMMANDS.find(c => c.cmd === m[1] && c.available);
+      const found = getCommand(m[1]);
       if (found) {
         selectCommand(found.cmd);
         $("msg-input").value = m[2];
@@ -238,30 +229,33 @@
     window.BAA.chatStream.sendMessage();
   }
 
-  async function loadSkills() {
+  async function loadCommands() {
     try {
-      const response = await fetch("/api/skills");
+      const suffix = state.SID ? `?sid=${encodeURIComponent(state.SID)}` : "";
+      const response = await fetch(`/api/commands${suffix}`);
       if (!response.ok) return;
       const payload = await response.json();
-      for (const skill of (payload.skills || [])) {
-        if (!skill.name || COMMANDS.some(c => c.cmd === skill.name)) continue;
-        COMMANDS.push({
-          cmd: skill.name,
-          icon: skill.icon || "🧩",
-          description: skill.description || skill.name,
-          groupKey: "group.skills",
-          available: true,
-        });
-      }
+      COMMANDS.splice(0, COMMANDS.length, ...(payload.commands || []).map(command => ({
+        cmd: command.name,
+        aliases: command.aliases || [],
+        icon: command.icon || "⌘",
+        description: command.description || command.name,
+        groupKey: GROUP_KEYS[command.category] || "group.custom",
+        available: command.available !== false,
+        type: command.type,
+        usage: command.usage || `/${command.name}`,
+        argumentHint: command.argument_hint || "",
+        clientAction: command.client_action || "",
+      })));
       buildSlashPopup();
     } catch (err) {
-      console.warn("[BAA] analysis skills unavailable:", err);
+      console.warn("[BAA] slash commands unavailable:", err);
     }
   }
 
   window.BAA.slash = {
     COMMANDS, buildSlashPopup, openSlashPopup, closeSlashPopup, isSlashOpen,
-    selectCommand, clearCmd, onInput, onKeyDown, autoResize, fillHint, loadSkills,
+    selectCommand, clearCmd, getCommand, onInput, onKeyDown, autoResize, fillHint, loadCommands,
   };
 
   // Backward-compat globals used by HTML data-actions / language change handler.

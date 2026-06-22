@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import logging
+log = logging.getLogger(__name__)
 import re
 import threading
 from datetime import datetime
@@ -17,8 +19,12 @@ class WorkspaceTeamError(ValueError):
 
 
 class WorkspaceTeamStore:
-    def __init__(self, session_id: str) -> None:
-        runtime = workspace_manager.get(session_id)
+    def __init__(self, session_id: str, *, workspace_id: str | None = None) -> None:
+        fixed_id = (
+            str(workspace_manager.workspace_id_for_session(session_id) or "")
+            if workspace_id is None else str(workspace_id or "")
+        )
+        runtime = workspace_manager.get_by_workspace(fixed_id) if fixed_id else None
         if runtime is None:
             raise WorkspaceTeamError("no workspace is mounted for this session")
         self._path = runtime.meta_dir / "agent_teams.json"
@@ -29,6 +35,7 @@ class WorkspaceTeamStore:
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
+            log.debug("[teams] team store load failed: %s", exc)
             raise WorkspaceTeamError(f"team store is unreadable: {exc}") from exc
         return data if isinstance(data, dict) else {"teams": {}}
 

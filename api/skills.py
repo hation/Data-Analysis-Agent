@@ -1,18 +1,29 @@
 """Public catalog for file-based analysis skills."""
-from flask import Blueprint, jsonify
+import logging
 
-from agent.prompts import COMMAND_HINTS
-from agent.skills import load_skills
+from flask import Blueprint, jsonify, request
+
+from agent.skills import SkillLoader
+
+log = logging.getLogger(__name__)
 
 bp = Blueprint("skills", __name__)
 
 
 @bp.get("/api/skills")
 def list_skills():
-    # Built-in commands keep precedence if a skill accidentally reuses a name.
-    skills = [
-        skill.to_public_dict()
-        for name, skill in load_skills().items()
-        if name not in COMMAND_HINTS
-    ]
-    return jsonify({"skills": skills})
+    workspace_dir = None
+    sid = (request.args.get("sid") or "").strip()
+    if sid:
+        from data.workspace import workspace_manager
+        runtime = workspace_manager.get(sid)
+        if runtime:
+            workspace_dir = runtime.workdir / ".baa" / "skills"
+    loader = SkillLoader(workspace_dir=workspace_dir)
+    loaded = loader.load_all()
+    # Skill and Command namespaces are independent from S0 onward.
+    skills = [skill.to_public_dict() for skill in loaded.values()]
+    return jsonify({
+        "skills": skills,
+        "diagnostics": [item.to_dict() for item in loader.diagnostics()],
+    })

@@ -2,11 +2,16 @@
 (function () {
   const { $, esc, scrollBottom, scrollReset, hideWelcome, showWelcome } = window.BAA.dom;
   const state = window.BAA.state;
-  const { appendMsg, sysMsg, clearMessages, updateTokenBar, showStatus } = window.BAA.msg;
+  const { appendMsg, clearMessages, updateTokenBar, showStatus } = window.BAA.msg;
   const { clearCmd } = window.BAA.slash;
+  const clearSkill = () => window.BAA.skills?.clearSkill?.();
 
   // ── Send / Stop ────────────────────────────────────────────────────
-  function onSendOrStop() { state.isStreaming ? stopStreaming() : sendMessage(); }
+  function onSendOrStop() {
+    const hasDraft = !!$("msg-input").value.trim() || !!state.activeCommand || !!state.activeSkill;
+    if (state.isStreaming && !hasDraft) stopStreaming();
+    else sendMessage();
+  }
 
   async function stopStreaming() {
     if (!state.isStreaming || !state.SID) return;
@@ -26,43 +31,267 @@
     btn.disabled = false;
   }
 
+  function syncSendButton() {
+    const hasDraft = !!$("msg-input").value.trim() || !!state.activeCommand || !!state.activeSkill;
+    _setSendBtnStopping(state.isStreaming && !hasDraft);
+    if (state.isStreaming && hasDraft) {
+      $("send-btn").title = t("send.queue") || "加入等待队列";
+    }
+  }
+
+  function _queueFacade(target, status, position, callbacks) {
+    return !!(window.BAA.vueChat?.setTurnQueueState
+      && window.BAA.vueChat.setTurnQueueState(target, status, position, callbacks));
+  }
+
+  function _refreshQueuePositions() {
+    state.pendingMessages.forEach((item, index) => {
+      _queueFacade(item.assistantId, "queued", index + 1, { onCancel: () => _cancelQueued(item.id) });
+    });
+    if (window.BAA.vueChat?.renderComposerQueue) {
+      window.BAA.vueChat.renderComposerQueue(
+        state.pendingMessages.map(item => ({ id: item.id, displayText: item.displayText })),
+        { onSendNow: _sendQueuedNow, onEdit: _editQueued, onCancel: _cancelQueued },
+      );
+    }
+  }
+
+  function _cancelQueued(queueId) {
+    const index = state.pendingMessages.findIndex(item => item.id === queueId);
+    if (index < 0) return;
+    const [item] = state.pendingMessages.splice(index, 1);
+    if (state.editingQueuedId === queueId) state.editingQueuedId = "";
+    if (window.BAA.vueChat?.removeMessages) {
+      window.BAA.vueChat.removeMessages([item.userId, item.assistantId]);
+    } else {
+      _queueFacade(item.assistantId, "canceled", 0);
+    }
+    _refreshQueuePositions();
+  }
+
+  async function _sendQueuedNow(queueId) {
+    const index = state.pendingMessages.findIndex(item => item.id === queueId);
+    if (index < 0) return;
+    const [item] = state.pendingMessages.splice(index, 1);
+    state.pendingMessages.unshift(item);
+    state.editingQueuedId = "";
+    _refreshQueuePositions();
+    if (state.isStreaming) await stopStreaming();
+    else _drainMessageQueue();
+  }
+
+  function _editQueued(queueId) {
+    const item = state.pendingMessages.find(candidate => candidate.id === queueId);
+    const input = $("msg-input");
+    if (!item || !input) return;
+    state.editingQueuedId = queueId;
+    clearCmd();
+    clearSkill();
+    input.value = item.payload.message;
+    if (item.payload.command && window.BAA.slash?.selectCommand) {
+      window.BAA.slash.selectCommand(item.payload.command);
+    }
+    if (item.payload.skill && window.BAA.skills?.selectSkill) {
+      window.BAA.skills.selectSkill(item.payload.skill);
+    }
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.focus();
+  }
+
+  function _appendTurnShell(displayText) {
+    const user = appendMsg("user", displayText);
+    const assistant = appendMsg("assistant", null);
+    return {
+      userId: user?.dataset?.vueMsgId || "",
+      assistant,
+      assistantId: assistant?.dataset?.vueMsgId || "",
+    };
+  }
+
+  async function _startTurn(payload, assistant, assistantId = "") {
+    if (!assistant && assistantId) {
+      assistant = document.querySelector(`[data-vue-msg-id="${assistantId}"]`);
+    }
+    if (!assistant) return;
+    _queueFacade(assistantId || assistant, "", 0);
+    const stepsEl = assistant.querySelector(".tool-steps");
+    const bubbleEl = assistant.querySelector(".msg-bubble");
+    const typing = document.createElement("div");
+    typing.className = "typing-dots";
+    typing.innerHTML = "<span></span><span></span><span></span>";
+    bubbleEl.appendChild(typing);
+    state.isStreaming = true;
+    syncSendButton();
+    scrollReset();
+    await _streamChat(payload, stepsEl, bubbleEl, typing);
+  }
+
+  function _enqueueTurn(payload, displayText) {
+    const shell = _appendTurnShell(displayText);
+    const item = {
+      id: `queued-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      payload,
+      displayText,
+      userId: shell.userId,
+      assistantId: shell.assistantId,
+    };
+    state.pendingMessages.push(item);
+    _refreshQueuePositions();
+    scrollBottom(true);
+  }
+
+  function _drainMessageQueue() {
+    if (state.isStreaming || !state.pendingMessages.length) return;
+    const item = state.pendingMessages.shift();
+    // Reserve the single active-turn slot before yielding to the event loop;
+    // otherwise a click in this small window could start a parallel request.
+    state.isStreaming = true;
+    syncSendButton();
+    _refreshQueuePositions();
+    _queueFacade(item.assistantId, "processing", 0);
+    setTimeout(() => _startTurn(item.payload, null, item.assistantId), 0);
+  }
+
+  function _localReply(markdown) {
+    appendMsg("assistant", markdown);
+    scrollBottom(true);
+  }
+
+  async function _runLocalCommand(command, text) {
+    const action = command.clientAction || command.cmd;
+    const arg = String(text || "").trim();
+    if (action === "clear") {
+      if (state.isStreaming) await stopStreaming();
+      const response = await fetch(`/api/session/${state.SID}/clear`, { method: "POST" });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.ok === false) {
+        _localReply(result.error || "清除当前对话失败。");
+        return;
+      }
+      state.pendingMessages.length = 0;
+      state.editingQueuedId = "";
+      _refreshQueuePositions();
+      clearCmd(); clearSkill(); clearMessages();
+      state.tokenState = {
+        promptTokens: 0, totalInput: 0, totalOutput: 0,
+        contextWindow: state.tokenState.contextWindow,
+      };
+      updateTokenBar();
+      showWelcome();
+      return;
+    }
+    if (action === "status") { showStatus(); return; }
+    if (action === "mcp") { window.openMcpSettings?.(); return; }
+    if (action === "memory") { window.openOverlay?.("ov-knowledge"); return; }
+    if (action === "permission") { window.BAA.workspace?.openModal?.(); return; }
+    if (action === "plan") {
+      if (window.tpOpenWithText) await window.tpOpenWithText(arg);
+      else window.openOverlay?.("ov-temp-prompt");
+      return;
+    }
+    if (action === "session") {
+      if (arg.toLowerCase() === "new") { await newChat(); return; }
+      await window.BAA.sessions?.loadSavedList?.();
+      _localReply("已刷新左侧的已保存对话。使用 `/sessions new` 可开始新会话。");
+      return;
+    }
+    if (action === "skill") {
+      const parts = arg.split(/\s+/).filter(Boolean);
+      await window.BAA.skills?.loadSkills?.();
+      if (parts[0] === "info" && parts[1]) {
+        const skill = window.BAA.skills.SKILLS.find(item => item.name === parts[1]);
+        _localReply(skill
+          ? `### ${skill.icon || "🧩"} ${skill.name}\n\n${skill.description}\n\n来源：${window.BAA.skills.sourceLabel(skill.source)}`
+          : `未找到 Skill：${parts[1]}`);
+      } else if (parts[0] === "reload") {
+        _localReply(`Skill 已刷新，共 ${window.BAA.skills.SKILLS.length} 个。`);
+      } else {
+        await window.BAA.skills?.open?.();
+      }
+      return;
+    }
+    if (action === "help") {
+      const requested = arg.replace(/^\//, "").toLowerCase();
+      const commands = window.BAA.slash.COMMANDS;
+      const selected = requested ? [window.BAA.slash.getCommand(requested)].filter(Boolean) : commands;
+      _localReply(selected.length
+        ? `### 可用命令\n\n${selected.map(item => `- \`${item.usage}\` — ${item.description}`).join("\n")}`
+        : `未找到命令：/${requested}`);
+      return;
+    }
+    if (action === "compact") {
+      if (state.isStreaming) await stopStreaming();
+      window.BAA.overlay?.toast?.("正在压缩当前对话上下文…", "info");
+      const response = await fetch(`/api/session/${state.SID}/commands/compact`, { method: "POST" });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.ok === false) {
+        _localReply(result.error || "上下文压缩失败。");
+        return;
+      }
+      state.tokenState.promptTokens = Number(result.after_tokens) || 0;
+      updateTokenBar();
+      _localReply(
+        `上下文已压缩：约 ${Number(result.before_tokens || 0).toLocaleString()} → `
+        + `${Number(result.after_tokens || 0).toLocaleString()} tokens；`
+        + `历史消息 ${result.before_messages} → ${result.after_messages} 条。`
+      );
+      return;
+    }
+    if (action === "rewind") {
+      await window.BAA.checkpoints?.open?.();
+      return;
+    }
+    _localReply(`命令 /${command.cmd} 暂无可用的 Web 处理器。`);
+  }
+
   async function sendMessage() {
-    if (state.isStreaming) return;
     const input = $("msg-input");
     const text  = input.value.trim();
-    if (!text && state.activeCommand !== "status") return;
+    const commandDef = state.activeCommand ? window.BAA.slash.getCommand(state.activeCommand) : null;
+    if (!text && !commandDef) return;
 
-    if (state.activeCommand === "status") {
+    if (commandDef?.type === "local") {
+      const display = `/${commandDef.cmd}${text ? ` ${text}` : ""}`;
       input.value = ""; input.style.height = "auto";
-      hideWelcome(); clearCmd();
-      appendMsg("user", "/status");
-      showStatus();
+      hideWelcome(); clearCmd(); clearSkill();
+      appendMsg("user", display);
+      await _runLocalCommand(commandDef, text);
+      syncSendButton();
       return;
     }
 
     input.value = ""; input.style.height = "auto";
     hideWelcome();
 
-    const displayText = state.activeCommand ? `/${state.activeCommand} ${text}` : text;
-    appendMsg("user", displayText);
-    const aEl      = appendMsg("assistant", null);
-    const stepsEl  = aEl.querySelector(".tool-steps");
-    const bubbleEl = aEl.querySelector(".msg-bubble");
-
-    const typing = document.createElement("div");
-    typing.className = "typing-dots";
-    typing.innerHTML = "<span></span><span></span><span></span>";
-    bubbleEl.appendChild(typing);
-
-    state.isStreaming = true;
-    _setSendBtnStopping(true);
-    scrollReset();   // reset "user scrolled up" flag; jump to bottom for new message
-
+    const selectedCommand = state.activeCommand;
+    const selectedSkill = state.activeSkill;
+    const displayText = selectedCommand
+      ? `/${selectedCommand} ${text}`
+      : selectedSkill ? `[Skill: ${selectedSkill}] ${text}` : text;
     const payload = { message: text };
-    if (state.activeCommand) payload.command = state.activeCommand;
+    if (selectedCommand) payload.command = selectedCommand;
+    if (selectedSkill) payload.skill = selectedSkill;
     clearCmd();
-
-    await _streamChat(payload, stepsEl, bubbleEl, typing);
+    clearSkill();
+    if (state.editingQueuedId) {
+      const item = state.pendingMessages.find(candidate => candidate.id === state.editingQueuedId);
+      state.editingQueuedId = "";
+      if (item) {
+        item.payload = payload;
+        item.displayText = displayText;
+        _refreshQueuePositions();
+        window.BAA.vueChat?.setMessageText?.(item.userId, displayText);
+        syncSendButton();
+        return;
+      }
+    }
+    if (state.isStreaming) {
+      _enqueueTurn(payload, displayText);
+      syncSendButton();
+      return;
+    }
+    const shell = _appendTurnShell(displayText);
+    await _startTurn(payload, shell.assistant, shell.assistantId);
   }
 
   // Confirm / revise stream for ppt/excel/report/dashboard outline cards.
@@ -91,17 +320,21 @@
     if (state.analysisContext && !payload.data_context) {
       payload.data_context = state.analysisContext;
     }
-    const resp = await fetch(`/api/session/${state.SID}/chat`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    const reader = resp.body.getReader();
-    state._streamReader = reader;
-    const dec = new TextDecoder();
-    let buf = "";
-
+    let reader = null;
     try {
+      const resp = await fetch(`/api/session/${state.SID}/chat`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) {
+        const failure = await resp.json().catch(() => ({}));
+        throw new Error(failure.error || `Chat request failed (${resp.status})`);
+      }
+      if (!resp.body) throw new Error(`Chat request failed (${resp.status})`);
+      reader = resp.body.getReader();
+      state._streamReader = reader;
+      const dec = new TextDecoder();
+      let buf = "";
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -113,8 +346,17 @@
           catch (_) {}
         }
       }
-    } catch (_) {
+    } catch (error) {
       // reader.cancel() throws — expected when stopStreaming() is called.
+      if (reader && state._streamReader === reader) {
+        // A real HTTP failure should not wedge the FIFO; show it in the turn.
+        const message = error?.message || String(error);
+        if (message && !/cancel/i.test(message)) {
+          await handleEvent({ type: "error", message }, stepsEl, bubbleEl, typing);
+        }
+      } else if (!reader) {
+        await handleEvent({ type: "error", message: error?.message || String(error) }, stepsEl, bubbleEl, typing);
+      }
     } finally {
       if (!(window.BAA.vueChat && window.BAA.vueChat.finishAllTools && window.BAA.vueChat.finishAllTools(stepsEl))) {
         _tickAllSteps(stepsEl);
@@ -125,10 +367,11 @@
       if (typing && typing.parentNode) typing.remove();
       state._streamReader = null;
       state.isStreaming   = false;
-      _setSendBtnStopping(false);
+      syncSendButton();
       scrollBottom(true);   // force-scroll once stream ends regardless of user position
       // Trigger auto-save after every completed AI reply
       if (window.BAA.autosave) window.BAA.autosave.scheduleAutosave();
+      _drainMessageQueue();
     }
   }
 
@@ -162,6 +405,32 @@
       && window.BAA.vueChat.hideToolActivity
       && window.BAA.vueChat.hideToolActivity(ctx.stepsEl));
   }
+
+  async function _cancelJob(jobId) {
+    const resp = await fetch(`/api/session/${state.SID}/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: "POST",
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || t("job.cancel_failed") || "Could not cancel job");
+    return data;
+  }
+
+  function _onJobEvent(ev, ctx) {
+    if (ctx.typing && ctx.typing.parentNode) ctx.typing.remove();
+    if (window.BAA.vueChat && window.BAA.vueChat.updateJob) {
+      window.BAA.vueChat.updateJob(ctx.stepsEl || ctx.bubbleEl, ev, { onCancel: _cancelJob });
+    }
+    if (window.BAA.jobHistory) window.BAA.jobHistory.applyLiveEvent(ev);
+    scrollBottom();
+  }
+
+  const _onJobCreated = _onJobEvent;
+  const _onJobStarted = _onJobEvent;
+  const _onJobProgress = _onJobEvent;
+  const _onArtifactCreated = _onJobEvent;
+  const _onJobDone = _onJobEvent;
+  const _onJobError = _onJobEvent;
+  const _onJobCanceled = _onJobEvent;
 
   // ── SSE event handlers (object-table dispatch) ─────────────────────
   function _onToolStart(ev, ctx) {
@@ -610,7 +879,7 @@
         headerTitle: meta.headerTitle,
         markdown: ev.markdown || "",
       }, {
-        onConfirm: () => sendConfirmStream({ command: meta.confirmCmd, message: "确认", ...meta.confirmPayload }),
+        onConfirm: () => sendConfirmStream({ internal_action: meta.confirmCmd, message: "确认", ...meta.confirmPayload }),
         onRevise: (editText) => {
           let message = String(editText || "");
           if (meta.reviseCmd === "ppt_revise" && meta.confirmPayload.ppt_slides)
@@ -619,7 +888,7 @@
             message = `${message}\n\n[CURRENT_REPORT_JSON]\n${JSON.stringify({ title: meta.confirmPayload.report_title, sections: meta.confirmPayload.report_sections })}`;
           else if (meta.reviseCmd === "dashboard_revise" && meta.confirmPayload.dashboard_widgets)
             message = `${message}\n\n[CURRENT_DASHBOARD_JSON]\n${JSON.stringify({ name: meta.confirmPayload.dashboard_name, widgets: meta.confirmPayload.dashboard_widgets })}`;
-          sendConfirmStream({ command: meta.reviseCmd, message });
+          sendConfirmStream({ internal_action: meta.reviseCmd, message });
         },
         onCancel: () => {},
       })) {
@@ -667,7 +936,7 @@
 
     btnConfirm.addEventListener("click", () => {
       _lockCard();
-      sendConfirmStream({ command: confirmCmd, message: "确认", ...confirmPayload });
+      sendConfirmStream({ internal_action: confirmCmd, message: "确认", ...confirmPayload });
     });
 
     btnRevise.addEventListener("click", () => {
@@ -691,7 +960,7 @@
         const txt = editTA.value.trim();
         if (!txt) return;
         _lockCard();
-        let revisePayload = { command: reviseCmd, message: txt };
+        let revisePayload = { internal_action: reviseCmd, message: txt };
         if (reviseCmd === "ppt_revise" && confirmPayload.ppt_slides)
           revisePayload.message = `${txt}\n\n[CURRENT_SLIDES_JSON]\n${JSON.stringify(confirmPayload.ppt_slides)}`;
         else if (reviseCmd === "report_revise" && confirmPayload.report_sections)
@@ -853,10 +1122,17 @@
     report_outline:     _onOutline,
     dashboard_outline:  _onOutline,
     ask_user:           _onAskUser,
+    job_created:        _onJobCreated,
+    job_started:        _onJobStarted,
+    job_progress:       _onJobProgress,
+    artifact_created:   _onArtifactCreated,
+    job_done:           _onJobDone,
+    job_error:          _onJobError,
+    job_canceled:       _onJobCanceled,
   };
 
-  const PAINT_BREAK_EVENTS = new Set(["tool_start", "tool_end", "knowledge_refs", "data_refs", "tool_audit"]);
-  const STREAM_PAINT_EVENTS = new Set(["text_delta"]);
+  const PAINT_BREAK_EVENTS = new Set(["tool_start", "tool_end", "knowledge_refs", "data_refs", "tool_audit", "job_created", "job_started", "artifact_created", "job_done", "job_error", "job_canceled"]);
+  const STREAM_PAINT_EVENTS = new Set(["text_delta", "job_progress"]);
   let lastStreamPaintAt = 0;
 
   function _nextPaint() {
@@ -881,12 +1157,16 @@
 
   // ── New chat ───────────────────────────────────────────────────────
   async function newChat() {
+    state.pendingMessages.length = 0;
+    state.editingQueuedId = "";
+    _refreshQueuePositions();
     try {
       const r = await fetch("/api/session/new", { method: "POST" });
       const data = await r.json();
       state.SID = data.session_id;
       localStorage.setItem("baa_session_id", state.SID);
-      sessionStorage.setItem("baa_session_id", state.SID);
+    sessionStorage.setItem("baa_session_id", state.SID);
+    if (window.BAA.jobHistory) await window.BAA.jobHistory.switchSession(state.SID);
     } catch (_) {
       // Front-end resets either way; backend will rebuild on next send.
     }
@@ -901,7 +1181,12 @@
       }).catch(() => {});
     }
 
-    state.activeCommand = "";
+    clearCmd();
+    clearSkill();
+    await Promise.all([
+      window.BAA.slash?.loadCommands?.(),
+      window.BAA.skills?.loadSkills?.(),
+    ]);
     if (window.BAA.datasource) window.BAA.datasource.resetSourceState();
     if (window.BAA.autosave) window.BAA.autosave.setLoadedName("", "");
     clearMessages();
@@ -912,7 +1197,7 @@
 
   window.BAA.chatStream = {
     onSendOrStop, sendMessage, sendConfirmStream, stopStreaming,
-    handleEvent, newChat, buildChartFrame: _buildChartFrame,
+    handleEvent, newChat, syncSendButton, buildChartFrame: _buildChartFrame,
     buildReasoningBlock: _buildReasoningBlock,
   };
 })();

@@ -39,6 +39,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Iterable, Tuple
+from infrastructure.paths import data_root
 
 log = logging.getLogger(__name__)
 
@@ -119,7 +120,7 @@ def setup_cleanup(base_dir: Path | None = None) -> None:
         log.info("[cleanup] disabled via BAA_CLEANUP_DISABLED=1")
         return
 
-    base = base_dir or Path(__file__).parent
+    base = base_dir or data_root()
     rules = DEFAULT_RULES
     interval = int(os.environ.get("BAA_CLEANUP_INTERVAL_HOURS", "24"))
 

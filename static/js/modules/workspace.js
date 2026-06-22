@@ -9,7 +9,7 @@
   const state = window.BAA.state;
 
   // ── Sidebar status row sync ───────────────────────────────────────
-  function _setSidebarState(mounted, workdir) {
+  function _setSidebarState(mounted, workdir, name = "") {
     const dot = $("ws-dot");
     const txt = $("ws-status-text");
     if (!dot || !txt) return;
@@ -17,7 +17,7 @@
       dot.classList.add("on");
       // Show the last path segment so the row stays narrow.
       const seg = (workdir || "").split(/[\\/]/).filter(Boolean).pop() || workdir || "";
-      txt.textContent = seg;
+      txt.textContent = name || seg;
       txt.title = workdir || "";
     } else {
       dot.classList.remove("on");
@@ -33,15 +33,88 @@
     return r.json();
   }
 
-  async function _mount(path) {
+  async function _fetchKnownWorkspaces() {
+    const r = await fetch(`/api/session/${state.SID}/workspaces`);
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  }
+
+  async function _refreshKnownWorkspaces() {
+    try {
+      const data = await _fetchKnownWorkspaces();
+      window.BAA.vueWorkspace?.setKnownWorkspaces?.(data.workspaces || []);
+    } catch (error) {
+      window.BAA.vueWorkspace?.setKnownError?.(String(error.message || error));
+    }
+  }
+
+  async function _mount(path, permission, expectedWorkspaceId = "") {
     const r = await fetch(`/api/session/${state.SID}/workspace/mount`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path }),
+      body: JSON.stringify({ path, permission, expected_workspace_id: expectedWorkspaceId }),
     });
     const d = await r.json();
     if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
     return d;  // 完整响应：{ ok, workspace, added, errors, sources }
+  }
+
+  async function _previewSwitch(workspaceId) {
+    const r = await fetch(
+      `/api/session/${state.SID}/workspaces/${encodeURIComponent(workspaceId)}/switch-preview`
+    );
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  }
+
+  async function _renameWorkspace(workspaceId, name) {
+    const r = await fetch(
+      `/api/session/${state.SID}/workspaces/${encodeURIComponent(workspaceId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      }
+    );
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  }
+
+  async function _previewWorkspaceRemoval(workspaceId) {
+    const r = await fetch(
+      `/api/session/${state.SID}/workspaces/${encodeURIComponent(workspaceId)}/remove-preview`
+    );
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  }
+
+  async function _removeWorkspaceRecord(workspaceId) {
+    const r = await fetch(
+      `/api/session/${state.SID}/workspaces/${encodeURIComponent(workspaceId)}`,
+      {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmed: true }),
+      }
+    );
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  }
+
+  async function _setPermission(permission) {
+    const r = await fetch(`/api/session/${state.SID}/workspace/permission`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ permission }),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
   }
 
   async function _unmount() {
@@ -58,17 +131,29 @@
     const mounted = !!(ws && ws.mounted);
     const workdir = mounted ? ws.workdir : "";
     const artifacts = mounted ? (ws.artifacts_dir || "") : "";
+    const permission = mounted ? (ws.permission || "read_only") : "read_only";
 
-    _setSidebarState(mounted, workdir);
+    _setSidebarState(mounted, workdir, mounted ? (ws.name || "") : "");
 
     if (window.BAA.vueWorkspace && window.BAA.vueWorkspace.isAvailable()) {
       window.BAA.vueWorkspace.setState({
         mounted,
+        workspace_id: mounted ? (ws.workspace_id || "") : "",
+        name: mounted ? (ws.name || "") : "",
         workdir,
         artifacts_dir: artifacts,
         mounted_at: (ws && ws.mounted_at) || null,
+        permission,
       });
     }
+    const composerPermission = $("workspace-permission-select");
+    if (composerPermission) {
+      composerPermission.value = permission;
+      composerPermission.disabled = false;
+      composerPermission.dataset.mounted = mounted ? "1" : "0";
+    }
+    const modalPermission = $("ws-permission");
+    if (modalPermission) modalPermission.value = permission;
   }
 
   // ── Public actions ────────────────────────────────────────────────
@@ -80,16 +165,20 @@
       _setSidebarState(false, "");
       console.warn("[workspace] loadStatus failed:", e);
     }
+    await _refreshKnownWorkspaces();
   }
 
-  async function doMount() {
+  async function doMount(options = {}) {
     const input = $("ws-path-input");
     const errEl = $("ws-err");
     const okEl = $("ws-ok");
     if (errEl) errEl.textContent = "";
     if (okEl) okEl.textContent = "";
 
-    const path = (input && input.value || "").trim();
+    const path = String(options.path || (input && input.value) || "").trim();
+    const permission = options.permission
+      || (($("ws-permission") && $("ws-permission").value) || "read_only");
+    const expectedWorkspaceId = String(options.expectedWorkspaceId || "");
     if (!path) {
       if (errEl) errEl.textContent = window.t("workspace.path_required");
       return;
@@ -100,9 +189,82 @@
     if (btn) btn.disabled = true;
 
     try {
-      const d = await _mount(path);
+      const d = await _mount(path, permission, expectedWorkspaceId);
       const ws = d.workspace;
       _syncFromWorkspace(ws);
+      await _refreshKnownWorkspaces();
+      if (d.continued_workspace?.active_job_count) {
+        const count = d.continued_workspace.active_job_count;
+        window.BAA.overlay?.toast?.(
+          window.t("workspace.switched_jobs_continue", { count }), "info"
+        );
+      }
+      await Promise.all([
+        window.BAA.slash?.loadCommands?.(),
+        window.BAA.skills?.loadSkills?.(),
+      ]);
+
+      // B2: large mounted workbooks are parsed outside the request thread.
+      const pending = d.pending_jobs || [];
+      if (pending.length) {
+        const closeBtn = document.querySelector('#ov-workspace [data-action="closeOverlay:ov-workspace"]');
+        let cancelRequested = false;
+        if (closeBtn) {
+          delete closeBtn.dataset.action;
+          closeBtn.textContent = "取消解析";
+          closeBtn.onclick = async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            cancelRequested = true;
+            closeBtn.disabled = true;
+            await Promise.all(pending.map(job => fetch(
+              `/api/session/${state.SID}/jobs/${job.id}/cancel`, { method: "POST" }
+            ).catch(() => null)));
+          };
+        }
+        try {
+          for (let index = 0; index < pending.length; index++) {
+            const job = pending[index];
+            let sequence = 0;
+            let terminal = null;
+            while (!terminal) {
+              const response = await fetch(
+                `/api/session/${state.SID}/jobs/events?job_id=${encodeURIComponent(job.id)}&after_sequence=${sequence}`
+              );
+              if (!response.ok) throw new Error(`任务事件读取失败（HTTP ${response.status}）`);
+              const payload = await response.json();
+              sequence = payload.next_sequence || sequence;
+              for (const event of (payload.events || [])) {
+                if (event.type === "job_progress" && okEl) {
+                  okEl.textContent = pending.length > 1
+                    ? `[${index + 1}/${pending.length}] ${event.message}`
+                    : event.message;
+                }
+                if (["job_done", "job_error", "job_canceled"].includes(event.type)) terminal = event;
+              }
+              if (!terminal) await new Promise(resolve => setTimeout(resolve, 350));
+            }
+            if (terminal.type === "job_canceled" || cancelRequested) throw new Error("Excel 解析已取消");
+            if (terminal.type === "job_error") throw new Error(terminal.error || "Excel 解析失败");
+            const finalizedResponse = await fetch(
+              `/api/session/${state.SID}/workspace/jobs/${job.id}/finalize`, { method: "POST" }
+            );
+            const finalized = await finalizedResponse.json();
+            if (!finalizedResponse.ok || finalized.error) throw new Error(finalized.error || "解析结果挂载失败");
+            d.added = [...(d.added || []), ...(finalized.added || [])];
+            d.sources = finalized.sources || d.sources;
+            d.schema_preview = finalized.schema_preview || d.schema_preview;
+            d.source_name = finalized.source_name || d.source_name;
+          }
+        } finally {
+          if (closeBtn) {
+            closeBtn.onclick = null;
+            closeBtn.dataset.action = "closeOverlay:ov-workspace";
+            closeBtn.disabled = false;
+            closeBtn.textContent = "关闭";
+          }
+        }
+      }
 
       // A5+：同步数据源列表到 sidebar（持久化 source + 缓存复用）
       const added = d.added || [];
@@ -152,11 +314,31 @@
         }
       }
       if (input) input.value = "";
+      return true;
     } catch (e) {
       if (errEl) errEl.textContent = window.t("workspace.mount_fail", { err: String(e.message || e) });
+      return false;
     } finally {
       if (btn) btn.disabled = false;
       if (window.BAA.vueWorkspace) window.BAA.vueWorkspace.setBusy(false);
+    }
+  }
+
+  async function onPermissionChange(permission) {
+    if (!permission) return;
+    const select = $("workspace-permission-select");
+    if (!select || select.dataset.mounted !== "1") {
+      openModal(permission);
+      return;
+    }
+    if (select) select.disabled = true;
+    try {
+      const d = await _setPermission(permission);
+      _syncFromWorkspace({ mounted: true, ...d.workspace });
+      window.BAA.overlay?.toast?.(window.t("workspace.permission_updated"), "ok");
+    } catch (error) {
+      await loadStatus();
+      window.BAA.overlay?.toast?.(String(error.message || error), "err");
     }
   }
 
@@ -171,6 +353,19 @@
     try {
       const d = await _unmount();
       _syncFromWorkspace({ mounted: false });
+      await _refreshKnownWorkspaces();
+      if (d.continued_workspace?.active_job_count) {
+        const count = d.continued_workspace.active_job_count;
+        window.BAA.overlay?.toast?.(
+          window.t("workspace.unmounted_jobs_continue", { count }), "info"
+        );
+      }
+      window.BAA.slash?.clearCmd?.();
+      window.BAA.skills?.clearSkill?.();
+      await Promise.all([
+        window.BAA.slash?.loadCommands?.(),
+        window.BAA.skills?.loadSkills?.(),
+      ]);
 
       // A4 修复：卸载后同步移除工作目录注册的数据源，更新 sidebar
       const sources = d.sources || [];
@@ -199,108 +394,45 @@
     }
   }
 
-  // ── Browse button (webkitdirectory) ───────────────────────────────
-  // Browsers return fakepath for security; we try common base paths and let
-  // the user confirm/complete.
-  function pickWorkdir() {
-    const input = $("ws-file-input");
-    if (!input) return;
-    input.value = "";
-    input.onchange = () => {
-      const files = input.files;
-      if (!files || !files.length) return;
-      // webkitRelativePath looks like "FolderName/sub/file.csv" on most browsers.
-      const rel = files[0].webkitRelativePath || files[0].name || "";
-      const folderName = rel.split("/")[0] || rel;
-      const pathInput = $("ws-path-input");
-      const hint = $("ws-path-hint");
+  // ── Browse button (native directory picker) ──────────────────────
+  async function pickWorkdir() {
+    const pathInput = $("ws-path-input");
+    const hint = $("ws-path-hint");
+    const button = document.querySelector('[data-action="pickWorkdir"]');
 
-      // Try to guess a plausible full path by checking common Windows bases.
-      const guessed = _guessFullPath(folderName);
-      if (pathInput && guessed && !pathInput.value) {
-        pathInput.value = guessed;
-        if (hint) {
-          hint.textContent = window.t("workspace.browse_hint", { name: folderName }) +
-            "  " + window.t("modal.workspace.path_ph");
-          hint.style.color = "#059669";
-        }
-      } else if (!guessed) {
-        // Fallback: no guess worked — show hint only.
-        if (pathInput && !pathInput.value) {
-          pathInput.focus();
-        }
-        if (hint) {
-          hint.textContent = window.t("workspace.browse_hint", { name: folderName });
-          hint.style.color = "#f59e0b";
-        }
-      }
-      // Focus the input so user sees the value and can edit it.
-      if (pathInput) {
-        pathInput.focus();
-        pathInput.select();
-      }
-    };
-    input.click();
-  }
-
-  // Try to find an existing directory matching folderName under common Windows bases.
-  function _guessFullPath(folderName) {
-    // Common base directories to search (in priority order).
-    const candidates = [
-      _homePath(),                          // C:\Users\<username>
-      _homePath() + "\\Documents",
-      _homePath() + "\\Desktop",
-      _homePath() + "\\Downloads",
-      _homePath() + "\\OneDrive\\Documents",
-      _homePath() + "\\OneDrive\\Desktop",
-      "D:\\",
-      "D:\\tmp",
-      "D:\\Projects",
-      "D:\\projects",
-      "C:\\Users\\" + (typeof navigator !== "undefined" ? "" : "") + "\\Documents",
-    ];
-    for (const base of candidates) {
-      if (!base) continue;
-      const candidate = base + "\\" + folderName;
-      // We cannot check filesystem from browser; instead we use heuristics:
-      // If candidate matches patterns like D:\Users\xxx\Documents\Bain, it's likely correct.
-      // Return the most plausible guess (first one with a real-looking structure).
-      if (_looksLikeRealPath(candidate)) return candidate.replace(/\//g, "\\");
-    }
-    return null;  // No good guess
-  }
-
-  function _homePath() {
-    // Best effort: browser doesn't expose user home reliably.
-    // Fall back to C:\Users\<username> pattern.
-    if (typeof process !== "undefined" && process.env.USERPROFILE) {
-      return process.env.USERPROFILE;
-    }
-    // On Windows, the username is often in the app data path.
+    if (button) button.disabled = true;
     try {
-      // This won't work in browsers but serves as documentation of intent.
-      return "C:\Users\\" + (typeof location !== "undefined"
-        ? location.hostname || ""
-        : "");
-    } catch (_) {
-      return "";
-    }
-  }
+      const response = await fetch("/api/system/select-directory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initial_path: (pathInput && pathInput.value || "").trim() }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      if (data.cancelled || !data.path) return;
 
-  function _looksLikeRealPath(path) {
-    // Heuristic: a real Windows absolute path should have at least 2 segments
-    // after the drive letter, e.g. D:\Users\xxx\Bain or C:\Users\xxx\Desktop\Bain.
-    // Also reject obviously fake patterns.
-    if (!path || path.length < 8) return false;
-    // Must start with drive letter
-    if (!/^[A-Za-z]:/.test(path)) return false;
-    // Must have enough depth (at least drive:\one\two)
-    const parts = path.split(/[\\/]/).filter(Boolean);
-    return parts.length >= 3 && !path.includes("fakepath") && !path.includes("::");
+      if (pathInput) pathInput.value = data.path;
+      if (hint) {
+        hint.textContent = window.t("workspace.browse_selected", { path: data.path });
+        hint.style.color = "#059669";
+      }
+    } catch (error) {
+      if (hint) {
+        hint.textContent = window.t("workspace.browse_failed", {
+          err: String(error.message || error),
+        });
+        hint.style.color = "#f59e0b";
+      }
+      if (pathInput) pathInput.focus();
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
   // ── Open modal: refresh state on every open ───────────────────────
-  function openModal() {
+  function openModal(preferredPermission) {
     window.openOverlay("ov-workspace");
     // Reset hint color/text on open.
     const hint = $("ws-path-hint");
@@ -312,7 +444,102 @@
     const okEl = $("ws-ok");
     if (errEl) errEl.textContent = "";
     if (okEl) okEl.textContent = "";
-    loadStatus();
+    loadStatus().finally(() => {
+      if (preferredPermission && $("ws-permission")) {
+        $("ws-permission").value = preferredPermission;
+      }
+    });
+  }
+
+  function selectKnownWorkspace(workspace) {
+    if (!workspace?.available) return;
+    const input = $("ws-path-input");
+    const permission = $("ws-permission");
+    if (input) input.value = workspace.root_path || "";
+    if (permission) permission.value = workspace.permission || "read_only";
+    const hint = $("ws-path-hint");
+    if (hint) {
+      hint.textContent = window.t("workspace.known_selected", { name: workspace.name || "" });
+      hint.style.color = "#059669";
+    }
+    input?.focus();
+  }
+
+  async function activateKnownWorkspace(workspace) {
+    if (!workspace?.available || !workspace.workspace_id) return false;
+    const errEl = $("ws-err");
+    if (errEl) errEl.textContent = "";
+    try {
+      const preview = await _previewSwitch(workspace.workspace_id);
+      if (preview.already_current) return true;
+      if (preview.requires_confirmation) {
+        const jobsNote = preview.continuing_job_count
+          ? window.t("workspace.switch_jobs_note", { count: preview.continuing_job_count })
+          : window.t("workspace.switch_no_jobs_note");
+        const accepted = await window.BAA.ui?.confirm?.({
+          title: window.t("workspace.switch_confirm_title"),
+          message: window.t("workspace.switch_confirm_message", {
+            from: preview.current?.name || "—",
+            to: preview.target.name,
+            permission: window.t(
+              `workspace.permission.${preview.target.effective_permission || preview.target.permission}`
+            ),
+            jobs: jobsNote,
+          }),
+          confirmText: window.t("workspace.switch_confirm_action"),
+          cancelText: window.t("common.cancel"),
+        });
+        if (!accepted) return false;
+      }
+      return doMount({
+        path: preview.target.root_path,
+        permission: preview.target.permission,
+        expectedWorkspaceId: preview.target.workspace_id,
+      });
+    } catch (error) {
+      const message = String(error.message || error);
+      if (errEl) errEl.textContent = window.t("workspace.mount_fail", { err: message });
+      window.BAA.overlay?.toast?.(message, "err");
+      await _refreshKnownWorkspaces();
+      return false;
+    }
+  }
+
+  async function renameKnownWorkspace(workspaceId, name) {
+    const data = await _renameWorkspace(workspaceId, name);
+    await loadStatus();
+    window.BAA.overlay?.toast?.(
+      window.t("workspace.rename_ok", { name: data.workspace?.name || name }), "ok"
+    );
+    return data;
+  }
+
+  async function removeKnownWorkspace(workspace) {
+    const preview = await _previewWorkspaceRemoval(workspace.workspace_id);
+    if (!preview.can_remove) {
+      const reason = (preview.blockers || []).map(item => item.message).join("；");
+      throw new Error(window.t("workspace.remove_blocked", { reason }));
+    }
+    const artifacts = preview.preserved?.artifacts?.file_count || 0;
+    const cache = preview.preserved?.cache?.file_count || 0;
+    const accepted = await window.BAA.ui?.confirm?.({
+      danger: true,
+      title: window.t("workspace.remove_confirm_title"),
+      message: window.t("workspace.remove_confirm_message", {
+        name: workspace.name || workspace.workspace_id.slice(0, 8),
+        artifacts,
+        cache,
+      }),
+      confirmText: window.t("workspace.remove_confirm_action"),
+      cancelText: window.t("common.cancel"),
+    });
+    if (!accepted) return false;
+    await _removeWorkspaceRecord(workspace.workspace_id);
+    await _refreshKnownWorkspaces();
+    window.BAA.overlay?.toast?.(
+      window.t("workspace.remove_ok", { name: workspace.name || "" }), "ok"
+    );
+    return true;
   }
 
   // ── Bootstrap: sync sidebar on page load ──────────────────────────
@@ -324,5 +551,10 @@
     doUnmount,
     pickWorkdir,
     openModal,
+    onPermissionChange,
+    selectKnownWorkspace,
+    activateKnownWorkspace,
+    renameKnownWorkspace,
+    removeKnownWorkspace,
   };
 })();

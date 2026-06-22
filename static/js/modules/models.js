@@ -15,39 +15,48 @@
   // 必须保留用户当前的选择，绝不重置。
   let _firstLoad = true;
 
+  function _modelSelectors() {
+    return [$("model-sel"), $("model-sel-sidebar")].filter(Boolean);
+  }
+
+  function _syncModelSelectors(value) {
+    for (const select of _modelSelectors()) select.value = value || "";
+  }
+
   async function loadModels() {
     const r = await fetch("/api/models");
     const models = await r.json();
     state.modelConfigs = models;
-    const sel = $("model-sel");
-    const prevValue = sel.value;   // 刷新前用户选中的值
-    sel.innerHTML = `<option value="">${t('sidebar.model_placeholder')}</option>`;
-    for (const [key, cfg] of Object.entries(models)) {
-      if (!cfg.has_api_key) continue;
-      const opt = document.createElement("option");
-      opt.value = key;
-      // 自定义模型：优先显示供应商名称（ac-name），fallback 到 Model ID，再 fallback 到 key
-      // 内置模型：显示 BUILTIN_META 的 label（DeepSeek / OpenAI 等）
-      opt.textContent = cfg.is_custom
-        ? (cfg.name || cfg.model || key)
-        : (BUILTIN_META[key]?.label || cfg.model || key);
-      sel.appendChild(opt);
+    const selectors = _modelSelectors();
+    const prevValue = selectors.map(select => select.value).find(Boolean) || "";
+    for (const sel of selectors) {
+      sel.innerHTML = `<option value="">${t('sidebar.model_placeholder')}</option>`;
+      for (const [key, cfg] of Object.entries(models)) {
+        if (!cfg.has_api_key) continue;
+        const opt = document.createElement("option");
+        opt.value = key;
+        opt.textContent = cfg.is_custom
+          ? (cfg.name || cfg.model || key)
+          : (BUILTIN_META[key]?.label || cfg.model || key);
+        sel.appendChild(opt);
+      }
     }
 
-    if (prevValue && [...sel.options].some(o => o.value === prevValue)) {
-      // 列表刷新后仍有之前选中的模型 → 恢复，不触发 onModelChange
-      sel.value = prevValue;
-    } else if (_firstLoad && sel.options.length > 1) {
+    const primary = $("model-sel");
+    if (prevValue && primary && [...primary.options].some(o => o.value === prevValue)) {
+      _syncModelSelectors(prevValue);
+    } else if (_firstLoad && primary && primary.options.length > 1) {
       // 仅首次加载且之前没有选中值时，才自动选第一个并通知后端
-      sel.selectedIndex = 1;
-      onModelChange();
+      _syncModelSelectors(primary.options[1].value);
+      onModelChange(primary.options[1].value);
     }
     // 后续刷新时若 prevValue 已不存在（模型被删除），保持空选择，不强制切换
     _firstLoad = false;
   }
 
-  async function onModelChange() {
-    const v = $("model-sel").value;
+  async function onModelChange(value) {
+    const v = value !== undefined ? value : $("model-sel").value;
+    _syncModelSelectors(v);
     // Switching the model invalidates any previous "tested OK" indicator.
     _resetModelDot();
     if (!v || !state.SID) return;
@@ -333,7 +342,11 @@
   }
 
   async function clearBuiltin(key) {
-    if (!confirm(t('confirm.clear_builtin', { label: BUILTIN_META[key]?.label || key }))) return;
+    if (!await window.BAA.ui?.confirm?.({
+      title: t('confirm.title'),
+      message: t('confirm.clear_builtin', { label: BUILTIN_META[key]?.label || key }),
+      danger: true,
+    })) return;
     const vs = window.BAA.vueSettings;
     if (!vs || !vs.isAvailable()) {
       console.warn("[models] vueSettings unavailable, clearBuiltin skipped");
@@ -352,7 +365,9 @@
   }
 
   async function deleteCustom(provider) {
-    if (!confirm(t('confirm.delete_custom'))) return;
+    if (!await window.BAA.ui?.confirm?.({
+      title: t('confirm.title'), message: t('confirm.delete_custom'), danger: true,
+    })) return;
     await fetch("/api/models/delete", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ provider }),

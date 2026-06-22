@@ -4,9 +4,16 @@
 Business Analyst Agent — 自适应 Vercel & 本地环境
 """
 
+import logging
+log = logging.getLogger(__name__)
+
+import multiprocessing
 import os
 from pathlib import Path
 import sys
+
+if getattr(sys, "frozen", False):
+    multiprocessing.freeze_support()
 
 # -------------------------------
 # 自动检测并安装缺失依赖（仅本地环境）
@@ -15,9 +22,11 @@ def ensure_requirements():
     import importlib
     import subprocess
 
+    if getattr(sys, "frozen", False):
+        return
     req_file = Path(__file__).parent / "requirements.txt"
     if not req_file.exists():
-        print("[WARN] requirements.txt not found, skipping dependency check.")
+        log.warning("[app] requirements.txt not found, skipping dependency check.")
         return
 
     # ✅ 标记文件：记录上次安装时的 requirements.txt 修改时间
@@ -27,8 +36,8 @@ def ensure_requirements():
         try:
             if float(stamp_file.read_text()) >= req_mtime:
                 return  # ✅ 未变动，直接跳过，耗时 <1ms
-        except ValueError:
-            pass  # 标记文件损坏，继续检测
+        except ValueError as e:
+            log.debug("[app] stamp file corrupted, continuing: %s", e)
 
     # pip包名 → import名 映射
     name_map = {
@@ -54,30 +63,31 @@ def ensure_requirements():
             import_name = name_map.get(pip_name.lower(), pip_name.replace("-", "_"))
             try:
                 importlib.import_module(import_name)
-            except ImportError:
+            except ImportError as e:
+                log.debug("[app] missing package '%s': %s", pip_name, e)
                 missing.append(pip_name)
 
     if missing:
-        print(f"[INFO] Installing missing packages: {missing}")
+        log.info("[app] Installing missing packages: %s", missing)
         try:
             subprocess.check_call(
                 [sys.executable, "-m", "pip", "install"] + missing,
             )
         except subprocess.CalledProcessError as e:
-            print(f"[ERROR] Some packages failed to install: {e}")
-            print("[ERROR] Dependency installation is incomplete; the application will not restart.")
+            log.exception("[app] Some packages failed to install")
+            log.info("[app] Dependency installation is incomplete; the application will not restart.")
             raise SystemExit(1)
-        print("[INFO] Installation complete. Restarting...")
+        log.info("[app] Installation complete. Restarting...")
         stamp_file.write_text(str(req_mtime))
         # os.execv 在 Windows 上行为不稳定，改用 subprocess 启动新进程后退出。
         try:
             subprocess.Popen([sys.executable] + sys.argv)
-        except Exception as exc:
-            print(f"[WARN] Auto-restart failed ({exc}), please restart manually.")
+        except Exception as e:
+            log.warning("[app] Auto-restart failed: %s", e)
         sys.exit(0)
     else:
         stamp_file.write_text(str(req_mtime))  # ✅ 写入标记，下次直接跳过
-        print("[INFO] All requirements already satisfied.")
+        log.info("[app] All requirements already satisfied.")
 
 # Vercel 环境依赖由平台管理，只在本地运行
 if os.environ.get("VERCEL") != "1":
@@ -89,8 +99,8 @@ if os.environ.get("VERCEL") != "1":
 try:
     from infrastructure import local_patches
     local_patches.apply()
-except ImportError:
-    pass
+except ImportError as e:
+    log.debug("[app] local_patches not available: %s", e)
 
 # -------------------------------
 # 自动判断运行环境
@@ -98,7 +108,8 @@ except ImportError:
 is_vercel = os.environ.get("VERCEL") == "1"
 
 # 日志目录
-log_dir = Path("/tmp/outputs/Log") if is_vercel else Path(__file__).parent / "outputs" / "Log"
+from infrastructure.paths import data_path
+log_dir = data_path("outputs", "Log")
 os.environ.setdefault("LOG_DIR", str(log_dir))
 
 # 将项目根目录加入 sys.path
@@ -115,7 +126,7 @@ setup_logging(level=20)  # logging.INFO
 # -------------------------------
 if not is_vercel:
     from infrastructure.cleanup import setup_cleanup
-    setup_cleanup(Path(__file__).parent)
+    setup_cleanup()
 
 # -------------------------------
 # 导入 Flask app
@@ -159,9 +170,9 @@ def _serve(app, host: str, port: int):
     else:
         try:
             from waitress import serve as waitress_serve
-        except ImportError:
-            print("[ERROR] waitress 未安装，请运行 pip install waitress>=3.0")
-            print("        或临时回退：BAA_WSGI=flask python app.py")
+        except ImportError as e:
+            log.error("[app] waitress 未安装，请运行 pip install waitress>=3.0: %s", e)
+            log.error("[app] 或临时回退：BAA_WSGI=flask python app.py")
             sys.exit(1)
         waitress_serve(
             app,
@@ -178,6 +189,6 @@ def _serve(app, host: str, port: int):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT") or os.environ.get("AGENT_PORT", 5001))
     host = os.environ.get("BAA_HOST", "0.0.0.0")
-    print(f"\n  Business Analyst Agent → http://localhost:{port}\n")
-    print(f"  [WSGI] {os.environ.get('BAA_WSGI', 'waitress')}  (BAA_WSGI=gunicorn 可切换)\n")
+    log.info("\n  Business Analyst Agent → http://localhost:%s\n", port)
+    log.info("  [WSGI] %s  (BAA_WSGI=gunicorn 可切换)\n", os.environ.get("BAA_WSGI", "waitress"))
     _serve(app, host, port)

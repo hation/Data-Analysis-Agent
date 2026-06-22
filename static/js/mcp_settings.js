@@ -49,13 +49,13 @@ async function loadMcpServers() {
     const servers = data.servers || [];
     vueMcp.setServers(servers);
     vueMcp.setListStatus({ loading: false, err: "" });
-    _updateMcpSidebarStatus(servers);
+    _updateMcpSidebarStatus(servers, data.bundled_resources_available !== false);
   } catch (e) {
     vueMcp.setListStatus({ loading: false, err: e.message });
   }
 }
 
-function _updateMcpSidebarStatus(servers) {
+function _updateMcpSidebarStatus(servers, bundledResourcesAvailable = true) {
   const dot      = document.getElementById("mcp-dot");
   const textEl   = document.getElementById("mcp-status-text");
   const hintEl   = document.getElementById("mcp-status-hint");
@@ -72,6 +72,10 @@ function _updateMcpSidebarStatus(servers) {
     dot.classList.remove("on");
     textEl.textContent = `${servers.length} 个服务器未连接`;
     hintEl.textContent = "点击管理 MCP 工具服务器";
+  } else if (!bundledResourcesAvailable) {
+    dot.classList.remove("on");
+    textEl.textContent = window.t ? window.t("sidebar.mcp_not_bundled") : "内置 MCP 未随安装包提供";
+    hintEl.textContent = window.t ? window.t("sidebar.mcp_external_hint") : "仍可配置外部 MCP 服务器";
   } else {
     dot.classList.remove("on");
     textEl.textContent = "未配置";
@@ -168,7 +172,11 @@ async function addMcpServer() {
 
 async function removeMcpServer(serverId) {
   if (!window.BAA || !window.BAA.vueMcp) return;
-  if (!confirm(`确定要删除服务器 "${serverId}" 吗？`)) return;
+  if (!await window.BAA.ui?.confirm?.({
+    title: "删除 MCP 服务器",
+    message: `确定要删除服务器“${serverId}”吗？`,
+    danger: true,
+  })) return;
   const vueMcp = window.BAA.vueMcp;
   vueMcp.removeServer(serverId); // 乐观删除
   try {

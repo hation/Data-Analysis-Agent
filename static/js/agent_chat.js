@@ -535,7 +535,11 @@ async function saveBuiltin(key) {
 }
 
 async function clearBuiltin(key) {
-  if (!confirm(t('confirm.clear_builtin', { label: BUILTIN_META[key]?.label || key }))) return;
+  if (!await window.BAA?.ui?.confirm?.({
+    title: t('confirm.title'),
+    message: t('confirm.clear_builtin', { label: BUILTIN_META[key]?.label || key }),
+    danger: true,
+  })) return;
   const r = await fetch("/api/models/clear-builtin", {
     method: "POST", headers: {"Content-Type":"application/json"},
     body: JSON.stringify({ provider: key })
@@ -551,7 +555,9 @@ async function clearBuiltin(key) {
 }
 
 async function deleteCustom(provider) {
-  if (!confirm(t('confirm.delete_custom'))) return;
+  if (!await window.BAA?.ui?.confirm?.({
+    title: t('confirm.title'), message: t('confirm.delete_custom'), danger: true,
+  })) return;
   await fetch("/api/models/delete", {
     method: "POST", headers: {"Content-Type":"application/json"},
     body: JSON.stringify({ provider })
@@ -1442,7 +1448,9 @@ async function loadSavedList() {
 }
 
 async function loadSavedSession(filename, name) {
-  if (!confirm(t('confirm.load', { name }))) return;
+  if (!await window.BAA?.ui?.confirm?.({
+    title: t('confirm.title'), message: t('confirm.load', { name }),
+  })) return;
   const r = await fetch(`/api/session/${SID}/load`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ filename }),
@@ -1492,7 +1500,9 @@ async function loadSavedSession(filename, name) {
 }
 
 async function deleteSavedSession(filename, name) {
-  if (!confirm(t('confirm.delete_session', { name }))) return;
+  if (!await window.BAA?.ui?.confirm?.({
+    title: t('confirm.title'), message: t('confirm.delete_session', { name }), danger: true,
+  })) return;
   const r = await fetch(`/api/saved-sessions/${encodeURIComponent(filename)}`, { method: "DELETE" });
   const d = await r.json();
   if (d.error) { toast(d.error, "err"); return; }

@@ -7,14 +7,14 @@ from pathlib import Path
 from flask import Blueprint, request, jsonify, send_from_directory
 
 from .state import session_manager, config_manager
+from infrastructure.paths import data_path
 
 log = logging.getLogger(__name__)
 bp = Blueprint("knowledge", __name__)
 
-# ── Directory: uploads/knowledge/  (relative to project root) ────────────────
+# Source mode: <project>/uploads/knowledge; packaged mode: <data-root>/uploads/knowledge.
 # This file lives at <root>/api/knowledge.py → parent = api/ → parent = root
-_PROJECT_ROOT = Path(__file__).parent.parent
-_KB_DIR = _PROJECT_ROOT / "uploads" / "knowledge"
+_KB_DIR = data_path("uploads", "knowledge")
 _ALLOWED_EXTS = {".xlsx", ".xls", ".docx"}
 
 

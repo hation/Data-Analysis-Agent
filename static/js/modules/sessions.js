@@ -156,7 +156,9 @@
   }
 
   async function loadSavedSession(filename, name) {
-    if (!confirm(t('confirm.load', { name }))) return;
+    if (!await window.BAA.ui?.confirm?.({
+      title: t('confirm.title'), message: t('confirm.load', { name }),
+    })) return;
     if (activeLoad) {
       toast(t('toast.load_busy'), "err");
       return;
@@ -213,6 +215,15 @@
         if (err && err.name === "AbortError") throw err;
         /* non-critical — status bar already updated above */
       }
+
+      // A restored session may mount a different Workspace, so refresh both
+      // independent extension catalogs and discard stale composer selections.
+      window.BAA.slash?.clearCmd?.();
+      window.BAA.skills?.clearSkill?.();
+      await Promise.all([
+        window.BAA.slash?.loadCommands?.(),
+        window.BAA.skills?.loadSkills?.(),
+      ]);
 
       // 不再从历史文件恢复模型 — 前端选择与后端 session 均保持不变。
 

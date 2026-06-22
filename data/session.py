@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """In-memory session management for the business analyst agent."""
 import logging
+import threading
 import uuid
 from dataclasses import dataclass, field, fields, MISSING
 from datetime import datetime
@@ -14,9 +15,47 @@ if TYPE_CHECKING:
     from data.jobs_store import JobsStore
 
 
+def _unique_objects(objects) -> tuple:
+    seen: set[int] = set()
+    result = []
+    for obj in objects:
+        if obj is None or id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        result.append(obj)
+    return tuple(result)
+
+
+class DataSourceSnapshot:
+    """Immutable active-source view leased for one conversation parent task."""
+
+    def __init__(
+        self, session: "ChatSession", entries: List[Dict[str, Any]],
+        combined_schema: str, merged_source=None,
+    ) -> None:
+        self._session = session
+        self.entries = tuple({"id": item["id"], "source": item["source"]} for item in entries)
+        self.sources = tuple(item["source"] for item in self.entries)
+        self.primary = self.sources[0] if self.sources else None
+        self.combined_schema = combined_schema
+        self.merged_source = merged_source
+        self._leased_objects = _unique_objects([
+            *self.sources,
+            *([merged_source] if merged_source is not None else []),
+        ])
+        self._released = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        self._session._release_data_source_objects(self._leased_objects)
+
+
 @dataclass
 class ChatSession:
     session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    workspace_id: str = ""
     history: List[Dict[str, str]] = field(default_factory=list)
     # ── Multi-source support ───────────────────────────────────────────────────
     # Each entry: {"id": str, "source": DataSource}
@@ -55,6 +94,20 @@ class ChatSession:
     # Cached MergedDataSource — rebuilt whenever data sources change.
     # Only populated when ≥2 sources are active.
     _merged_source_cache: Optional[object] = None
+    # B6 durable active-context index. Full result bytes live in workspace/global
+    # artifact stores; the session only keeps bounded metadata and recent SQL.
+    recent_sql: List[str] = field(default_factory=list)
+    recent_artifacts: List[Dict[str, Any]] = field(default_factory=list)
+    # Typed activation audit, kept outside LLM message history so provider
+    # payloads never receive application-only fields.
+    turn_activations: List[Dict[str, Any]] = field(default_factory=list)
+    # C4.0 source lifecycle. Removed/switched sources remain usable by the
+    # conversation snapshots that leased them, then close at the last release.
+    _source_lock: threading.RLock = field(
+        default_factory=threading.RLock, repr=False, compare=False,
+    )
+    _source_lease_counts: Dict[int, int] = field(default_factory=dict, repr=False)
+    _retired_sources: Dict[int, Any] = field(default_factory=dict, repr=False)
 
     # ── Multi-source API ───────────────────────────────────────────────────────
 
@@ -67,14 +120,20 @@ class ChatSession:
     @data_source.setter
     def data_source(self, source):
         """Backward-compat setter: replaces entire list with one source (old code)."""
-        if source is None:
-            self._sources = []
-            self._active_ids = []
-        else:
-            sid = str(uuid.uuid4())[:8]
-            self._sources = [{"id": sid, "source": source}]
-            self._active_ids = [sid]
-        self._combined_schema_cache = None
+        with self._source_lock:
+            previous = [entry.get("source") for entry in self._sources]
+            if source is None:
+                self._sources = []
+                self._active_ids = []
+            else:
+                sid = str(uuid.uuid4())[:8]
+                self._sources = [{"id": sid, "source": source}]
+                self._active_ids = [sid]
+            self._combined_schema_cache = None
+            self._invalidate_merged_source()
+            for old_source in previous:
+                if old_source is not None and old_source is not source:
+                    self._retire_data_source(old_source)
 
     # ── JobRunner (A6) ──────────────────────────────────────────────────────────
 
@@ -96,35 +155,51 @@ class ChatSession:
             self._job_runner = None
         self._invalidate_merged_source()
 
+    def close_sources(self) -> None:
+        """Close session-owned connections before releasing its workspace lease."""
+        with self._source_lock:
+            sources = [entry.get("source") for entry in self._sources]
+            self._sources = []
+            self._active_ids = []
+            self._combined_schema_cache = None
+            self._invalidate_merged_source()
+            for source in sources:
+                if source is not None:
+                    self._retire_data_source(source)
+
     def _active_entries(self) -> List[Dict[str, Any]]:
         """Ordered list of active source entries."""
-        id_set = set(self._active_ids)
-        return [e for e in self._sources if e["id"] in id_set]
+        with self._source_lock:
+            id_set = set(self._active_ids)
+            return [e for e in self._sources if e["id"] in id_set]
 
     def add_source(self, source) -> str:
         """Append a new data source and activate it. Returns its internal ID."""
         sid = str(uuid.uuid4())[:8]
-        self._sources.append({"id": sid, "source": source})
-        if sid not in self._active_ids:
-            self._active_ids.append(sid)
-        self._combined_schema_cache = None
-        self._invalidate_merged_source()
+        with self._source_lock:
+            self._sources.append({"id": sid, "source": source})
+            if sid not in self._active_ids:
+                self._active_ids.append(sid)
+            self._combined_schema_cache = None
+            self._invalidate_merged_source()
         log.info("[session] source added  session=%s  source=%s  id=%s  total=%d",
                  self.session_id, getattr(source, "name", "?"), sid, len(self._sources))
         return sid
 
     def remove_source(self, source_id: str) -> bool:
-        before = len(self._sources)
-        removed = next((e for e in self._sources if e["id"] == source_id), None)
-        self._sources = [e for e in self._sources if e["id"] != source_id]
-        self._active_ids = [i for i in self._active_ids if i != source_id]
-        removed_ok = len(self._sources) < before
-        if removed_ok:
-            name = getattr(removed["source"], "name", "?") if removed else "?"
-            self._combined_schema_cache = None
-            self._invalidate_merged_source()
-            log.info("[session] source removed  session=%s  source=%s  id=%s  remaining=%d",
-                     self.session_id, name, source_id, len(self._sources))
+        with self._source_lock:
+            before = len(self._sources)
+            removed = next((e for e in self._sources if e["id"] == source_id), None)
+            self._sources = [e for e in self._sources if e["id"] != source_id]
+            self._active_ids = [i for i in self._active_ids if i != source_id]
+            removed_ok = len(self._sources) < before
+            if removed_ok:
+                name = getattr(removed["source"], "name", "?") if removed else "?"
+                self._combined_schema_cache = None
+                self._invalidate_merged_source()
+                self._retire_data_source(removed["source"])
+                log.info("[session] source removed  session=%s  source=%s  id=%s  remaining=%d",
+                         self.session_id, name, source_id, len(self._sources))
         return removed_ok
 
     def toggle_source(self, source_id: str) -> bool:
@@ -219,13 +294,62 @@ class ChatSession:
         Must be called whenever the active source list changes so the merged
         connection is rebuilt with up-to-date data on next access.
         """
-        ms = getattr(self, "_merged_source_cache", None)
-        if ms is not None:
-            try:
-                ms.invalidate()
-            except Exception:
-                pass
-            self._merged_source_cache = None
+        with self._source_lock:
+            ms = getattr(self, "_merged_source_cache", None)
+            if ms is not None:
+                self._merged_source_cache = None
+                self._retire_data_source(ms)
+
+    @staticmethod
+    def _close_data_source_object(source) -> None:
+        close = getattr(source, "close", None)
+        invalidate = getattr(source, "invalidate", None)
+        try:
+            if callable(close):
+                close()
+            elif callable(invalidate):
+                invalidate()
+        except Exception:
+            log.exception("[session] data source close error")
+
+    def _retire_data_source(self, source) -> None:
+        """Remove ownership now; defer physical close while snapshots use it."""
+        key = id(source)
+        if self._source_lease_counts.get(key, 0) > 0:
+            self._retired_sources[key] = source
+        else:
+            self._close_data_source_object(source)
+
+    def _release_data_source_objects(self, sources) -> None:
+        to_close = []
+        with self._source_lock:
+            for source in sources:
+                key = id(source)
+                count = self._source_lease_counts.get(key, 0)
+                if count <= 1:
+                    self._source_lease_counts.pop(key, None)
+                    retired = self._retired_sources.pop(key, None)
+                    if retired is not None:
+                        to_close.append(retired)
+                else:
+                    self._source_lease_counts[key] = count - 1
+        for source in to_close:
+            self._close_data_source_object(source)
+
+    def acquire_data_source_snapshot(self) -> DataSourceSnapshot:
+        """Freeze and lease the active source graph for one parent task."""
+        with self._source_lock:
+            entries = self._active_entries()
+            combined_schema = self.get_combined_schema() if entries else ""
+            merged_source = self.get_merged_source() if len(entries) >= 2 else None
+            leased = _unique_objects([
+                *(entry["source"] for entry in entries),
+                *([merged_source] if merged_source is not None else []),
+            ])
+            for source in leased:
+                key = id(source)
+                self._source_lease_counts[key] = self._source_lease_counts.get(key, 0) + 1
+            return DataSourceSnapshot(self, entries, combined_schema, merged_source)
 
     def get_merged_source(self):
         """Return a MergedDataSource covering all active sources.
@@ -284,16 +408,79 @@ class ChatSession:
                 # role == "tool" — truncate large results
                 raw = m.get("content", "")
                 cap = self._TOOL_RESULT_HISTORY_CAP
-                if len(raw) > cap:
-                    content = raw[:cap] + f"\n…[result truncated for history, {len(raw):,} chars total]"
-                else:
-                    content = raw
+                from agent.tools.results import truncate_tool_result_preserving_refs
+                content = truncate_tool_result_preserving_refs(raw, cap)
                 entry = {
                     "role":         "tool",
                     "tool_call_id": m.get("tool_call_id", ""),
                     "content":      content,
                 }
             self.history.append(entry)
+
+    def record_tool_audit(self, event: Dict[str, Any]) -> None:
+        """Update the bounded recovery index from a completed tool call."""
+        recovery = event.get("recovery") or {}
+        sql = str(recovery.get("sql") or "").strip()
+        if sql:
+            self.recent_sql = [item for item in self.recent_sql if item != sql]
+            self.recent_sql.append(sql[:4000])
+            self.recent_sql = self.recent_sql[-5:]
+        for artifact in event.get("artifacts") or []:
+            if not isinstance(artifact, dict):
+                continue
+            artifact_id = str(artifact.get("artifact_id") or "")
+            uri = str(artifact.get("uri") or "")
+            key = artifact_id or uri or str(artifact.get("url") or "")
+            if not key:
+                continue
+            self.recent_artifacts = [
+                item for item in self.recent_artifacts
+                if (item.get("artifact_id") or item.get("uri") or item.get("url")) != key
+            ]
+            self.recent_artifacts.append({
+                k: artifact.get(k) for k in (
+                    "type", "artifact_id", "name", "uri", "url", "size_bytes", "sha256",
+                    "workspace_id",
+                ) if artifact.get(k) not in (None, "")
+            })
+            self.recent_artifacts = self.recent_artifacts[-20:]
+
+    def record_activation(self, activation, message: str, job_id: str = "") -> None:
+        from datetime import datetime
+        record = activation.to_record()
+        record.update({
+            "message": (message or "")[:500],
+            "job_id": job_id,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        })
+        self.turn_activations.append(record)
+        self.turn_activations = self.turn_activations[-100:]
+
+    def build_recovery_context(self, workspace_status: Optional[Dict[str, Any]] = None) -> str:
+        """Build a small system context that survives compaction and reload."""
+        lines: List[str] = []
+        if workspace_status and workspace_status.get("mounted"):
+            lines.append(
+                "Workspace: mounted; permission="
+                f"{workspace_status.get('permission', 'read_only')}; "
+                f"workdir={workspace_status.get('workdir', '')}"
+            )
+        active = [item for item in self.list_sources() if item.get("active")]
+        if active:
+            lines.append("Active data sources: " + ", ".join(
+                f"{item.get('name')} ({item.get('type')})" for item in active
+            ))
+        if self.recent_sql:
+            lines.append("Recent SQL (newest last):\n" + "\n".join(
+                f"- {sql}" for sql in self.recent_sql[-3:]
+            ))
+        if self.recent_artifacts:
+            lines.append("Recent recoverable artifacts:\n" + "\n".join(
+                f"- {item.get('name', item.get('artifact_id', 'artifact'))}: "
+                f"{item.get('uri') or item.get('url', '')}"
+                for item in self.recent_artifacts[-8:]
+            ))
+        return "\n".join(lines)[:6000]
 
     def add_assistant(self, text: str, reasoning: str = "", chart_ids: list = None):
         from agent.reasoning import split_reasoning_tags
@@ -314,9 +501,41 @@ class ChatSession:
     def clear_history(self):
         self.history.clear()
         self.last_reasoning = ""
+        self.chart_ids.clear()
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.last_prompt_tokens = 0
+        self.recent_sql.clear()
+        self.recent_artifacts.clear()
+        self.turn_activations.clear()
+
+    def capture_rewind_state(self) -> Dict[str, Any]:
+        """Return the conversation-owned state restored by file history."""
+        import copy
+        return copy.deepcopy({
+            "history": self.history,
+            "last_reasoning": self.last_reasoning,
+            "chart_ids": self.chart_ids,
+            "total_input_tokens": self.total_input_tokens,
+            "total_output_tokens": self.total_output_tokens,
+            "last_prompt_tokens": self.last_prompt_tokens,
+            "recent_sql": self.recent_sql,
+            "recent_artifacts": self.recent_artifacts,
+            "turn_activations": self.turn_activations,
+        })
+
+    def restore_rewind_state(self, state: Dict[str, Any]) -> None:
+        """Restore conversation state without changing models or data sources."""
+        import copy
+        self.history = copy.deepcopy(list(state.get("history") or []))
+        self.last_reasoning = str(state.get("last_reasoning") or "")
+        self.chart_ids = list(state.get("chart_ids") or [])
+        self.total_input_tokens = int(state.get("total_input_tokens") or 0)
+        self.total_output_tokens = int(state.get("total_output_tokens") or 0)
+        self.last_prompt_tokens = int(state.get("last_prompt_tokens") or 0)
+        self.recent_sql = copy.deepcopy(list(state.get("recent_sql") or []))[-5:]
+        self.recent_artifacts = copy.deepcopy(list(state.get("recent_artifacts") or []))[-20:]
+        self.turn_activations = copy.deepcopy(list(state.get("turn_activations") or []))[-100:]
 
     def record_usage(self, prompt_tokens: int, completion_tokens: int):
         self.total_input_tokens += prompt_tokens
@@ -395,21 +614,41 @@ class SessionManager:
     def remove(self, sid: str):
         s = self._store.pop(sid, None)
         if s is not None:
-            s.shutdown_job_runner()
+            self._release(sid, s)
+
+    @staticmethod
+    def _release(sid: str, session: ChatSession) -> None:
+        session.shutdown_job_runner()
+        session.close_sources()
+        # Local import avoids coupling ChatSession construction to workspace
+        # initialization while still releasing the C1 session reference.
+        try:
+            from data.workspace import workspace_manager
+            workspace_manager.unmount(sid)
+        except Exception:
+            log.exception("[session] workspace release error sid=%s", sid)
 
     def _cleanup_expired(self):
         cutoff = datetime.now()
         expired = [
             sid for sid, s in list(self._store.items())
             if (cutoff - s.last_accessed).total_seconds() > _SESSION_TTL
+            and not (
+                s._job_runner is not None
+                and s._job_runner.list_jobs(active_only=True, limit=1)
+            )
         ]
         for sid in expired:
             s = self._store.pop(sid, None)
             if s is not None:
-                s.shutdown_job_runner()
+                self._release(sid, s)
         if expired:
             log.info("[session] TTL cleanup  removed=%d  remaining=%d",
                      len(expired), len(self._store))
+        # Keep the durable Job event log bounded even when the application runs
+        # continuously for weeks without restarting.
+        if _global_jobs_store is not None:
+            _global_jobs_store.cleanup_events()
 
     def _start_cleanup_daemon(self):
         import threading

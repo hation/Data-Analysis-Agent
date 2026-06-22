@@ -1,15 +1,17 @@
 """Persistent storage for SQL / Google Sheets / HTTP API connection configs."""
+import logging
+log = logging.getLogger(__name__)
+
 import json
 import os
 from pathlib import Path
 from typing import Optional
+from infrastructure.paths import runtime_config_path
 
-if os.environ.get("VERCEL"):
-    _CONFIG_DIR = Path("/tmp/data")
-else:
-    _CONFIG_DIR = Path(__file__).parent
-
-_CONFIG_FILE = _CONFIG_DIR / "datasource_config.json"
+_CONFIG_FILE = runtime_config_path(
+    "datasource_config.json", "data/datasource_config.json"
+)
+_CONFIG_DIR = _CONFIG_FILE.parent
 
 _SENSITIVE_KEYS = {
     "sql": "connection_string",
@@ -27,7 +29,8 @@ class DataSourceConfigManager:
         if _CONFIG_FILE.exists():
             try:
                 self._configs = json.loads(_CONFIG_FILE.read_text("utf-8"))
-            except Exception:
+            except Exception as e:
+                log.warning("[datasource_config] failed to load config, using empty: %s", e)
                 self._configs = {}
 
     def _save(self):

@@ -1,12 +1,14 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """MCP server configuration API — Flask Blueprint."""
 import json
+import logging
 import os
 import re
 import threading
 from pathlib import Path
 from flask import Blueprint, request, jsonify
+from infrastructure.paths import resource_path
+
+log = logging.getLogger(__name__)
 
 bp = Blueprint("mcp", __name__)
 
@@ -57,7 +59,12 @@ def list_servers():
         entry["last_error"] = rt.get("last_error", "")
         entry["tool_count"] = rt.get("tool_count", 0)
         result.append(entry)
-    return jsonify({"servers": result})
+    bundled = resource_path("MCP").is_dir()
+    return jsonify({
+        "servers": result,
+        "bundled_resources_available": bundled,
+        "bundled_message": "" if bundled else "内置 MCP 未随安装包提供",
+    })
 
 
 @bp.post("/api/mcp/servers")
@@ -390,7 +397,8 @@ def _safe_path(raw: str) -> tuple[Path | None, str]:
     """Resolve and validate the user-supplied path. Returns (path, error)."""
     try:
         p = Path(raw.strip()).resolve()
-    except Exception:
+    except Exception as e:
+        log.debug("[mcp] _safe_path resolve failed: %s", e)
         return None, "路径格式无效"
     # Block path traversal — resolved path must be absolute and not empty
     if not p.is_absolute():
@@ -417,8 +425,8 @@ def _find_package_json(base: Path) -> Path | None:
             pkg = json.loads(direct.read_text(encoding="utf-8"))
             if _check_is_mcp(pkg):
                 return direct
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("[mcp] failed to parse direct package.json: %s", e)
     # One level inside node_modules (e.g. user gave the node_modules parent)
     nm = base / "node_modules"
     if nm.is_dir():
@@ -432,8 +440,8 @@ def _find_package_json(base: Path) -> Path | None:
                     deps = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
                     if any(m in deps for m in _MCP_SDK_MARKERS):
                         return pkg
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug("[mcp] failed to parse node_modules package.json: %s", e)
             # scoped packages: @scope/name
             if child.name.startswith("@"):
                 for scoped in child.iterdir():
@@ -444,8 +452,8 @@ def _find_package_json(base: Path) -> Path | None:
                             deps = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
                             if any(m in deps for m in _MCP_SDK_MARKERS):
                                 return spkg
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            log.debug("[mcp] failed to parse scoped package.json: %s", e)
     return None
 
 
@@ -566,6 +574,7 @@ def _llm_enrich(pkg: dict, readme: str) -> tuple[str, dict, list, list]:
                 extra.append(s)
         return desc, env, extra, warnings
     except Exception as e:
+        log.warning("[mcp] LLM enrichment failed: %s", e)
         return pkg.get("description", ""), {}, [], [f"LLM 补全失败（已跳过）：{e}"]
 
 
@@ -589,6 +598,7 @@ def scan_local():
     try:
         pkg = json.loads(pkg_json_path.read_text(encoding="utf-8"))
     except Exception as e:
+        log.warning("[mcp] package.json parse failed: %s", e)
         return jsonify({"error": f"package.json 解析失败：{e}"}), 422
 
     actual_pkg_dir = pkg_json_path.parent
@@ -615,8 +625,8 @@ def scan_local():
         if readme_path.exists():
             try:
                 readme = readme_path.read_text(encoding="utf-8", errors="ignore")
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("[mcp] failed to read README %s: %s", readme_path, e)
             break
 
     # LLM enrichment (non-blocking on failure)

@@ -1,203 +1,379 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""JobRunner — 长任务的线程池执行器（A6 骨架）。
-
-职责边界（见 conventions.md A7）：
-  - 持有 ThreadPoolExecutor，提交并执行 job 函数
-  - 调用 JobsStore 做状态流转（created → queued → started → progress → done/error/canceled）
-  - 提供 JobContext 给 job 函数，让它能上报进度 + 检查取消
-  - 不直接被 API 层使用，由 ChatSession 持有
-
-A6 阶段只跑空任务（_empty_job）验证骨架；B 阶段接入 Excel 解析 / PPT 生成 / Prophet 预测。
-
-线程模型（遵守 conventions.md 运行环境约定）：
-  - 禁 multiprocessing（Windows fork 雷区）
-  - 用 threading + ThreadPoolExecutor(max_workers=2)
-  - DuckDB 跨线程访问必须用 conn.cursor()（B 阶段注意）
-
-取消语义：
-  - Python 无法强行中断一个运行中的线程
-  - cancel() 只是标记 + 取消尚未启动的 future
-  - job 函数必须主动调用 ctx.check_canceled() 协作式退出
-"""
+"""Local JobRunner with durable events and cooperative cancellation."""
 from __future__ import annotations
 
 import logging
 import threading
 import time
+from contextlib import contextmanager
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
+from agent.events import ArtifactCreatedEvent, JobEvent, serialize_event
 from data.jobs_store import (
     JobsStore,
     STATUS_CANCELED,
+    STATUS_CANCELING,
     STATUS_CREATED,
-    STATUS_DONE,
-    STATUS_ERROR,
     STATUS_QUEUED,
-    STATUS_STARTED,
     _TERMINAL,
 )
 
 log = logging.getLogger(__name__)
 
-# Job 函数签名：第一个参数永远是 JobContext，其余由调用方传入
 JobFn = Callable[["JobContext"], Any]
 
 
 class JobCanceled(Exception):
-    """job 函数检测到取消请求时抛出，由 JobRunner 捕获并标记 canceled。"""
+    """Raised by a job after observing its cooperative cancellation flag."""
 
 
 class JobContext:
-    """传给 job 函数的上下文，用于上报进度 + 协作式取消检查。
+    """Worker-facing progress, artifact and cancellation facade."""
 
-    B 阶段的 job 函数（Excel 解析 / PPT 生成 / Prophet）应：
-      1. 在耗时循环里定期调用 ctx.check_canceled()
-      2. 在阶段性完成时调用 ctx.set_progress(pct, message)
-    """
-
-    def __init__(self, job_id: str, store: JobsStore,
-                 is_canceled_fn: Callable[[str], bool]):
+    def __init__(
+        self,
+        job_id: str,
+        store: JobsStore,
+        is_canceled_fn: Callable[[str], bool],
+        notify_fn: Optional[Callable[[], None]] = None,
+        workspace_id: str = "",
+        runtime=None,
+    ):
         self.job_id = job_id
         self._store = store
         self._is_canceled = is_canceled_fn
+        self._notify = notify_fn or (lambda: None)
+        self.workspace_id = workspace_id
+        self.runtime = runtime
 
     def set_progress(self, pct: int, message: str = "") -> None:
-        """上报进度（0-100）。message 暂不入库，预留给 SSE 事件。"""
-        self._store.set_progress(self.job_id, pct)
-        if message:
-            log.debug("[job %s] progress %d%%: %s", self.job_id, pct, message)
+        if self._store.set_progress(self.job_id, pct, message):
+            self._notify()
+
+    def artifact_created(self, artifact: Dict[str, Any]) -> None:
+        event = ArtifactCreatedEvent(job_id=self.job_id, artifact=artifact)
+        if self._store.append_event(self.job_id, serialize_event(event)) is not None:
+            self._notify()
 
     def is_canceled(self) -> bool:
-        """是否被请求取消。job 函数应在循环里轮询。"""
         return self._is_canceled(self.job_id)
 
     def check_canceled(self) -> None:
-        """检查取消，若已请求则抛 JobCanceled。"""
         if self._is_canceled(self.job_id):
             raise JobCanceled(self.job_id)
 
 
 class JobRunner:
-    """每个 ChatSession 持有一个 JobRunner 实例。
+    """Per-session worker pool backed by the process-wide ``JobsStore``."""
 
-    生命周期：
-      - ChatSession 初始化时创建（max_workers=2）
-      - 会话销毁时调用 shutdown()
-      - JobsStore 是全局单例（由 SessionManager 持有），跨会话共享
-    """
-
-    def __init__(self, session_id: str, store: JobsStore,
-                 max_workers: int = 2):
+    def __init__(self, session_id: str, store: JobsStore, max_workers: int = 2):
         self._sid = session_id
         self._store = store
         self._pool = ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix=f"job-{session_id[:8]}",
         )
-        # jid -> Future（运行中的任务）
         self._futures: Dict[str, Future] = {}
-        # 已请求取消的 jid 集合（协作式取消标记）
-        self._canceled: set = set()
-        self._lock = threading.Lock()
+        self._canceled: set[str] = set()
+        self._lock = threading.RLock()
+        self._event_condition = threading.Condition()
+        self._scope = threading.local()
+        self._job_leases: Dict[str, str] = {}
 
-    # ── 提交任务 ────────────────────────────────────────────────────────────
+    # ── Submission/execution ──────────────────────────────────────────────
 
-    def create(self, fn: JobFn, job_type: str) -> str:
-        """提交一个 job，返回 job_id。
-
-        fn 签名：fn(ctx: JobContext) -> Any
-        返回值会被 JSON 序列化存入 jobs.result。
-        """
-        job = self._store.create(self._sid, job_type)
+    def create(self, fn: JobFn, job_type: str, label: str = "") -> str:
+        parent_id = getattr(self._scope, "parent_id", "")
+        workspace_id, lease_acquired = self._acquire_workspace_lease()
+        try:
+            job = self._store.create(
+                self._sid,
+                job_type,
+                label=label,
+                parent_id=parent_id,
+                workspace_id=workspace_id,
+            )
+        except Exception:
+            if lease_acquired:
+                self._release_workspace_id(workspace_id)
+            raise
         jid = job["id"]
+        if lease_acquired:
+            with self._lock:
+                self._job_leases[jid] = workspace_id
         self._store.mark_queued(jid)
+        self._notify_event()
         log.info("[job %s] queued (type=%s, session=%s)", jid, job_type, self._sid)
 
-        future = self._pool.submit(self._run, jid, fn)
+        try:
+            future = self._pool.submit(self._run, jid, fn)
+        except Exception:
+            self._store.mark_failed(jid, "Job worker submission failed.")
+            self._release_job_lease(jid)
+            raise
         with self._lock:
             self._futures[jid] = future
+        future.add_done_callback(
+            lambda completed, job_id=jid: self._future_done(job_id, completed)
+        )
         return jid
 
-    def _run(self, jid: str, fn: JobFn) -> None:
-        """worker 线程入口：状态流转 + 异常捕获 + 清理 future。"""
-        self._store.mark_started(jid)
-        log.info("[job %s] started", jid)
-        ctx = JobContext(jid, self._store, self._is_canceled)
+    def _acquire_workspace_lease(self) -> tuple[str, bool]:
+        from data.workspace import workspace_manager
+        scoped_id = str(getattr(self._scope, "workspace_id", "") or "")
+        if scoped_id:
+            return scoped_id, workspace_manager.acquire_job(scoped_id) is not None
+        workspace_id, runtime = workspace_manager.acquire_job_for_session(self._sid)
+        return str(workspace_id or ""), runtime is not None
+
+    @staticmethod
+    def _release_workspace_id(workspace_id: str) -> None:
+        if workspace_id:
+            from data.workspace import workspace_manager
+            workspace_manager.release_job(workspace_id)
+
+    def _release_job_lease(self, jid: str) -> None:
+        with self._lock:
+            workspace_id = self._job_leases.pop(jid, "")
+        self._release_workspace_id(workspace_id)
+
+    @contextmanager
+    def conversation_scope(self, parent_id: str):
+        """Attach jobs created by this request to a visible conversation parent."""
+        previous = getattr(self._scope, "parent_id", "")
+        previous_workspace = getattr(self._scope, "workspace_id", "")
+        parent = self._store.get_for_session(self._sid, parent_id) or {}
+        self._scope.parent_id = parent_id
+        self._scope.workspace_id = str(parent.get("workspace_id") or "")
         try:
-            result = fn(ctx)
-            # 执行完毕后再次检查取消（fn 可能在最后才被 cancel）
-            if jid in self._canceled:
-                self._store.mark_canceled(jid)
-                log.info("[job %s] canceled after completion", jid)
-                return
-            self._store.mark_done(jid, result)
-            log.info("[job %s] done", jid)
-        except JobCanceled:
-            self._store.mark_canceled(jid)
-            log.info("[job %s] canceled via check_canceled()", jid)
-        except Exception as e:
-            self._store.mark_error(jid, f"{type(e).__name__}: {e}")
-            log.exception("[job %s] error", jid)
+            yield
         finally:
+            self._scope.parent_id = previous
+            self._scope.workspace_id = previous_workspace
+
+    def begin_tracked(self, job_type: str, label: str = "") -> str:
+        workspace_id, lease_acquired = self._acquire_workspace_lease()
+        try:
+            job = self._store.create(
+                self._sid, job_type, label=label, workspace_id=workspace_id,
+            )
+        except Exception:
+            if lease_acquired:
+                self._release_workspace_id(workspace_id)
+            raise
+        jid = job["id"]
+        if lease_acquired:
             with self._lock:
-                self._futures.pop(jid, None)
+                self._job_leases[jid] = workspace_id
+        self._store.mark_queued(jid)
+        self._store.mark_started(jid)
+        self._notify_event()
+        return jid
+
+    def append_tracked_event(self, jid: str, event: Dict[str, Any]) -> None:
+        if self._store.append_event(jid, event) is not None:
+            self._notify_event()
+
+    def update_tracked(self, jid: str, progress: int, message: str = "") -> None:
+        if self._store.set_progress(jid, progress, message):
+            self._notify_event()
+
+    def succeed_tracked(self, jid: str, result: Any) -> None:
+        if self._store.mark_succeeded(jid, result):
+            self._release_job_lease(jid)
+            self._notify_event()
+
+    def fail_tracked(self, jid: str, error: str) -> None:
+        if self._store.mark_failed(jid, error):
+            self._release_job_lease(jid)
+            self._notify_event()
+
+    def cancel_tracked(self, jid: str) -> None:
+        job = self._store.get_for_session(self._sid, jid)
+        if job and job["status"] not in _TERMINAL:
+            for child in self._store.list_children(self._sid, jid):
+                if child["status"] not in _TERMINAL:
+                    self.cancel(child["id"])
+            if job["status"] != STATUS_CANCELING:
+                self._store.mark_canceling(jid)
+            self._store.mark_canceled(jid)
+            self._release_job_lease(jid)
+            self._notify_event()
+
+    def _run(self, jid: str, fn: JobFn) -> None:
+        try:
+            if self._is_canceled(jid):
+                self._store.mark_canceled(jid)
+                return
+            if not self._store.mark_started(jid):
+                return
+            self._notify_event()
+            log.info("[job %s] running", jid)
+            job = self._store.get(jid) or {}
+            workspace_id = str(job.get("workspace_id") or "")
+            runtime = None
+            if workspace_id:
+                from data.workspace import workspace_manager
+                runtime = workspace_manager.get_by_workspace(workspace_id)
+            ctx = JobContext(
+                jid,
+                self._store,
+                self._is_canceled,
+                self._notify_event,
+                workspace_id=workspace_id,
+                runtime=runtime,
+            )
+            try:
+                result = fn(ctx)
+                if self._is_canceled(jid):
+                    self._store.mark_canceled(jid)
+                    log.info("[job %s] canceled after current step", jid)
+                else:
+                    self._store.mark_succeeded(jid, result)
+                    log.info("[job %s] succeeded", jid)
+            except JobCanceled:
+                self._store.mark_canceled(jid)
+                log.info("[job %s] canceled cooperatively", jid)
+            except Exception as exc:
+                self._store.mark_failed(jid, f"{type(exc).__name__}: {exc}")
+                log.exception("[job %s] failed", jid)
+        finally:
+            self._release_job_lease(jid)
+            self._notify_event()
+
+    def _forget_future(self, jid: str) -> None:
+        with self._lock:
+            self._futures.pop(jid, None)
+
+    def _future_done(self, jid: str, future: Future) -> None:
+        self._forget_future(jid)
+        if future.cancelled():
+            self._release_job_lease(jid)
 
     def _is_canceled(self, jid: str) -> bool:
         with self._lock:
             return jid in self._canceled
 
-    # ── 取消 ────────────────────────────────────────────────────────────────
+    # ── Cancellation ──────────────────────────────────────────────────────
 
     def cancel(self, jid: str) -> bool:
-        """请求取消一个 job。
-
-        - 若 job 尚未启动（还在队列里）：future.cancel() 成功，直接标记 canceled
-        - 若 job 已在运行：仅打标记，依赖 fn 协作式检查 ctx.check_canceled()
-        - 若 job 已是终态：忽略，返回 False
-
-        返回 True 表示取消请求被接受（不代表已停止）。
-        """
-        job = self._store.get(jid)
-        if job is None:
-            return False
-        if job["status"] in _TERMINAL:
+        job = self._store.get_for_session(self._sid, jid)
+        if job is None or job["status"] in _TERMINAL:
             return False
 
         with self._lock:
             self._canceled.add(jid)
-            fut = self._futures.get(jid)
+            future = self._futures.get(jid)
 
-        if fut is not None:
-            # 尝试取消尚未启动的 future（已启动的返回 False，不影响）
-            fut.cancel()
+        for child in self._store.list_children(self._sid, jid):
+            if child["status"] not in _TERMINAL:
+                self.cancel(child["id"])
 
-        # 若还在 created/queued（未启动），直接标记 canceled
-        if job["status"] in (STATUS_CREATED, STATUS_QUEUED):
+        if not self._store.mark_canceling(jid):
+            with self._lock:
+                self._canceled.discard(jid)
+            return False
+        canceled_before_start = future is not None and future.cancel()
+        if canceled_before_start:
             self._store.mark_canceled(jid)
-            log.info("[job %s] canceled before start", jid)
-
+            self._release_job_lease(jid)
+        self._notify_event()
         return True
 
-    # ── 查询 ────────────────────────────────────────────────────────────────
+    # ── Events/query bridge ───────────────────────────────────────────────
+
+    def _notify_event(self) -> None:
+        with self._event_condition:
+            self._event_condition.notify_all()
+
+    def wait_for_events(self, after_sequence: int, timeout: float = 0.2) -> bool:
+        if self._store.last_sequence(self._sid) > after_sequence:
+            return True
+        with self._event_condition:
+            self._event_condition.wait(timeout=max(0.0, timeout))
+        return self._store.last_sequence(self._sid) > after_sequence
+
+    def list_events(
+        self,
+        after_sequence: int = 0,
+        limit: int = 200,
+        job_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        if job_id and self._store.get_for_session(self._sid, job_id) is None:
+            return []
+        return self._store.list_events(
+            self._sid,
+            after_sequence=after_sequence,
+            limit=limit,
+            job_id=job_id,
+        )
+
+    def iter_events(
+        self,
+        jid: str,
+        after_sequence: int = 0,
+        timeout: Optional[float] = None,
+    ) -> Iterator[Dict[str, Any]]:
+        """Yield persisted events until ``jid`` reaches a terminal state."""
+        deadline = None if timeout is None else time.monotonic() + timeout
+        sequence = max(0, int(after_sequence))
+        while True:
+            events = self.list_events(sequence, job_id=jid)
+            for event in events:
+                sequence = event["sequence"]
+                yield event
+            job = self.get_status(jid)
+            if job is None or (job["status"] in _TERMINAL and not events):
+                return
+            if deadline is not None and time.monotonic() >= deadline:
+                return
+            wait = 0.2 if deadline is None else min(0.2, max(0.0, deadline - time.monotonic()))
+            self.wait_for_events(sequence, wait)
+
+    def publish_event(self, event: JobEvent) -> Optional[Dict[str, Any]]:
+        persisted = self._store.append_event(event.job_id, serialize_event(event))
+        if persisted is not None:
+            self._notify_event()
+        return persisted
 
     def get_status(self, jid: str) -> Optional[Dict[str, Any]]:
-        return self._store.get(jid)
+        return self._store.get_for_session(self._sid, jid)
 
-    def list_jobs(self, active_only: bool = False) -> List[Dict[str, Any]]:
+    def list_jobs(
+        self, active_only: bool = False, limit: int = 100, top_level_only: bool = False,
+    ) -> List[Dict[str, Any]]:
         if active_only:
-            return self._store.list_active(self._sid)
-        return self._store.list_by_session(self._sid)
+            return self._store.list_active(
+                self._sid, top_level_only=top_level_only,
+            )[:max(1, int(limit))]
+        return self._store.list_by_session(
+            self._sid, limit=limit, top_level_only=top_level_only,
+        )
+
+    def list_artifacts(self, job_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+        return self._store.list_artifacts(self._sid, job_ids)
+
+    def list_detail_events(self, job_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+        return self._store.list_detail_events(self._sid, job_ids)
+
+    def clear_terminal(self) -> int:
+        return self._store.clear_terminal(self._sid)
 
     @property
     def session_id(self) -> str:
         return self._sid
 
-    # ── 生命周期 ─────────────────────────────────────────────────────────────
+    @property
+    def last_sequence(self) -> int:
+        return self._store.last_sequence(self._sid)
+
+    @property
+    def oldest_sequence(self) -> int:
+        return self._store.oldest_sequence(self._sid)
 
     def shutdown(self, wait: bool = True) -> None:
-        """会话销毁时调用。取消所有排队中的任务，等待运行中的完成。"""
         try:
             self._pool.shutdown(wait=wait, cancel_futures=True)
             log.info("[job] runner shutdown (session=%s)", self._sid)
@@ -205,22 +381,14 @@ class JobRunner:
             log.exception("[job] shutdown error")
 
 
-# ── A6 骨架验证用的空任务 ──────────────────────────────────────────────────
-# B 阶段会替换为真实的 Excel 解析 / PPT 生成 / Prophet 预测
-
 def empty_job(ctx: JobContext, duration: float = 0.3) -> Dict[str, Any]:
-    """A6 骨架验证任务：模拟一个会报进度的短任务。
-
-    - duration: 总时长（秒）
-    - 每 0.05s 上报一次进度，期间检查取消
-    - 返回 {"duration": ..., "ticks": N}
-    """
+    """Small progress-reporting task used by the B1 end-to-end tests."""
     ticks = 0
     steps = max(1, int(duration / 0.05))
-    for i in range(steps + 1):
+    for index in range(steps + 1):
         ctx.check_canceled()
-        pct = int(i * 100 / steps)
-        ctx.set_progress(pct)
+        progress = int(index * 100 / steps)
+        ctx.set_progress(progress, f"step {index}/{steps}")
         ticks += 1
         time.sleep(0.05)
     return {"duration": duration, "ticks": ticks}

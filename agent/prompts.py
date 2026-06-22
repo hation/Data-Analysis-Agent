@@ -4,12 +4,15 @@
 This module is imported first (no deps on other agent sub-modules) so that
 tools/schemas.py can import _ANALYZE_GUIDE and _CHART_IDS from here.
 """
+import logging
+log = logging.getLogger(__name__)
 import os
 import re
 import sys
 from typing import Dict
+from infrastructure.paths import resource_root
 
-_PROJ_ROOT  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PROJ_ROOT  = str(resource_root())
 _CHARTS_GEN = os.path.join(_PROJ_ROOT, "Function", "Charts_generation")
 _PPT_PATH   = os.path.join(_PROJ_ROOT, "Function", "Output")
 
@@ -29,7 +32,8 @@ def _build_knowledge_summary() -> str:
     try:
         from Function.Knowledge.knowledge_base import KnowledgeBase
         return KnowledgeBase().get_enabled_summary()
-    except Exception:
+    except Exception as e:
+        log.warning("[prompts] knowledge base unavailable: %s", e)
         return ""
 
 
@@ -37,7 +41,8 @@ def _build_analyze_guide() -> str:
     try:
         from Function.Analyze.registry import build_agent_desc
         return build_agent_desc()
-    except Exception:
+    except Exception as e:
+        log.warning("[prompts] analyze guide build failed: %s", e)
         return "  Data_Decile_Analysis — 十分位分析（Decile Analysis）"
 
 
@@ -46,7 +51,8 @@ def _build_chart_ids() -> str:
     try:
         from LLM.chart_selector import _CHARTS
         return ", ".join(c["chart_id"] for c in _CHARTS)
-    except Exception:
+    except Exception as e:
+        log.warning("[prompts] chart ids build failed: %s", e)
         return (
             "Bar_Chart, Line_Chart, Pie_Chart, Scatter_Plot, Area_Chart, "
             "Heatmap, Waterfall, Treemap, Sunburst_Diagram, Nightingale_Chart"
@@ -65,7 +71,8 @@ def _build_system_prompt() -> str:
     try:
         from Function.Knowledge.knowledge_base import KnowledgeBase
         kb_summary = KnowledgeBase().get_enabled_summary()
-    except Exception:
+    except Exception as e:
+        log.warning("[prompts] knowledge reload failed: %s", e)
         kb_summary = ""
     kb_section = f"\n\n{kb_summary}" if kb_summary else ""
     return _SYSTEM_PROMPT_TEMPLATE + kb_section

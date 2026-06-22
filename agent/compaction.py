@@ -139,7 +139,8 @@ def _strip_heavy_content(msg: Dict[str, Any]) -> Dict[str, Any]:
     # role=tool: always apply the tight cap
     if msg.get("role") == "tool":
         if isinstance(content, str) and len(content) > _TOOL_RESULT_CAP:
-            content = content[:_TOOL_RESULT_CAP] + "\n…[data truncated]"
+            from agent.tools.results import truncate_tool_result_preserving_refs
+            content = truncate_tool_result_preserving_refs(content, _TOOL_RESULT_CAP)
         return {**msg, "content": content}
 
     # String content (assistant / user text)
@@ -353,11 +354,11 @@ def trim_oversized_tool_results(history: List[Dict]) -> Tuple[List[Dict], int]:
         if msg.get("role") == "tool":
             raw = msg.get("content", "")
             if isinstance(raw, str) and len(raw) > _TRIM_TOOL_RESULT_CAP:
+                from agent.tools.results import truncate_tool_result_preserving_refs
                 msg = {
                     **msg,
-                    "content": (
-                        raw[:_TRIM_TOOL_RESULT_CAP]
-                        + f"\n…[rule-trim: {len(raw):,} chars → {_TRIM_TOOL_RESULT_CAP}]"
+                    "content": truncate_tool_result_preserving_refs(
+                        raw, _TRIM_TOOL_RESULT_CAP,
                     ),
                 }
                 n_trimmed += 1

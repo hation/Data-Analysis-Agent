@@ -265,7 +265,6 @@
     };
 
     xhr.upload.onloadend = () => {
-      progressWrap.style.display = "none";
       progressBar.classList.remove("indeterminate");
       $("xl-parsing").style.display = "";
     };
@@ -276,13 +275,104 @@
       xhr.send(form);
     }).catch(err => ({ error: err.message }));
 
-    progressWrap.style.display = "none";
     progressBar.classList.remove("indeterminate");
     $("xl-parsing").style.display = "none";
-    btn.disabled       = false;
-    cancelBtn.disabled = false;
 
-    if (d.error) { errEl.textContent = d.error; return; }
+    if (d.error) {
+      progressWrap.style.display = "none";
+      btn.disabled = false;
+      cancelBtn.disabled = false;
+      errEl.textContent = d.error;
+      return;
+    }
+
+    const pending = d.pending_jobs || [];
+    const finalized = [];
+    if (pending.length) {
+      let canceled = false;
+      const oldAction = cancelBtn.dataset.action || "closeOverlay:ov-excel";
+      delete cancelBtn.dataset.action;
+      cancelBtn.disabled = false;
+      cancelBtn.onclick = async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        canceled = true;
+        cancelBtn.disabled = true;
+        progressLabel.textContent = "正在取消 Excel 解析…";
+        await Promise.all(pending.map(job => fetch(
+          `/api/session/${state.SID}/jobs/${job.id}/cancel`, { method: "POST" }
+        ).catch(() => null)));
+      };
+
+      try {
+        for (let i = 0; i < pending.length; i++) {
+          const job = pending[i];
+          let sequence = 0;
+          let terminal = null;
+          while (!terminal) {
+            const eventResponse = await fetch(
+              `/api/session/${state.SID}/jobs/events?job_id=${encodeURIComponent(job.id)}&after_sequence=${sequence}`
+            );
+            if (!eventResponse.ok) throw new Error(`任务事件读取失败（HTTP ${eventResponse.status}）`);
+            const eventData = await eventResponse.json();
+            sequence = eventData.next_sequence || sequence;
+            for (const event of (eventData.events || [])) {
+              if (event.type === "job_progress") {
+                const pct = Math.max(0, Math.min(100, Number(event.progress) || 0));
+                progressBar.style.width = pct + "%";
+                progressLabel.textContent = pending.length > 1
+                  ? `[${i + 1}/${pending.length}] ${event.message || `正在解析 ${pct}%`}`
+                  : (event.message || `正在解析 ${pct}%`);
+              }
+              if (["job_done", "job_error", "job_canceled"].includes(event.type)) terminal = event;
+            }
+            if (!terminal) {
+              const statusResponse = await fetch(`/api/session/${state.SID}/jobs/${job.id}`);
+              const statusData = await statusResponse.json();
+              const status = statusData.job && statusData.job.status;
+              if (["succeeded", "failed", "canceled"].includes(status)) {
+                terminal = {
+                  type: status === "succeeded" ? "job_done" : status === "failed" ? "job_error" : "job_canceled",
+                  error: statusData.job.error,
+                };
+              }
+            }
+            if (!terminal) await new Promise(resolve => setTimeout(resolve, 350));
+          }
+          if (terminal.type === "job_canceled" || canceled) throw new Error("Excel 解析已取消");
+          if (terminal.type === "job_error") throw new Error(terminal.error || "Excel 解析失败");
+
+          const finalizeResponse = await fetch(
+            `/api/session/${state.SID}/upload-jobs/${job.id}/finalize`, { method: "POST" }
+          );
+          const finalizeData = await finalizeResponse.json();
+          if (!finalizeResponse.ok || finalizeData.error) {
+            throw new Error(finalizeData.error || "Excel 解析结果挂载失败");
+          }
+          finalized.push(...(finalizeData.added || []));
+          d.sources = finalizeData.sources || d.sources;
+        }
+      } catch (error) {
+        errEl.textContent = error.message || String(error);
+        progressWrap.style.display = "none";
+        return;
+      } finally {
+        cancelBtn.onclick = null;
+        cancelBtn.dataset.action = oldAction;
+        cancelBtn.disabled = false;
+        btn.disabled = false;
+      }
+      d.added = [...(d.added || []), ...finalized];
+      if (finalized.length) {
+        d.source_name = finalized[0].source_name;
+        d.schema_preview = finalized[0].schema_preview;
+      }
+    } else {
+      btn.disabled = false;
+      cancelBtn.disabled = false;
+    }
+
+    progressWrap.style.display = "none";
 
     // Show partial errors if any
     if (d.errors && d.errors.length) {

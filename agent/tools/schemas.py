@@ -4,6 +4,9 @@
 Depends on module-level globals from prompts.py — import order matters:
   prompts.py  →  tools/schemas.py  →  agent.py
 """
+import logging
+
+log = logging.getLogger(__name__)
 from ..prompts import _ANALYZE_GUIDE, _CHART_IDS  # _CHART_IDS built from chart_selector._CHARTS
 
 TOOL_SCHEMA_VERSION = "1.1"
@@ -777,11 +780,14 @@ AGENT_TOOLS = [
 
 
 WORKSPACE_TOOL_SCHEMAS = [
-    {"type": "function", "function": {"name": "workspace_glob", "description": "Page through file metadata in the virtual roots uploads, outputs, mcp, or the optional user workspace. Use paths such as workspace://uploads or outputs/exports. Contents are never read by this tool.", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}, "max_results": {"type": "integer", "minimum": 1, "maximum": 100}, "cursor": {"type": "integer", "minimum": 0}}, "required": ["pattern"]}}},
+    {"type": "function", "function": {"name": "workspace_glob", "description": "Page through file metadata. When a user workspace is mounted, omit path to search that mounted directory first; returned user/... paths can be passed unchanged to read, move, or delete tools. Use explicit workspace://uploads, workspace://outputs, or workspace://mcp only for system roots. Contents are never read by this tool.", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string", "description": "Optional root/base. Omit for the mounted user workspace; otherwise use workspace://user, workspace://uploads, workspace://outputs, or workspace://mcp."}, "max_results": {"type": "integer", "minimum": 1, "maximum": 100}, "cursor": {"type": "integer", "minimum": 0}}, "required": ["pattern"]}}},
     {"type": "function", "function": {"name": "workspace_grep", "description": "Regex-search allowlisted UTF-8 text files on demand. At most 50 matches and 200 candidate files are examined; dependency, cache and build directories are skipped.", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}, "include": {"type": "string"}, "max_results": {"type": "integer", "minimum": 1, "maximum": 50}}, "required": ["pattern"]}}},
-    {"type": "function", "function": {"name": "workspace_read_file", "description": "Read one allowlisted UTF-8 workspace file in bounded chunks. Output is capped at 400 lines and 12000 characters; use next_offset to continue. Existing files must be read before write/edit.", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 400}}, "required": ["file_path"]}}},
-    {"type": "function", "function": {"name": "workspace_write_file", "description": "Write UTF-8 only to workspace://outputs or an explicitly mounted user workspace. Existing files must be read first; uploads, mcp and sensitive/internal paths are read-only.", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "content": {"type": "string"}}, "required": ["file_path", "content"]}}},
+    {"type": "function", "function": {"name": "workspace_read_file", "description": "Read one allowlisted UTF-8 text or DOCX file up to 20 MiB. DOCX正文会自动提取；output remains capped at 400 lines and 12000 characters, so use next_offset to continue. Existing files must be read before write/edit.", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 400}}, "required": ["file_path"]}}},
+    {"type": "function", "function": {"name": "workspace_write_file", "description": "Write UTF-8 content up to 20 MiB to workspace://outputs or an explicitly mounted user workspace. Existing files must be read first; uploads, mcp and sensitive/internal paths are read-only.", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "content": {"type": "string"}}, "required": ["file_path", "content"]}}},
     {"type": "function", "function": {"name": "workspace_edit_file", "description": "Replace one unique exact string in a previously-read file under outputs or the mounted user workspace. System uploads and mcp roots are read-only.", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}}, "required": ["file_path", "old_string", "new_string"]}}},
+    {"type": "function", "function": {"name": "workspace_delete_file", "description": "Delete exactly one file from workspace://outputs or a writable mounted user workspace. Recursive/directory deletion is forbidden and confirm=true is always required.", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "confirm": {"type": "boolean", "description": "Must be true after confirming the exact file path to delete."}}, "required": ["file_path", "confirm"]}}},
+    {"type": "function", "function": {"name": "workspace_move_file", "description": "Move or rename exactly one file within writable workspace roots. Directory moves are forbidden; replacing an existing file requires confirm_overwrite=true.", "parameters": {"type": "object", "properties": {"source_path": {"type": "string"}, "destination_path": {"type": "string"}, "confirm_overwrite": {"type": "boolean"}}, "required": ["source_path", "destination_path"]}}},
+    {"type": "function", "function": {"name": "workspace_bash", "description": "Run a restricted Bash-like command in the mounted workspace. Allowed commands: pwd, ls/dir, cat, rg, sha256sum, read-only git status/log/diff, python -m compileall, rm/del, and mv/move/ren. No pipes, redirection, chaining, substitutions, recursive deletion, arbitrary executables, or shell=True. rm and overwrite moves require confirm=true.", "parameters": {"type": "object", "properties": {"command": {"type": "string"}, "timeout": {"type": "integer", "minimum": 1, "maximum": 120}, "confirm": {"type": "boolean", "description": "Required for rm/del and for overwriting an existing mv destination."}}, "required": ["command"]}}},
     {"type": "function", "function": {"name": "workspace_command", "description": "Run a fixed shell-free operation: checksum, json_validate, git_status, git_diff, git_log, or python_compile. Arbitrary commands are impossible.", "parameters": {"type": "object", "properties": {"operation": {"type": "string", "enum": ["checksum", "json_validate", "git_status", "git_diff", "git_log", "python_compile"]}, "path": {"type": "string"}, "timeout": {"type": "integer", "minimum": 1, "maximum": 120}}, "required": ["operation"]}}},
     {"type": "function", "function": {"name": "structured_output", "description": "Return machine-readable output and optionally require object fields. Reserved for structured/coordinator workflows.", "parameters": {"type": "object", "properties": {"output": {}, "required_fields": {"type": "array", "items": {"type": "string"}}}, "required": ["output"]}}},
     {"type": "function", "function": {"name": "load_analysis_skill", "description": "Load a named project analysis skill and return its full SOP body.", "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}},
@@ -808,7 +814,6 @@ TEAM_TOOL_SCHEMAS = [
 AGENT_TOOLS.extend(TEAM_TOOL_SCHEMAS)
 
 CONTROL_TOOL_SCHEMAS = [
-    {"type": "function", "function": {"name": "workspace_checkpoint", "description": "Create/list/restore a bounded checkpoint inside the mounted workspace. Restore is destructive and requires confirm=true. This replaces Git-worktree tools for data workspaces.", "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["create", "list", "restore"]}, "name": {"type": "string"}, "patterns": {"type": "array", "items": {"type": "string"}}, "confirm": {"type": "boolean"}}, "required": ["action"]}}},
     {"type": "function", "function": {"name": "plan_complete", "description": "Return a completed structured plan in coordinator workflows.", "parameters": {"type": "object", "properties": {"summary": {"type": "string"}, "steps": {"type": "array", "items": {"type": "object"}}}, "required": ["summary", "steps"]}}},
 ]
 
@@ -831,7 +836,8 @@ def get_tools_with_mcp(mcp_manager=None) -> list:
         return AGENT_TOOLS
     try:
         mcp_schemas = mcp_manager.get_all_openai_schemas()
-    except Exception:
+    except Exception as e:
+        log.warning("[schemas] MCP schema fetch failed: %s", e)
         mcp_schemas = []
     return AGENT_TOOLS + mcp_schemas
 

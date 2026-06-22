@@ -159,7 +159,9 @@ async function kbSubmitForm() {
 // ── Delete ────────────────────────────────────────────────────────────────────
 
 async function kbDelete(type, id) {
-  if (!confirm("确认删除这条记录？")) return;
+  if (!await window.BAA.ui?.confirm?.({
+    title: "删除知识记录", message: "确认删除这条记录？", danger: true,
+  })) return;
   const vk = window.BAA.vueKb;
   if (!vk || !vk.isAvailable()) return;
   vk.removeItem(type, id);  // 乐观删除
@@ -206,7 +208,9 @@ async function kbLoadFiles() {
 }
 
 async function kbDeleteFile(filename) {
-  if (!confirm(`删除文件 ${filename}？`)) return;
+  if (!await window.BAA.ui?.confirm?.({
+    title: "删除知识文件", message: `确认删除文件“${filename}”？`, danger: true,
+  })) return;
   try {
     await fetch(`/api/knowledge/files/${encodeURIComponent(filename)}`, { method: "DELETE" });
     showToast("文件已删除");

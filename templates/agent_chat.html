@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>智析Agent</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/agent_chat.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/agent_chat.css', v='c4-4-ui-1') }}">
 </head>
 <body>
 <div class="layout">
@@ -36,7 +36,7 @@
       <div class="sb-status-row sb-status-row--select">
         <span class="sb-status-dot sb-status-dot--info" id="model-dot"></span>
         <span class="sb-status-label" data-i18n="sidebar.model">模型</span>
-        <select class="sb-status-select" id="model-sel">
+        <select class="sb-status-select" id="model-sel-sidebar" aria-label="Sidebar model">
           <option value="" data-i18n="sidebar.model_placeholder">— 选择模型 —</option>
         </select>
         <button class="sb-status-iconbtn" data-i18n-title="modal.settings.title"
@@ -146,6 +146,8 @@
         <div class="chat-header-sub" id="hdr-sub" data-i18n="header.subtitle">连接数据源开始分析</div>
       </div>
       <div class="header-btns">
+        <button class="hdr-btn" id="btn-job-history" data-action="openJobHistory"
+                data-i18n="job.history.title">任务历史</button>
         <button class="hdr-btn" id="btn-schema" style="display:none" data-action="openSchemaView" data-i18n="header.schema"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" style="vertical-align:-2px;margin-right:4px" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="3" width="14" height="2.5" rx="1" fill="currentColor"/><rect x="1" y="7" width="14" height="2.5" rx="1" fill="currentColor" opacity=".7"/><rect x="1" y="11" width="9" height="2.5" rx="1" fill="currentColor" opacity=".45"/></svg>数据预览</button>
       </div>
     </div>
@@ -160,7 +162,7 @@
           <div class="hint-chip" data-action="fillHint">各品类的销售额是多少？</div>
           <div class="hint-chip" data-action="fillHint">近12个月的销售趋势如何？</div>
           <div class="hint-chip" data-action="fillHint">哪些客户贡献了最多收入？</div>
-          <div class="hint-chip" data-action="fillHint">/chart 各地区业绩对比柱状图</div>
+          <div class="hint-chip" data-action="fillHint">生成各地区业绩对比柱状图</div>
           <div class="hint-chip" data-action="fillHint">/decile 对销售额做十分位分析</div>
           <div class="hint-chip" data-action="fillHint">/tree 用 C4.5 决策树预测客户流失</div>
           <div class="hint-chip" data-action="fillHint">/kmeans 对客户做聚类分析，K=3</div>
@@ -174,6 +176,18 @@
 
     <!-- Input area -->
     <div class="input-area">
+      <!-- Skill picker: separate from slash commands by design. -->
+      <div class="skill-picker" id="skill-picker">
+        <div class="skill-picker-head">
+          <strong data-i18n="skills.header">选择技能</strong>
+          <button type="button" class="skill-picker-close" data-action="closeSkillPicker" aria-label="Close">×</button>
+        </div>
+        <input id="skill-picker-search" class="skill-picker-search" type="search"
+               data-i18n-ph="skills.search" placeholder="搜索技能"
+               autocomplete="off">
+        <div class="skill-picker-list" id="skill-picker-list"></div>
+      </div>
+
       <!-- Slash command popup (above input, absolute) -->
       <div class="slash-popup" id="slash-popup">
         <div class="slash-pop-header" data-i18n="slash.header">斜杠命令  ·  输入字母快速筛选</div>
@@ -182,45 +196,78 @@
         </div>
       </div>
 
-      <!-- Persistent hint chips + token pill on the same row.
-           chips scroll horizontally on the left; token pill sticks to the right. -->
-      <div class="input-topbar">
-        <div class="input-hints" id="input-hints">
-          <div class="input-hint-chip" data-action="fillHint">各品类的销售额是多少？</div>
-          <div class="input-hint-chip" data-action="fillHint">/chart 各地区业绩对比柱状图</div>
-          <div class="input-hint-chip" data-action="fillHint">/decile 销售额十分位分析</div>
-          <div class="input-hint-chip" data-action="fillHint">/data 数据概况</div>
-          <div class="input-hint-chip" data-action="fillHint">/sql 直接执行 SQL</div>
-          <div class="input-hint-chip" data-action="fillHint">/regression 回归分析</div>
-        </div>
-        <div class="token-pill" id="token-bar-wrap" title="本会话上下文用量">
-          <div class="token-pill-bar">
-            <div class="token-pill-fill" id="token-bar-fill"></div>
+      <div class="composer-shell">
+        <div id="composer-queue-root"></div>
+
+        <div class="input-card">
+          <div class="input-meta">
+            <div class="cmd-badge" id="cmd-badge" data-action="clearCmd">
+              <span id="cmd-badge-text"></span>
+              <span class="x" data-i18n-title="cmd_badge.clear" title="移除命令">×</span>
+            </div>
+            <div class="cmd-badge skill-badge" id="skill-badge" data-action="clearSkill">
+              <span id="skill-badge-text"></span>
+              <span class="x" data-i18n-title="skill_badge.clear" title="移除技能">×</span>
+            </div>
           </div>
-          <span class="token-pill-label" id="token-bar-label"></span>
-        </div>
-      </div>
 
-      <div class="input-card">
-        <!-- Command badge row (only shows when a slash command is active) -->
-        <div class="input-meta">
-          <div class="cmd-badge" id="cmd-badge" data-action="clearCmd">
-            <span id="cmd-badge-text"></span>
-            <span class="x" data-i18n-title="cmd_badge.clear" title="移除命令">×</span>
+          <textarea id="msg-input" rows="1"
+            data-i18n-ph="input.placeholder"
+            placeholder="今天帮你做些什么？  @ 引用对话文件，/ 调用命令"></textarea>
+
+          <div class="composer-toolbar">
+            <div class="composer-toolbar-main">
+              <label class="composer-model" data-i18n-title="sidebar.model" title="模型">
+                <span class="composer-model-mark" aria-hidden="true">AI</span>
+                <select id="model-sel" aria-label="Model">
+                  <option value="" data-i18n="sidebar.model_placeholder">— 选择模型 —</option>
+                </select>
+              </label>
+
+              <button class="composer-tool" type="button" data-action="openSkillPicker">
+                <span aria-hidden="true">🛠</span><span data-i18n="composer.skills">技能</span><span class="composer-chev">⌄</span>
+              </button>
+              <button class="composer-icon-tool" type="button" data-action="openDataSource"
+                      data-i18n-title="composer.datasource" title="数据源">＋</button>
+              <button class="composer-icon-tool composer-mcp" type="button" data-action="openMcpSettings" title="MCP">MCP</button>
+
+              <button class="composer-tool composer-workspace" type="button" data-action="openWorkspace"
+                      data-i18n-title="sidebar.workspace" title="工作目录">
+                <span aria-hidden="true">📁</span><span data-i18n="sidebar.workspace">工作目录</span>
+              </button>
+              <label class="composer-permission" data-i18n-title="workspace.permission_hint" title="连接工作目录后可调整权限">
+                <span aria-hidden="true">🛡</span>
+                <select id="workspace-permission-select" aria-label="Workspace permission">
+                  <option value="read_only" data-i18n="workspace.permission.read_only">只读</option>
+                  <option value="read_write" data-i18n="workspace.permission.read_write">可读和编辑</option>
+                </select>
+              </label>
+
+            </div>
+
+            <div class="composer-toolbar-actions">
+              <div class="token-pill" id="token-bar-wrap" title="本会话上下文用量">
+                <div class="token-pill-bar"><div class="token-pill-fill" id="token-bar-fill"></div></div>
+                <span class="token-pill-label" id="token-bar-label"></span>
+              </div>
+
+              <button class="composer-expand-btn" id="composer-expand-btn" type="button"
+                      data-action="toggleComposerExpanded" aria-expanded="false"
+                      data-i18n-title="composer.expand" title="展开输入框">
+                <span class="expand-icon" aria-hidden="true">⤢</span>
+                <span class="collapse-icon" aria-hidden="true">⤡</span>
+              </button>
+
+              <button class="send-btn" id="send-btn" data-action="onSendOrStop"
+                data-i18n-title="send.title" title="发送 (Enter)" aria-label="Send">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 4L12 20 M12 4L6 10 M12 4L18 10" stroke="currentColor"
+                        stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
-
-        <textarea id="msg-input" rows="1"
-          data-i18n-ph="input.placeholder"
-          placeholder="问点什么？  /  调出命令  ·  Shift+Enter 换行"></textarea>
-
-        <button class="send-btn" id="send-btn" data-action="onSendOrStop"
-          data-i18n-title="send.title" title="发送 (Enter)" aria-label="Send">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 4L12 20 M12 4L6 10 M12 4L18 10" stroke="currentColor"
-                  stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-          </svg>
-        </button>
       </div>
     </div>
   </div>
@@ -384,8 +431,8 @@
       </div>
     </div>
     <div class="modal-footer">
-      <span class="preview-context-status" id="preview-context-status"></span>
-      <button class="btn-sm btn-sm-primary" id="preview-use-table" disabled>请先选择表</button>
+      <span class="preview-context-status" id="preview-context-status" style="display:none"></span>
+      <button class="btn-sm btn-sm-primary" id="preview-use-table" style="display:none" disabled>请先选择表</button>
       <button class="btn-sm btn-sm-ghost" data-action="closeOverlay:ov-schema" data-i18n="modal.close">关闭</button>
     </div>
   </div>
@@ -794,7 +841,7 @@
 
 <!-- ══ Temporary Prompt Modal ════════════════════════════════════════ -->
 <div class="overlay" id="ov-temp-prompt">
-  <div class="modal" style="width:560px">
+  <div class="modal" style="width:680px">
     <div class="modal-title">📝 临时 Prompt</div>
 
     <p class="tp-intro">
@@ -858,10 +905,18 @@
         <input type="text" id="ws-path-input" style="flex:1"
                data-i18n-ph="modal.workspace.path_ph"
                placeholder="例如：C:\Users\xxx\projects\财务分析">
-        <input type="file" id="ws-file-input" webkitdirectory directory multiple style="display:none">
         <button class="btn-sm btn-sm-ghost" data-action="pickWorkdir" data-i18n="modal.workspace.browse">浏览</button>
       </div>
       <div class="f-hint" id="ws-path-hint" data-i18n="modal.workspace.hint">输入项目文件夹的完整绝对路径，Agent 将直接读取目录内文件（无需上传）。与上传并行，可同时使用。</div>
+    </div>
+
+    <div class="f-row">
+      <label for="ws-permission" data-i18n="workspace.permission_label">工作目录权限</label>
+      <select id="ws-permission">
+        <option value="read_only" data-i18n="workspace.permission.read_only">只读</option>
+        <option value="read_write" data-i18n="workspace.permission.read_write">可读和编辑</option>
+      </select>
+      <div class="f-hint" data-i18n="workspace.permission_explain">只读模式禁止 Agent 写入或修改工作目录文件；可读和编辑模式允许使用写入、编辑工具。</div>
     </div>
 
     <div class="msg-err" id="ws-err"></div>
@@ -955,6 +1010,8 @@
 </div>
 
 <div id="global-ui-root"></div>
+<div id="job-history-root"></div>
+<div id="checkpoint-root"></div>
 <div class="toast" id="toast"></div>
 
 <!-- ── Vendor libs (markdown + sanitizer) ─────────────────────────── -->
@@ -963,7 +1020,7 @@
 <script src="https://unpkg.com/vue@3.4.38/dist/vue.global.prod.js"></script>
 
 <!-- ── Core (i18n must come first; provides global t()) ───────────── -->
-<script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
+<script src="{{ url_for('static', filename='js/i18n.js', v='c4-4-ui-1') }}"></script>
 
 <!-- ── Module bundle (order: base → consumers) ────────────────────── -->
 <script src="{{ url_for('static', filename='js/modules/state.js') }}"></script>
@@ -971,24 +1028,27 @@
 <script src="{{ url_for('static', filename='js/modules/theme.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/markdown.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/overlay.js') }}"></script>
-<script src="{{ url_for('static', filename='js/modules/vue_app.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/vue_app.js', v='c4-4-ui-1') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/msg.js') }}"></script>
-<script src="{{ url_for('static', filename='js/modules/slash.js') }}"></script>
-<script src="{{ url_for('static', filename='js/modules/models.js') }}"></script>
-<script src="{{ url_for('static', filename='js/modules/datasource.js') }}"></script>
-<script src="{{ url_for('static', filename='js/modules/preview.js') }}"></script>
-<script src="{{ url_for('static', filename='js/modules/chat_stream.js') }}"></script>
-<script src="{{ url_for('static', filename='js/modules/sessions.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/slash.js', v='s4p1') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/skills.js', v='s4p1') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/models.js', v='ui-dialog-1') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/datasource.js', v='b2p2') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/preview.js', v='b2p2') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/chat_stream.js', v='s4p1') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/job_history.js', v='ui-dialog-1') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/sessions.js', v='ui-dialog-1') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/autosave.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/update.js') }}"></script>
-<script src="{{ url_for('static', filename='js/modules/workspace.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/workspace.js', v='c4-4-ui-1') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/checkpoints.js', v='filehistory-1') }}"></script>
 
 <!-- ── External panels (decorate window.openOverlay; must come AFTER overlay.js) -->
-<script src="{{ url_for('static', filename='js/mcp_settings.js') }}"></script>
-<script src="{{ url_for('static', filename='js/knowledge_panel.js') }}"></script>
+<script src="{{ url_for('static', filename='js/mcp_settings.js', v='ui-dialog-1') }}"></script>
+<script src="{{ url_for('static', filename='js/knowledge_panel.js', v='ui-dialog-1') }}"></script>
 <script src="{{ url_for('static', filename='js/temp_prompt_panel.js') }}"></script>
 
 <!-- ── Main entry: event delegation + bootstrap ───────────────────── -->
-<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js', v='s4p1') }}"></script>
 </body>
 </html>

@@ -3,7 +3,7 @@
 """Business Analyst Agent — main entry point.
 
 The heavy lifting is split across:
-  prompts.py             — SYSTEM_PROMPT, COMMAND_HINTS, path setup
+  prompts.py             — base system prompt and path setup
   tools/schemas.py       — AGENT_TOOLS (JSON schemas sent to the LLM)
   tools/business/data.py — DataToolsMixin  (schema / query / analysis / chart / clean)
   tools/business/export.py — ExportToolsMixin (Excel / Word / PPT)
@@ -13,14 +13,19 @@ import logging
 import time
 from typing import Iterator, List, Dict, Any, Optional, Tuple
 
-from .prompts      import get_system_prompt, build_temp_prompt_section, COMMAND_HINTS
-from .skills       import get_skill, render_skill_prompt
+from .prompts      import get_system_prompt, build_temp_prompt_section
+from .activation   import ActivationContext, INTERNAL_ACTIONS
+from .commands     import (
+    CommandDef, CommandDispatcher, CommandLoader, CommandRegistry,
+)
+from .skills       import SkillDef, SkillExecutor, SkillLoader
 from .tools.schemas import AGENT_TOOLS, get_tools_with_mcp
 from .tools.business import DataToolsMixin, ExportToolsMixin
 from .tools.exposure import filter_tools_for_turn
 from .tools.results import make_tool_result
 from .tools.parallel import should_parallelize_batch
 from .tools.workspace import (
+    WorkspaceBashService,
     WorkspaceTaskStore,
     WorkspaceTeamStore,
     WorkspaceToolService,
@@ -43,6 +48,17 @@ _PROPOSE_CMDS = (
     "ppt", "ppt_revise", "export", "excel_revise",
     "report", "report_revise", "dashboard", "dashboard_revise",
 )
+
+
+def _as_bool_arg(value: Any) -> bool:
+    """Coerce tool-call booleans without treating the string 'False' as true."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes"}
+    return False
 
 
 class BusinessAgent(DataToolsMixin, ExportToolsMixin):
@@ -77,6 +93,8 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         session_chart_ids: Optional[List[str]] = None,
         color_scheme: str = "mckinsey",
         session_id: str = "",
+        workspace_id: Optional[str] = None,
+        job_runner=None,
         context_window: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
     ):
@@ -103,10 +121,57 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         self._session_chart_ids: List[str] = session_chart_ids if session_chart_ids is not None else []
         self.ppt_color_scheme: str = color_scheme
         self._session_id: str = session_id
+        # C5: freeze workspace identity at Agent creation.  ``None`` keeps
+        # compatibility with direct/test construction by snapshotting the
+        # current session binding exactly once; an explicit empty string means
+        # this turn was created without a mounted user workspace.
+        self._workspace_id: str = (
+            str(workspace_manager.workspace_id_for_session(session_id) or "")
+            if workspace_id is None else str(workspace_id or "")
+        )
+        self._job_runner = job_runner
+        self._active_job_id: str = ""
         # Cap for a single LLM response. Defaults to 131072 (safe upper bound);
         # caller should pass cfg.max_output_tokens so it matches the model's limit.
         self._max_output_tokens: int = max_output_tokens if max_output_tokens and max_output_tokens > 0 else 131072
         self._mcp_manager = get_mcp_manager()
+
+    def _workspace_runtime(self):
+        """Resolve only the runtime frozen for this Agent turn (C5)."""
+        if not self._workspace_id:
+            return None
+        return workspace_manager.get_by_workspace(self._workspace_id)
+
+    def _workspace_path_authorization(self):
+        """Return the SQL sandbox capability for this Agent's fixed Workspace."""
+        return workspace_manager.path_authorization(self._workspace_id)
+
+    def _run_as_job(self, fn, job_type: str, label: str = ""):
+        """Submit ``fn(ctx)`` and bridge its persisted events into Agent output.
+
+        B2-B4 call this helper after their payload/module-level worker functions
+        are introduced. Keeping the bridge here preserves the current
+        tool-call -> result -> continued reasoning flow without letting workers
+        touch the LLM client or SSE generator.
+        """
+        if self._job_runner is None:
+            raise RuntimeError("JobRunner is not available for this session")
+        jid = self._job_runner.create(fn, job_type=job_type, label=label)
+        self._active_job_id = jid
+        try:
+            for event in self._job_runner.iter_events(jid):
+                yield event
+            job = self._job_runner.get_status(jid)
+            if job is None:
+                raise RuntimeError(f"job disappeared: {jid}")
+            return job
+        finally:
+            current = self._job_runner.get_status(jid)
+            if current is not None:
+                from data.jobs_store import _TERMINAL
+                if current["status"] not in _TERMINAL:
+                    self._job_runner.cancel(jid)
+            self._active_job_id = ""
 
     # ── Context helpers ───────────────────────────────────────────────────────
 
@@ -207,16 +272,16 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
     def _tool_workspace_status(self) -> str:
         """Return a bounded summary of system roots and optional user workdir."""
         try:
-            status = workspace_manager.status(self._session_id)
+            runtime = self._workspace_runtime()
             result = {
                 "system_workspace": workspace_manager.system_status(),
-                "user_workspace": {"mounted": bool(status.get("mounted"))},
+                "user_workspace": {"mounted": runtime is not None},
                 "usage": (
-                    "Use workspace_glob with path uploads, outputs, or mcp and a cursor; "
+                    "When a user workspace is mounted, omit path (or use workspace://user) to search it first. "
+                    "Use explicit path uploads, outputs, or mcp only when the user refers to those roots; "
                     "then use workspace_grep or workspace_read_file only for relevant files."
                 ),
             }
-            runtime = workspace_manager.get(self._session_id)
             if runtime is not None:
                 files = runtime.list_data_files(max_files=5)
                 result["user_workspace"] = {
@@ -233,6 +298,13 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
             log.warning("[agent] workspace_status failed: %s", e)
             return f"Unable to check workspace status: {e}"
 
+    def _get_skill_def(self, name: str) -> SkillDef | None:
+        runtime = self._workspace_runtime()
+        loader = SkillLoader(
+            workspace_dir=(runtime.workdir / ".baa" / "skills") if runtime else None,
+        )
+        return loader.load_all().get(name)
+
     # ── Agent loop ────────────────────────────────────────────────────────────
 
     def run(
@@ -240,6 +312,9 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         user_message: str,
         history: List[Dict],
         command: str = "",
+        activation: ActivationContext | None = None,
+        active_skill: SkillDef | None = None,
+        active_command: CommandDef | None = None,
         last_reasoning: str = "",
         last_prompt_tokens: int = 0,
         ppt_title: str = "",
@@ -252,6 +327,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         dashboard_widgets: Optional[List] = None,
         temp_prompt: str = "",
         data_context: Optional[Dict] = None,
+        recovery_context: str = "",
     ) -> Iterator[Dict]:
         """
         Yields event dicts consumed by the Flask SSE stream:
@@ -268,8 +344,27 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
           {"type": "done"}
           {"type": "error",         "message": str}
         """
+        if activation is None:
+            legacy = (command or "").strip()
+            activation = ActivationContext(
+                internal_action=legacy if legacy in INTERNAL_ACTIONS else "",
+                command_name=legacy if legacy and legacy not in INTERNAL_ACTIONS else "",
+            )
+        if active_skill is not None and active_skill.name != activation.skill_name:
+            raise ValueError("active Skill does not match activation context")
+        if active_command is not None and active_command.name != activation.command_name:
+            raise ValueError("active Command does not match activation context")
+
+        command_name = activation.command_name
+        action_name = activation.internal_action
+        # Existing guarded business-flow branches use one policy token. It is
+        # derived from typed activation rather than accepting a mixed namespace.
+        command = command_name or action_name
         _msg_preview = user_message[:120].replace("\n", " ")
-        log.info("[run] command=%r  msg=%r  model=%s", command or "(none)", _msg_preview, self.model)
+        log.info(
+            "[run] activation=%s:%r  msg=%r  model=%s",
+            activation.kind, activation.name or "(none)", _msg_preview, self.model,
+        )
 
         # ── Confirm fast-paths: bypass LLM entirely ───────────────────────────
         if command == "ppt_confirm":
@@ -362,16 +457,44 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                 return
 
         system = get_system_prompt()
-        if command and command in COMMAND_HINTS:
-            system += f"\n\n[ACTIVE COMMAND: /{command}]\n{COMMAND_HINTS[command]}"
-        elif command:
-            skill = get_skill(command)
-            if skill is not None:
-                skill_prompt = render_skill_prompt(skill, user_message)
-                system += f"\n\n[ACTIVE ANALYSIS SKILL: /{skill.name}]\n{skill_prompt}"
+        skill_activation = None
+        trusted_skill_name = ""
+        if command_name:
+            command_def = active_command
+            if command_def is None:
+                command_def = CommandLoader().load().get(command_name)
+            if command_def is None:
+                raise ValueError(f"unknown slash command: {command_name}")
+            command_dispatch = CommandDispatcher(
+                CommandRegistry((command_def,)),
+            ).prepare_agent_turn(command_def.name, user_message)
+            command_prompt = command_dispatch.prompt
+            if command_prompt:
+                system += f"\n\n[ACTIVE COMMAND: /{command_def.name}]\n{command_prompt}"
+        elif activation.skill_name:
+            skill = active_skill or self._get_skill_def(activation.skill_name)
+            if skill is None:
+                raise ValueError(f"unknown analysis skill: {activation.skill_name}")
+            skill_activation = SkillExecutor().activate(skill, user_message)
+            # Only project-bundled Skills may unlock their audited proposal
+            # tool. A workspace/user Skill with the same name cannot inherit it.
+            if skill.source == "builtin":
+                trusted_skill_name = skill.name
+                if skill.name in {"export", "report", "ppt", "dashboard"}:
+                    command = skill.name
+            system += (
+                f"\n\n[ACTIVE ANALYSIS SKILL: {skill.name}]\n"
+                f"{skill_activation.prompt}"
+            )
         # Per-session temporary instruction (user-set, this conversation only).
         if temp_prompt:
             system += build_temp_prompt_section(temp_prompt)
+        if recovery_context:
+            system += (
+                "\n\n[RECOVERED ACTIVE CONTEXT]\n"
+                + recovery_context[:6000]
+                + "\n[END RECOVERED ACTIVE CONTEXT]"
+            )
         if data_context:
             selected_tables = data_context.get("tables") or []
             table_lines = "\n".join(
@@ -573,9 +696,13 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
 
             _available_tools = filter_tools_for_turn(
                 get_tools_with_mcp(self._mcp_manager),
-                command=command,
+                activation=activation,
+                skill_allowed_tools=(
+                    skill_activation.requested_tools if skill_activation else None
+                ),
+                trusted_skill=trusted_skill_name,
                 has_data_source=_has_sources,
-                has_workspace=workspace_manager.get(self._session_id) is not None,
+                has_workspace=self._workspace_runtime() is not None,
                 include_mcp=True,
             )
             call_kwargs: Dict[str, Any] = dict(
@@ -779,12 +906,17 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
 
                     # Pre-dispatch validation: catch obviously bad args early
                     # A4：把 workspace 的 allowed_roots 传入，让 SQL 路径白名单生效
-                    _ws_runtime = workspace_manager.get(self._session_id)
-                    _allowed_roots = (
-                        _ws_runtime.allowed_roots_for_sql()
-                        if _ws_runtime is not None else None
+                    _ws_runtime = self._workspace_runtime()
+                    _workspace_auth = self._workspace_path_authorization()
+                    # A fixed but unavailable Workspace must fail closed instead
+                    # of silently falling back to global uploads/Information.
+                    _allowed_roots = [] if self._workspace_id and _workspace_auth is None else None
+                    _val_err = _validate_tool_args(
+                        name,
+                        args,
+                        allowed_roots=_allowed_roots,
+                        workspace_authorization=_workspace_auth,
                     )
-                    _val_err = _validate_tool_args(name, args, allowed_roots=_allowed_roots)
                     if _val_err:
                         log.warning("[tool] %s: arg validation failed: %s", name, _val_err)
                         # Inject as a synthetic tool result so the model can self-correct
@@ -822,6 +954,9 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                         "workspace_read_file":   f"读取工作目录文件: {args.get('file_path', '?')}",
                         "workspace_write_file":  f"写入工作目录文件: {args.get('file_path', '?')}",
                         "workspace_edit_file":   f"编辑工作目录文件: {args.get('file_path', '?')}",
+                        "workspace_delete_file": f"删除工作目录文件: {args.get('file_path', '?')}",
+                        "workspace_move_file":   f"移动工作目录文件: {args.get('source_path', '?')} → {args.get('destination_path', '?')}",
+                        "workspace_bash":        f"执行受限工作目录命令: {args.get('command', '')[:80]}",
                         "workspace_command":     f"执行受控操作: {args.get('operation', '?')}",
                         "structured_output":     "校验结构化输出",
                         "load_analysis_skill":  f"加载分析技能: {args.get('name', '?')}",
@@ -833,7 +968,6 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                         "team_delete":          f"删除分析团队: {args.get('name', '?')}",
                         "send_message":         f"发送团队消息: {args.get('recipient', '?')}",
                         "agent_delegate":       f"委派分析任务: {args.get('description', '')[:40]}",
-                        "workspace_checkpoint": f"工作区检查点: {args.get('action', '?')} {args.get('name', '')}",
                         "plan_complete":        "提交结构化计划",
                     }
                     full_display = display_map.get(name, name)
@@ -936,6 +1070,8 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                 },
                                 "parallel": True,
                             },
+                            session_id=self._session_id,
+                            runtime=_ws_runtime,
                         )
                         return tc, name, envelope, events
 
@@ -1015,7 +1151,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                             tool_result, tool_sources = self._tool_query_data_with_refs(args.get("sql", ""))
                             yield {"type": "data_refs", "refs": tool_sources}
                         elif name == "run_analysis":
-                            tool_result = self._tool_run_analysis(
+                            tool_result = yield from self._tool_run_analysis_with_jobs(
                                 analysis_name=args.get("analysis_name", ""),
                                 sql=args.get("sql", ""),
                                 target_column=args.get("target_column", ""),
@@ -1180,6 +1316,21 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                             f"Widget '{_w.get('title', '?')}' has empty SQL."
                                         )
                                         continue
+                                    _guard_error = _validate_tool_args(
+                                        "query_data",
+                                        {"sql": _wsql},
+                                        allowed_roots=(
+                                            [] if self._workspace_id
+                                            and self._workspace_path_authorization() is None
+                                            else None
+                                        ),
+                                        workspace_authorization=self._workspace_path_authorization(),
+                                    )
+                                    if _guard_error:
+                                        _sql_errors.append(
+                                            f"Widget '{_w.get('title', '?')}': {_guard_error}"
+                                        )
+                                        continue
                                     # Wrap in a subquery with LIMIT 1 to keep validation cheap
                                     _test_sql = (
                                         f"SELECT * FROM ({_wsql}) AS __val__ LIMIT 1"
@@ -1227,15 +1378,17 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                 "type": "ask_user",
                                 "question": args.get("question", ""),
                                 "options": args.get("options", []),
-                                "multi_select": bool(args.get("multi_select", False)),
+                                "multi_select": _as_bool_arg(args.get("multi_select", False)),
                             }
                             tool_result = "问题已展示给用户，等待用户回答后继续。请不要输出任何文字。"
                             _outline_proposed = True
                         elif name.startswith("workspace_"):
-                            ws_tools = WorkspaceToolService(self._session_id)
+                            ws_tools = WorkspaceToolService(
+                                self._session_id, workspace_id=self._workspace_id,
+                            )
                             if name == "workspace_glob":
                                 tool_result = ws_tools.glob(
-                                    args.get("pattern", "**/*"), args.get("path", "uploads"),
+                                    args.get("pattern", "**/*"), args.get("path", ""),
                                     args.get("max_results", 20), args.get("cursor", 0),
                                 )
                             elif name == "workspace_grep":
@@ -1253,6 +1406,22 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                 tool_result = ws_tools.edit_file(
                                     args.get("file_path", ""), args.get("old_string", ""), args.get("new_string", "")
                                 )
+                            elif name == "workspace_delete_file":
+                                tool_result = ws_tools.delete_file(
+                                    args.get("file_path", ""), confirm=_as_bool_arg(args.get("confirm", False))
+                                )
+                            elif name == "workspace_move_file":
+                                tool_result = ws_tools.move_file(
+                                    args.get("source_path", ""), args.get("destination_path", ""),
+                                    confirm_overwrite=_as_bool_arg(args.get("confirm_overwrite", False)),
+                                )
+                            elif name == "workspace_bash":
+                                tool_result = WorkspaceBashService(
+                                    self._session_id, workspace_id=self._workspace_id,
+                                ).execute(
+                                    args.get("command", ""), args.get("timeout", 30),
+                                    confirm=_as_bool_arg(args.get("confirm", False)),
+                                )
                             elif name == "workspace_command":
                                 tool_result = ws_tools.command(
                                     args.get("operation", ""), args.get("path", "."),
@@ -1263,13 +1432,15 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                         elif name == "structured_output":
                             tool_result = structured_output(args.get("output"), args.get("required_fields"))
                         elif name == "load_analysis_skill":
-                            skill = get_skill(args.get("name", ""))
+                            skill = self._get_skill_def(args.get("name", ""))
                             tool_result = (
                                 {"name": skill.name, "description": skill.description, "prompt": skill.prompt}
                                 if skill else "ERROR: unknown analysis skill"
                             )
                         elif name.startswith("task_"):
-                            task_store = WorkspaceTaskStore(self._session_id)
+                            task_store = WorkspaceTaskStore(
+                                self._session_id, workspace_id=self._workspace_id,
+                            )
                             if name == "task_create":
                                 tool_result = task_store.create(
                                     args.get("title", ""), args.get("description", ""), args.get("assignee", ""),
@@ -1286,7 +1457,9 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                     add_blocks=args.get("add_blocks"), add_blocked_by=args.get("add_blocked_by"),
                                 )
                         elif name in {"team_create", "team_delete", "send_message", "agent_delegate"}:
-                            team_store = WorkspaceTeamStore(self._session_id)
+                            team_store = WorkspaceTeamStore(
+                                self._session_id, workspace_id=self._workspace_id,
+                            )
                             if name == "team_create":
                                 tool_result = team_store.create(
                                     args.get("name", ""), args.get("description", ""), args.get("members", [])
@@ -1325,11 +1498,6 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                     max_tokens=min(4000, self._max_output_tokens),
                                 )
                                 tool_result = response.choices[0].message.content or ""
-                        elif name == "workspace_checkpoint":
-                            tool_result = WorkspaceToolService(self._session_id).checkpoint(
-                                args.get("action", ""), args.get("name", ""),
-                                args.get("patterns"), bool(args.get("confirm", False)),
-                            )
                         elif name == "plan_complete":
                             tool_result = {
                                 "summary": args.get("summary", ""),
@@ -1373,6 +1541,8 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                             "elapsed_seconds": round(time.monotonic() - _tool_t0, 3),
                             "args_preview": _args_preview,
                         },
+                        session_id=self._session_id,
+                        runtime=self._workspace_runtime(),
                     )
                     yield {
                         "type": "tool_audit",
@@ -1385,6 +1555,10 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                         "artifacts": envelope.artifacts,
                         "elapsed_seconds": envelope.debug.get("elapsed_seconds"),
                         "args_preview": envelope.debug.get("args_preview", {}),
+                        "recovery": {
+                            "sql": str(args.get("sql", ""))[:4000]
+                            if name in {"query_data", "create_analysis_table"} else "",
+                        },
                     }
                     messages.append({
                         "role": "tool",

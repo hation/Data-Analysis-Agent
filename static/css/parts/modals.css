@@ -251,6 +251,91 @@
   margin-bottom: 20px;
 }
 
+/* ── Durable Job history (B5, Vue island) ─────────────────────────── */
+.job-history-modal { width: min(760px, 94vw); padding: 22px; }
+.job-history-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.job-history-head .modal-title { margin: 0 0 3px; }
+.job-history-summary { color: var(--color-text-dim); font-size: var(--fs-xs); }
+.job-history-actions { display: flex; align-items: center; gap: 8px; }
+.job-history-close {
+  width: 32px; height: 32px; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--color-text-soft); font-size: 24px;
+  line-height: 1; cursor: pointer;
+}
+.job-history-close:hover { background: var(--color-surface-2); color: var(--color-text); }
+.job-history-list { display: flex; flex-direction: column; gap: 10px; max-height: min(66vh, 620px); overflow-y: auto; padding-right: 3px; }
+.job-history-card {
+  padding: 13px 14px; border: 1px solid var(--color-border); border-left: 4px solid #3b82f6;
+  border-radius: var(--radius-md); background: var(--color-surface-2);
+}
+.job-history-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.job-history-card-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; color: var(--color-text); }
+.job-history-time { margin-top: 3px; color: var(--color-text-dim); font-size: var(--fs-2xs); }
+.job-history-card .job-progress { margin-top: 10px; }
+.job-history-card-succeeded { border-left-color: #22c55e; }
+.job-history-card-failed, .job-history-card-canceled { border-left-color: #ef4444; }
+.job-history-artifacts { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+.job-history-artifacts-title {
+  flex-basis: 100%; color: var(--text-muted); font-size: 12px; font-weight: 600;
+}
+.job-history-artifact { padding: 4px 8px; border-radius: var(--radius-sm); background: rgba(34, 197, 94, .1); color: #15803d; font-size: var(--fs-xs); }
+.job-history-empty, .job-history-error { padding: 48px 16px; text-align: center; color: var(--color-text-dim); }
+.job-history-error { color: var(--color-danger); }
+.job-history-expand {
+  margin-top: 9px; padding: 4px 0; border: 0; background: transparent;
+  color: var(--color-primary); font-size: var(--fs-xs); cursor: pointer;
+}
+.job-history-detail { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--color-border); }
+.job-history-steps { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.job-history-step {
+  display: grid; grid-template-columns: 18px minmax(120px, 1fr) auto auto;
+  align-items: center; gap: 7px; color: var(--color-text-soft); font-size: var(--fs-xs);
+}
+.job-history-step-state { color: #22c55e; }
+.job-history-step-running .job-history-step-state { color: #3b82f6; }
+.job-history-step-failed .job-history-step-state, .job-history-step-error { color: var(--color-danger); }
+.job-history-step-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-history-step-tool { color: var(--color-text-dim); font-size: var(--fs-2xs); }
+.job-history-step-duration { color: var(--color-text-dim); font-variant-numeric: tabular-nums; }
+.job-history-step-error { grid-column: 2 / -1; }
+.job-history-answer { margin-top: 10px; padding: 10px; border-radius: var(--radius-sm); background: var(--color-surface-1); }
+.job-history-answer-title { margin-bottom: 5px; font-weight: 650; color: var(--color-text); font-size: var(--fs-xs); }
+.job-history-answer-body { max-height: 220px; overflow: auto; white-space: pre-wrap; color: var(--color-text-soft); font-size: var(--fs-xs); line-height: 1.55; }
+@media (max-width: 640px) {
+  .job-history-modal { width: 96vw; padding: 17px; }
+  .job-history-head { align-items: center; }
+  .job-history-actions { gap: 5px; }
+  .job-history-actions .btn-sm { padding: 5px 8px; font-size: var(--fs-2xs); }
+}
+
+/* ── Workspace checkpoints ───────────────────────────────────────── */
+.checkpoint-modal { width: min(720px, 94vw); padding: 22px; }
+.checkpoint-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.checkpoint-head .modal-title { margin-bottom: 3px; }
+.checkpoint-sub, .checkpoint-card-main span, .checkpoint-card-main small { color: var(--color-text-dim); font-size: var(--fs-xs); }
+.checkpoint-workspace { display: flex; flex-direction: column; gap: 4px; margin: 14px 0; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--color-surface-2); color: var(--color-text-soft); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.checkpoint-create { display: grid; grid-template-columns: minmax(180px, 1fr) 145px auto; gap: 8px; margin-bottom: 12px; }
+.checkpoint-create input, .checkpoint-create select, .checkpoint-confirm input { min-width: 0; padding: 7px 9px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text); }
+.checkpoint-list { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }
+.checkpoint-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface-2); }
+.checkpoint-card-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.checkpoint-card-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.checkpoint-empty { padding: 36px 14px; text-align: center; color: var(--color-text-dim); }
+.checkpoint-notice { margin: 8px 0; color: var(--color-success); font-size: var(--fs-sm); }
+.checkpoint-error { margin: 8px 0; color: var(--color-danger); font-size: var(--fs-sm); }
+.checkpoint-confirm { margin-top: 14px; padding: 13px; border: 1px solid var(--color-danger); border-radius: var(--radius-sm); background: var(--color-danger-soft); }
+.checkpoint-confirm p { margin: 6px 0 10px; color: var(--color-text-soft); font-size: var(--fs-sm); }
+.checkpoint-confirm input { width: 100%; box-sizing: border-box; }
+.checkpoint-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.checkpoint-mode-list { display: grid; gap: 8px; margin-top: 12px; }
+.checkpoint-mode { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-2); cursor: pointer; }
+.checkpoint-mode.active { border-color: var(--color-primary); box-shadow: 0 0 0 2px rgba(59, 130, 246, .1); }
+.checkpoint-mode input { margin-top: 3px; }
+.checkpoint-mode span { display: grid; gap: 3px; }
+.checkpoint-mode b { color: var(--color-text); font-size: var(--fs-sm); }
+.checkpoint-mode small { color: var(--color-text-mute); line-height: 1.45; }
+@media (max-width: 640px) { .checkpoint-create { grid-template-columns: 1fr; } }
+
 /* ── 模型设置弹窗：更宽 + 可拖拽调整大小 ──────────────────────── */
 #ov-settings .modal {
   width: 680px;
@@ -628,6 +713,54 @@
   font-variant-numeric: tabular-nums;
 }
 .global-loading-cancel { white-space: nowrap; }
+.global-confirm-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 3100;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, .48);
+  backdrop-filter: blur(5px);
+}
+.global-confirm-panel {
+  width: min(92vw, 460px);
+  padding: 22px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: 0 24px 64px rgba(15, 23, 42, .3);
+}
+.global-confirm-title {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--fs-xl);
+  line-height: 1.35;
+}
+.global-confirm-message {
+  margin: 10px 0 0;
+  color: var(--color-text-soft);
+  font-size: var(--fs-md);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.global-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+}
+.global-confirm-danger {
+  color: #fff;
+  border-color: #dc2626;
+  background: #dc2626;
+}
+.global-confirm-danger:hover {
+  border-color: #b91c1c;
+  background: #b91c1c;
+}
 .session-load-mask[hidden] { display: none; }
 .session-load-mask {
   position: fixed; inset: 0; z-index: 180;
@@ -1071,4 +1204,103 @@
 .ws-empty {
   font-size: 12px; color: var(--color-fg-muted);
   padding: 6px 0;
+}
+.ws-known { margin: 4px 0 14px; }
+.ws-known-title {
+  margin-bottom: 8px;
+  color: var(--color-fg);
+  font-size: 13px;
+  font-weight: 700;
+}
+.ws-known-list {
+  display: flex;
+  max-height: 220px;
+  overflow-y: auto;
+  flex-direction: column;
+  gap: 7px;
+}
+.ws-known-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface-1);
+}
+.ws-known-item.current { border-color: var(--color-primary); }
+.ws-known-item.unavailable { opacity: .65; }
+.ws-known-main { min-width: 0; flex: 1; }
+.ws-known-actions { display: flex; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.ws-known-remove { color: #dc2626; }
+.ws-known-remove:hover:not(:disabled) { background: #fef2f2; color: #b91c1c; }
+.ws-known-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-fg);
+  font-size: 13px;
+  font-weight: 650;
+}
+.ws-known-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-size: 10px;
+}
+.ws-known-path {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--color-fg-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-known-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--color-fg-muted);
+  font-size: 11px;
+}
+.ws-known-missing, .ws-known-error { color: #dc2626; }
+.ws-rename-editor {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ws-rename-input {
+  min-width: 0;
+  height: 30px;
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--color-primary);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-fg);
+  font-size: 13px;
+}
+.ws-rename-error { margin-top: 4px; color: #dc2626; font-size: 11px; }
+.ws-known-empty, .ws-known-error {
+  padding: 8px 0;
+  color: var(--color-fg-muted);
+  font-size: 12px;
+}
+.job-activation {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+}
+.job-activation-skill {
+  background: color-mix(in srgb, #8b5cf6 12%, var(--color-surface));
+  color: #7c3aed;
 }

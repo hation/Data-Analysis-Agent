@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import logging
+log = logging.getLogger(__name__)
 import threading
 import uuid
 from datetime import datetime
@@ -23,8 +25,12 @@ def _now() -> str:
 
 
 class WorkspaceTaskStore:
-    def __init__(self, session_id: str) -> None:
-        runtime = workspace_manager.get(session_id)
+    def __init__(self, session_id: str, *, workspace_id: str | None = None) -> None:
+        fixed_id = (
+            str(workspace_manager.workspace_id_for_session(session_id) or "")
+            if workspace_id is None else str(workspace_id or "")
+        )
+        runtime = workspace_manager.get_by_workspace(fixed_id) if fixed_id else None
         if runtime is None:
             raise WorkspaceTaskError("no workspace is mounted for this session")
         self._path: Path = runtime.meta_dir / "agent_tasks.json"
@@ -38,6 +44,7 @@ class WorkspaceTaskStore:
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
+            log.debug("[tasks] task store load failed: %s", exc)
             raise WorkspaceTaskError(f"task store is unreadable: {exc}") from exc
         return data if isinstance(data, list) else []
 

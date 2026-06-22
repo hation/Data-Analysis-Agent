@@ -4,6 +4,7 @@ import traceback
 import uuid
 import os
 import re
+import threading
 from pathlib import Path
 from urllib.parse import quote
 
@@ -12,19 +13,21 @@ from werkzeug.utils import secure_filename
 
 from .state import session_manager, datasource_config_manager
 from data.connector import ExcelDataSource, CSVDataSource, SQLDataSource, GoogleSheetsDataSource, HTTPAPIDataSource
+from data.sources.excel import excel_requires_job, parse_excel_job
+from infrastructure.paths import data_path
 
 log = logging.getLogger(__name__)
 
 bp = Blueprint("datasource", __name__)
 
-# 自动识别环境，Vercel 用 /tmp，本地用项目目录
-if os.environ.get("VERCEL"):
-    UPLOAD_DIR = Path("/tmp/uploads")
-else:
-    UPLOAD_DIR = Path(__file__).parent.parent / "uploads"
+# Source mode retains <project>/uploads; frozen/override mode uses user data.
+UPLOAD_DIR = data_path("uploads")
 
 UPLOAD_DIR.mkdir(exist_ok=True)
+PARSED_EXCEL_DIR = UPLOAD_DIR / ".parsed_excel"
+PARSED_EXCEL_DIR.mkdir(exist_ok=True)
 ALLOWED_EXTS = {".xlsx", ".xls", ".csv"}
+_finalize_lock = threading.RLock()
 
 
 def _allowed(filename: str) -> bool:
@@ -106,6 +109,7 @@ def upload_file(sid: str):
 
     sess = session_manager.get_or_create(sid)
     added = []
+    pending_jobs = []
     errors = []
 
     for f in files:
@@ -122,8 +126,23 @@ def upload_file(sid: str):
         log.info("[upload] saved → %s  (display: %s)", save_path, display_name)
 
         try:
-            source = CSVDataSource(str(save_path), display_name) if ext == ".csv" \
-                     else ExcelDataSource(str(save_path), display_name)
+            if ext != ".csv" and excel_requires_job(str(save_path)):
+                db_path = PARSED_EXCEL_DIR / f"{sid[:8]}_{uuid.uuid4().hex}.duckdb"
+                job_id = sess.job_runner.create(
+                    lambda ctx, source_path=str(save_path), target=str(db_path), name=display_name:
+                        parse_excel_job(ctx, source_path, target, name),
+                    job_type="excel_parse",
+                    label=display_name,
+                )
+                pending_jobs.append({
+                    "id": job_id,
+                    "type": "excel_parse",
+                    "source_name": display_name,
+                    "status": "queued",
+                })
+                continue
+
+            source = CSVDataSource(str(save_path), display_name) if ext == ".csv" else ExcelDataSource(str(save_path), display_name)
             schema = source.get_schema()
             source_id = sess.add_source(source)
             added.append({"source_id": source_id, "source_name": display_name,
@@ -132,17 +151,75 @@ def upload_file(sid: str):
             log.error("[upload] FAILED %s: %s\n%s", f.filename, exc, traceback.format_exc())
             errors.append(f"{f.filename}: {exc}")
 
-    if not added:
+    if not added and not pending_jobs:
         return jsonify({"error": "; ".join(errors) or "文件解析失败"}), 400
 
+    payload = {
+        "ok": True,
+        "added": added,
+        "pending_jobs": pending_jobs,
+        "sources": sess.list_sources(),
+        # convenience: first added file's info (backward-compat for old frontend)
+        "source_name": added[0]["source_name"] if added else pending_jobs[0]["source_name"],
+        "schema_preview": added[0]["schema_preview"] if added else "",
+        "errors": errors,
+    }
+    return jsonify(payload), (202 if pending_jobs else 200)
+
+
+@bp.post("/api/session/<sid>/upload-jobs/<jid>/finalize")
+def finalize_upload_job(sid: str, jid: str):
+    """Attach a completed Excel parse job to the session exactly once."""
+    sess = session_manager.get_or_create(sid)
+    job = sess.job_runner.get_status(jid)
+    if job is None or job.get("type") != "excel_parse":
+        return jsonify({"error": "Excel 解析任务不存在"}), 404
+    if job.get("status") != "succeeded":
+        return jsonify({
+            "error": "Excel 解析任务尚未完成",
+            "status": job.get("status"),
+        }), 409
+
+    result = job.get("result") or {}
+    try:
+        db_path = Path(result["db_path"]).resolve()
+        db_path.relative_to(PARSED_EXCEL_DIR.resolve())
+    except (KeyError, OSError, RuntimeError, ValueError):
+        return jsonify({"error": "解析任务产物路径无效"}), 500
+    if not db_path.is_file():
+        return jsonify({"error": "解析任务产物已不存在"}), 410
+
+    with _finalize_lock:
+        existing = next(
+            (entry for entry in sess._sources
+             if getattr(entry.get("source"), "_excel_job_id", None) == jid),
+            None,
+        )
+        if existing is None:
+            try:
+                source = ExcelDataSource.from_database(
+                    result["file_path"], result["filename"], str(db_path)
+                )
+                source._excel_job_id = jid
+                source_id = sess.add_source(source)
+                existing = {"id": source_id, "source": source}
+            except Exception as exc:
+                log.error("[upload] finalize FAILED job=%s: %s\n%s", jid, exc, traceback.format_exc())
+                return jsonify({"error": f"挂载解析结果失败：{exc}"}), 500
+
+    source = existing["source"]
+    schema = source.get_schema()
+    added = [{
+        "source_id": existing["id"],
+        "source_name": source.name,
+        "schema_preview": schema,
+    }]
     return jsonify({
         "ok": True,
         "added": added,
         "sources": sess.list_sources(),
-        # convenience: first added file's info (backward-compat for old frontend)
-        "source_name": added[0]["source_name"],
-        "schema_preview": added[0]["schema_preview"],
-        "errors": errors,
+        "source_name": source.name,
+        "schema_preview": schema,
     })
 
 
@@ -187,6 +264,30 @@ def list_sources(sid: str):
     return jsonify({"sources": sess.list_sources()})
 
 
+@bp.post("/api/session/<sid>/sources/<source_id>/analysis-tables")
+def set_sql_analysis_tables(sid: str, source_id: str):
+    """Persist the server-enforced analysis scope for one remote SQL source."""
+    sess = session_manager.get(sid)
+    if not sess:
+        return jsonify({"error": "session not found"}), 404
+    entry = next((item for item in sess._sources if item["id"] == source_id), None)
+    if not entry:
+        return jsonify({"error": "data source not found"}), 404
+    source = entry["source"]
+    if not isinstance(source, SQLDataSource):
+        return jsonify({"error": "only SQL data sources support table selection"}), 400
+    tables = (request.json or {}).get("tables", [])
+    if not isinstance(tables, list):
+        return jsonify({"error": "tables must be a list"}), 400
+    try:
+        selected = source.set_analysis_tables(tables)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    sess._combined_schema_cache = None
+    sess._invalidate_merged_source()
+    return jsonify({"ok": True, "source_id": source_id, "tables": selected})
+
+
 @bp.post("/api/session/<sid>/sources/<source_id>/toggle")
 def toggle_source(sid: str, source_id: str):
     """Toggle a data source active/inactive (multi-select)."""
@@ -220,14 +321,29 @@ def preview_data(sid: str):
         return jsonify({"error": "no data source"}), 404
     # Merge tables from all active sources; tag each with source_id + source_name
     all_tables = []
+    requires_table_selection = False
     for entry in active:
         src = entry["source"]
+        selectable = isinstance(src, SQLDataSource)
+        selected_names = set(src.get_analysis_tables()) if selectable else set()
+        requires_table_selection = requires_table_selection or selectable
         for tbl in src.get_preview():
             tbl["source_id"]   = entry["id"]
             tbl["source_name"] = getattr(src, "name", "")
+            # Selecting an analysis scope only makes sense for remote SQL
+            # catalogs, which may expose thousands of very large tables.
+            # Uploaded/local files are already a deliberate bounded selection.
+            tbl["selectable_for_analysis"] = selectable
+            tbl["selected_for_analysis"] = (
+                selectable and tbl.get("name") in selected_names
+            )
             all_tables.append(tbl)
     primary = active[0]["source"]
-    return jsonify({"source_name": getattr(primary, "name", ""), "tables": all_tables})
+    return jsonify({
+        "source_name": getattr(primary, "name", ""),
+        "tables": all_tables,
+        "requires_table_selection": requires_table_selection,
+    })
 
 
 @bp.get("/api/session/<sid>/preview-table")
@@ -356,4 +472,3 @@ def list_datasource_configs():
 def delete_datasource_config(ds_type: str):
     datasource_config_manager.delete(ds_type)
     return jsonify({"ok": True})
-

@@ -1,6 +1,9 @@
 """Shared singletons — import from here, never instantiate elsewhere."""
+import logging
 import sys
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -9,6 +12,7 @@ from LLM.llm_config_manager import get_config_manager
 from LLM.mcp_config_manager import get_mcp_config_manager
 from data.datasource_config_manager import get_datasource_config_manager
 from data.workspace import workspace_manager
+from infrastructure.paths import data_path
 
 
 class _ChartStore:
@@ -48,13 +52,14 @@ def _resolve_writable_dir(preferred: Path) -> Path:
         test.write_text("ok")
         test.unlink()
         return preferred
-    except OSError:
+    except OSError as e:
+        log.warning("[state] chart store dir %s not writable, using fallback: %s", preferred, e)
         fallback = Path("/tmp") / "baa" / preferred.name
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback
 
 
-_CHARTS_DIR = _resolve_writable_dir(Path(__file__).parent.parent / "outputs" / "charts")
+_CHARTS_DIR = _resolve_writable_dir(data_path("outputs", "charts"))
 
 session_manager: SessionManager = SessionManager()
 config_manager = get_config_manager()

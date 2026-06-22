@@ -7,6 +7,10 @@ here: exposure, data requirements, concurrency, and future JobRunner policy.
 """
 from __future__ import annotations
 
+import logging
+
+log = logging.getLogger(__name__)
+
 from dataclasses import dataclass
 from typing import Iterable, Literal
 
@@ -20,6 +24,7 @@ class ToolSpec:
     category: ToolCategory
     default_exposed: bool = True
     commands: frozenset[str] = frozenset()
+    skills: frozenset[str] = frozenset()
     requires_data_source: bool = False
     concurrency_safe: bool = False
     execution_mode: ExecutionMode = "sync"
@@ -27,12 +32,15 @@ class ToolSpec:
     requires_runtime: bool = False
     requires_workspace: bool = False
 
-    def is_exposed(self, command: str, has_data_source: bool, has_workspace: bool = False) -> bool:
+    def is_exposed(
+        self, command: str, has_data_source: bool, has_workspace: bool = False,
+        skill: str = "",
+    ) -> bool:
         if self.requires_data_source and not has_data_source:
             return False
         if self.requires_workspace and not has_workspace:
             return False
-        return self.default_exposed or command in self.commands
+        return self.default_exposed or command in self.commands or skill in self.skills
 
 
 class ToolRegistry:
@@ -58,11 +66,12 @@ class ToolRegistry:
 
     def exposed_names(
         self, command: str = "", has_data_source: bool = False, has_workspace: bool = False,
+        skill: str = "",
     ) -> set[str]:
         return {
             spec.name
             for spec in self._specs.values()
-            if spec.is_exposed(command or "", has_data_source, has_workspace)
+            if spec.is_exposed(command or "", has_data_source, has_workspace, skill or "")
         }
 
     def validate_schema_names(self, schemas: Iterable[dict]) -> None:
@@ -87,6 +96,7 @@ def _spec(
     category: ToolCategory,
     *,
     commands: tuple[str, ...] = (),
+    skills: tuple[str, ...] = (),
     default_exposed: bool = True,
     requires_data_source: bool = False,
     concurrency_safe: bool = False,
@@ -100,6 +110,7 @@ def _spec(
         category=category,
         default_exposed=default_exposed,
         commands=frozenset(commands),
+        skills=frozenset(skills),
         requires_data_source=requires_data_source,
         concurrency_safe=concurrency_safe,
         execution_mode=execution_mode,
@@ -118,7 +129,7 @@ BUILTIN_TOOL_REGISTRY = ToolRegistry([
     _spec("query_data", "read", requires_data_source=True, requires_runtime=True),
     _spec(
         "run_analysis", "analysis", requires_data_source=True,
-        execution_mode="auto", job_threshold="analysis_rows_gte_1000", requires_runtime=True,
+        execution_mode="auto", job_threshold="time_series_rows_gte_1000", requires_runtime=True,
     ),
     _spec("select_chart", "analysis", requires_data_source=True, concurrency_safe=True),
     _spec("generate_chart", "output", requires_data_source=True, requires_runtime=True),
@@ -132,15 +143,15 @@ BUILTIN_TOOL_REGISTRY = ToolRegistry([
     _spec("export_report", "output", default_exposed=False, commands=("report_confirm",), requires_runtime=True),
     _spec(
         "propose_excel_export", "interaction", default_exposed=False,
-        commands=("export", "excel_revise"),
+        commands=("export", "excel_revise"), skills=("export",),
     ),
     _spec(
         "propose_report_outline", "interaction", default_exposed=False,
-        commands=("report", "report_revise"),
+        commands=("report", "report_revise"), skills=("report",),
     ),
     _spec(
         "propose_ppt_outline", "interaction", default_exposed=False,
-        commands=("ppt", "ppt_revise"),
+        commands=("ppt", "ppt_revise"), skills=("ppt",),
     ),
     _spec(
         "generate_ppt", "output", default_exposed=False,
@@ -150,7 +161,7 @@ BUILTIN_TOOL_REGISTRY = ToolRegistry([
     _spec("set_ppt_color_scheme", "write"),
     _spec(
         "propose_dashboard_outline", "interaction", default_exposed=False,
-        commands=("dashboard", "dashboard_revise"),
+        commands=("dashboard", "dashboard_revise"), skills=("dashboard",),
     ),
     _spec(
         "generate_dashboard", "output", default_exposed=False,
@@ -162,6 +173,9 @@ BUILTIN_TOOL_REGISTRY = ToolRegistry([
     _spec("workspace_read_file", "read", requires_runtime=True),
     _spec("workspace_write_file", "write", requires_runtime=True),
     _spec("workspace_edit_file", "write", requires_runtime=True),
+    _spec("workspace_delete_file", "write", requires_runtime=True),
+    _spec("workspace_move_file", "write", requires_runtime=True),
+    _spec("workspace_bash", "write", requires_runtime=True, requires_workspace=True),
     _spec("workspace_command", "read", requires_runtime=True),
     _spec("structured_output", "interaction", default_exposed=False),
     _spec("load_analysis_skill", "read"),
@@ -173,7 +187,6 @@ BUILTIN_TOOL_REGISTRY = ToolRegistry([
     _spec("team_delete", "write", requires_runtime=True, requires_workspace=True),
     _spec("send_message", "write", requires_runtime=True, requires_workspace=True),
     _spec("agent_delegate", "analysis", requires_runtime=True, requires_workspace=True),
-    _spec("workspace_checkpoint", "write", requires_runtime=True, requires_workspace=True),
     _spec("plan_complete", "interaction", default_exposed=False),
 ])
 

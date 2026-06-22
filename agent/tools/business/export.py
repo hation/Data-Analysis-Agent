@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """Mixin: export-oriented tools (Excel, Word report, PPT, Dashboard)."""
 import datetime
+import logging
+log = logging.getLogger(__name__)
 import os
 import re
 import uuid
+from infrastructure.paths import data_path
 
 
 class ExportToolsMixin:
@@ -19,22 +22,21 @@ class ExportToolsMixin:
         A5 起：
           - 工作目录已挂载 → 写到 runtime.artifacts_dir（= workdir/artifacts/），
             产出物跟随用户项目，方便管理。
-          - 未挂载 → 保持旧行为，写到 <项目根>/outputs/exports/（向后兼容）。
+          - 未挂载 → 写到 data_root/outputs/exports/；源码模式仍是项目根。
 
         返回绝对路径字符串。目录会被 mkdir 创建（artifacts_dir 在挂载时已创建，
         outputs/exports 在这里 makedirs）。
         """
-        from ...prompts import _PROJ_ROOT
         # 延迟导入避免循环依赖
         try:
-            from data.workspace import workspace_manager
-            runtime = workspace_manager.get(self._session_id)
+            runtime = self._workspace_runtime()
             if runtime is not None:
                 return str(runtime.artifacts_dir)
-        except Exception:
+        except Exception as e:
+            log.warning("[export] workspace runtime unavailable: %s", e)
             pass
-        # 默认：项目根 outputs/exports
-        export_dir = os.path.join(_PROJ_ROOT, "outputs", "exports")
+        # 默认：统一运行数据根下的 outputs/exports
+        export_dir = str(data_path("outputs", "exports"))
         os.makedirs(export_dir, exist_ok=True)
         return export_dir
 
@@ -42,7 +44,9 @@ class ExportToolsMixin:
         """构建下载链接，带上 session_id 让路由能从 artifacts_dir 找文件。"""
         sid = getattr(self, "_session_id", "") or ""
         if sid:
-            return f"/api/export/{filename}?sid={sid}"
+            workspace_id = getattr(self, "_workspace_id", "") or ""
+            suffix = f"&workspace_id={workspace_id}" if workspace_id else ""
+            return f"/api/export/{filename}?sid={sid}{suffix}"
         return f"/api/export/{filename}"
 
     # ── Excel export ──────────────────────────────────────────────────────────
@@ -70,6 +74,7 @@ class ExportToolsMixin:
         try:
             export_to_excel(self.data_source, tables, filepath)
         except Exception as exc:
+            log.warning("[export] excel export failed: %s", exc)
             return f"❌ 导出失败：{exc}"
 
         download_url = self._build_download_url(safe_name)
@@ -119,6 +124,7 @@ class ExportToolsMixin:
                 title, sections, filepath, chart_htmls=chart_htmls
             )
         except Exception as exc:
+            log.warning("[export] report generation failed: %s", exc)
             return f"❌ 报告生成失败：{exc}"
 
         n_charts = len(chart_htmls)
@@ -177,7 +183,7 @@ class ExportToolsMixin:
         return {"title": title, "slides": slides, "markdown": markdown}
 
     def _tool_generate_ppt(self, title: str, slides: list, filename: str = "") -> str:
-        from .prompts import _PROJ_ROOT
+        from ...prompts import _PROJ_ROOT
 
         try:
             from PPT import MckEngine
@@ -187,6 +193,7 @@ class ExportToolsMixin:
                 LIGHT_BLUE, LIGHT_GREEN, LIGHT_ORANGE, LIGHT_RED,
             )
         except ImportError as exc:
+            log.debug("[export] PPT module import error: %s", exc)
             return (
                 f"❌ PPT 模块加载失败（请确认已安装 python-pptx 和 lxml）：{exc}\n\n"
                 "运行：`pip install python-pptx lxml`"
@@ -357,6 +364,7 @@ class ExportToolsMixin:
             try:
                 method(**params)
             except Exception as exc:
+                log.warning("[export] slide %d (%s) render failed: %s", i, layout, exc)
                 return f"❌ 第 {i} 张幻灯片（{layout}）生成失败：{exc}"
 
         import re as _re
@@ -375,6 +383,7 @@ class ExportToolsMixin:
         try:
             eng.save(filepath)
         except Exception as exc:
+            log.warning("[export] PPT save failed: %s", exc)
             return f"❌ PPT 文件保存失败：{exc}"
 
         download_url = self._build_download_url(safe_name)
@@ -402,25 +411,21 @@ class ExportToolsMixin:
         widgets: list,
         color_scheme: str = "",
     ) -> str:
-        import requests as _req
         color_scheme = color_scheme or getattr(self, "ppt_color_scheme", "mckinsey")
-        payload = {
-            "session_id": self._session_id,
-            "name": name,
-            "widgets": widgets,
-            "color_scheme": color_scheme,
-        }
         try:
-            import os as _os
-            port = int(_os.environ.get("PORT") or _os.environ.get("AGENT_PORT", 5001))
-            resp = _req.post(
-                f"http://127.0.0.1:{port}/api/dashboard/generate",
-                json=payload,
-                timeout=120,
+            from api.dashboard import build_dashboard
+            data = build_dashboard(
+                self.data_source,
+                self._chart_store,
+                session_id=self._session_id,
+                workspace_id=self._workspace_id,
+                name=name,
+                widgets_spec=widgets,
+                color_scheme=color_scheme,
+                workspace_authorization=self._workspace_path_authorization(),
             )
-            resp.raise_for_status()
-            data = resp.json()
         except Exception as exc:
+            log.warning("[export] dashboard generation failed: %s", exc)
             return f"❌ 看板生成失败：{exc}"
 
         dashboard_id = data.get("dashboard_id", "")

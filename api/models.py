@@ -1,6 +1,10 @@
 """Blueprint: LLM model management — /api/models/*"""
+import logging
+
 from flask import Blueprint, request, jsonify
 from .state import config_manager, session_manager
+
+log = logging.getLogger(__name__)
 
 bp = Blueprint("models", __name__)
 
