@@ -208,15 +208,10 @@ jobs:
           rm -rf release-upload
           mkdir -p release-upload
           while IFS= read -r file; do
-            artifact="${file#release-artifacts/}"
-            artifact="${artifact%%/*}"
             base="$(basename "$file")"
             case "$base" in
               *.exe|*.dmg)
                 dest="release-upload/$base"
-                ;;
-              *.json)
-                dest="release-upload/${artifact}-${base}"
                 ;;
               *)
                 continue
@@ -228,9 +223,9 @@ jobs:
               exit 2
             fi
             cp "$file" "$dest"
-          done < <(find release-artifacts -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.json' \) | sort)
+          done < <(find release-artifacts -type f \( -name '*.exe' -o -name '*.dmg' \) | sort)
 
-          mapfile -t files < <(find release-upload -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.json' \) | sort)
+          mapfile -t files < <(find release-upload -type f \( -name '*.exe' -o -name '*.dmg' \) | sort)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "No release files found." >&2
             exit 2
@@ -240,6 +235,12 @@ jobs:
             gh release edit "$RELEASE_TAG" \
               --title "$RELEASE_TAG" \
               --notes "$notes"
+            while IFS= read -r asset; do
+              case "$asset" in
+                *.exe|*.dmg) ;;
+                *) gh release delete-asset "$RELEASE_TAG" "$asset" -y ;;
+              esac
+            done < <(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
             gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
           else
             gh release create "$RELEASE_TAG" "${files[@]}" $DRAFT_FLAG \

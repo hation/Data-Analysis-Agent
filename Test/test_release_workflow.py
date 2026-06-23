@@ -77,11 +77,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("Unsigned Business Analytics Agent desktop test packages", text)
         self.assertIn("gh release create", text)
 
-    def test_release_prefixes_report_assets_and_can_rerun(self):
+    def test_release_uploads_only_installers_and_can_rerun(self):
         text = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn('dest="release-upload/${artifact}-${base}"', text)
         self.assertIn("Duplicate release asset name after normalization", text)
+        self.assertIn("find release-artifacts -type f \\( -name '*.exe' -o -name '*.dmg' \\)", text)
         self.assertIn('gh release view "$RELEASE_TAG"', text)
+        self.assertIn('gh release delete-asset "$RELEASE_TAG" "$asset" -y', text)
         self.assertIn('gh release upload "$RELEASE_TAG" "${files[@]}" --clobber', text)
 
 
