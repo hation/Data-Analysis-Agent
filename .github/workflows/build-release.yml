@@ -205,12 +205,45 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          files="$(find release-artifacts -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.json' \) | sort)"
-          if [ -z "$files" ]; then
+          rm -rf release-upload
+          mkdir -p release-upload
+          while IFS= read -r file; do
+            artifact="${file#release-artifacts/}"
+            artifact="${artifact%%/*}"
+            base="$(basename "$file")"
+            case "$base" in
+              *.exe|*.dmg)
+                dest="release-upload/$base"
+                ;;
+              *.json)
+                dest="release-upload/${artifact}-${base}"
+                ;;
+              *)
+                continue
+                ;;
+            esac
+            if [ -e "$dest" ]; then
+              echo "Duplicate release asset name after normalization: $(basename "$dest")" >&2
+              echo "Source: $file" >&2
+              exit 2
+            fi
+            cp "$file" "$dest"
+          done < <(find release-artifacts -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.json' \) | sort)
+
+          mapfile -t files < <(find release-upload -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.json' \) | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
             echo "No release files found." >&2
             exit 2
           fi
-          gh release create "$RELEASE_TAG" $files $DRAFT_FLAG \
-            --title "$RELEASE_TAG" \
-            --target ${{ github.sha }} \
-            --notes "Unsigned Business Analytics Agent desktop test packages. Do not treat these artifacts as signed or notarized releases."
+          notes="Unsigned Business Analytics Agent desktop test packages. Do not treat these artifacts as signed or notarized releases."
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TAG" \
+              --notes "$notes"
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${files[@]}" $DRAFT_FLAG \
+              --title "$RELEASE_TAG" \
+              --target ${{ github.sha }} \
+              --notes "$notes"
+          fi
