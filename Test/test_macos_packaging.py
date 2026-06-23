@@ -36,6 +36,14 @@ class MacOSPackagingTests(unittest.TestCase):
         self.assertNotIn("requirements.txt", script)
         self.assertIn("--allow-contained-symlinks", script)
 
+    def test_dmg_creation_retries_transient_resource_busy_failures(self):
+        script = BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("create_dmg() {", script)
+        self.assertIn("for attempt in 1 2 3", script)
+        self.assertIn('rm -f "$DMG" "$DMG".*', script)
+        self.assertIn("hdiutil info", script)
+        self.assertIn('lsof +D "$DMG_ROOT"', script)
+
     def test_spec_declares_macos_bundle_metadata(self):
         spec = PYINSTALLER_SPEC.read_text(encoding="utf-8")
         self.assertIn('if sys.platform == "darwin":', spec)

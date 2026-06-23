@@ -152,12 +152,36 @@ python3 "$PROJECT_ROOT/packaging/audit_artifact.py" \
   "$DMG_ROOT" \
   --allow-contained-symlinks \
   --report "$REPORTS/dmg-root-audit.json"
-hdiutil create \
-  -volname "Business Analytics Agent" \
-  -srcfolder "$DMG_ROOT" \
-  -ov \
-  -format UDZO \
-  "$DMG"
+
+create_dmg() {
+  local attempt
+  local log="$REPORTS/hdiutil-create.log"
+  for attempt in 1 2 3; do
+    rm -f "$DMG" "$DMG".*
+    sync
+    if hdiutil create \
+      -volname "Business Analytics Agent" \
+      -srcfolder "$DMG_ROOT" \
+      -ov \
+      -format UDZO \
+      "$DMG" >"$log" 2>&1; then
+      cat "$log"
+      return 0
+    fi
+    cat "$log" >&2
+    if [[ "$attempt" -eq 3 ]]; then
+      hdiutil info >&2 || true
+      if command -v lsof >/dev/null 2>&1; then
+        lsof +D "$DMG_ROOT" >&2 || true
+      fi
+      return 1
+    fi
+    echo "hdiutil create failed on attempt $attempt; retrying..." >&2
+    sleep $((attempt * 5))
+  done
+}
+
+create_dmg
 python3 "$PROJECT_ROOT/packaging/audit_artifact.py" \
   "$DMG" \
   --report "$REPORTS/dmg-audit.json"
