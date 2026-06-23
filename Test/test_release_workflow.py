@@ -19,7 +19,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "build-macos:",
             "release:",
             "needs: [build-windows, build-macos]",
-            "if: startsWith(github.ref, 'refs/tags/v')",
+            "Resolve release tag",
+            'gh release create "$RELEASE_TAG"',
+            "--target ${{ github.sha }}",
         ):
             self.assertIn(required, text)
 
