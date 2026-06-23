@@ -1,15 +1,7 @@
 # Version Development Log
 
-## Development Update — June 19, 2026
-
-- Added a logical system Workspace for safe access to `uploads`, `outputs`, and `MCP` without moving them.
-- Added bounded summaries, paginated listings, on-demand search, and chunked reads to prevent prompt bloat.
-- MCP dependency/build directories are skipped; the Workspace index stores metadata only, never file contents.
-- Consolidated runtime infrastructure under `infrastructure/` and user guides/assets under `Information/`.
-
----
-
-## v1.0
+## v1.0 LTS
+**June/20/2026**
 - The project officially released its first stable version
 - Supports basic data upload, viewing, analysis, and visualization
 - Supports common data sources such as Excel, CSV, and databases
