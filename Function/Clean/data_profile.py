@@ -1,4 +1,6 @@
 """Data profiling: missing values, numeric stats, distribution charts."""
+import logging
+log = logging.getLogger(__name__)
 import numpy as np
 import pandas as pd
 from typing import List, Optional, Tuple
@@ -114,7 +116,7 @@ def profile(
                 margin=dict(l=40, r=20, t=60, b=40),
             )
             charts.append(fig.to_html(full_html=True, include_plotlyjs="cdn"))
-        except Exception:
-            pass  # chart is optional; don't break profiling
+        except Exception as e:
+            log.warning("[data_profile] 分布图生成异常: %s", e)
 
     return "\n".join(lines), charts

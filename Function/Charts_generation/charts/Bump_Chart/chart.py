@@ -16,6 +16,8 @@
         options={"title": "产品排名变化"}
     )
 """
+import logging
+log = logging.getLogger(__name__)
 import os
 import sys
 from pathlib import Path
@@ -190,6 +192,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -270,7 +273,8 @@ def generate(
         try:
             x_order_dt = pd.to_datetime(x_order, errors="raise")
             ordered_x = list(x_order.iloc[x_order_dt.argsort()])
-        except Exception:
+        except Exception as e:
+            log.warning("[chart] 图表生成异常: %s", e)
             ordered_x = list(x_order)
 
         # topn_anchor 模式：只保留 anchor_x 时点 top_n 实体
@@ -367,11 +371,12 @@ def generate(
             range=[max_rank + 0.5, 0.5]
         )
 
-        chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+        chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
         if not chart_html or len(chart_html) < 100:
             return ChartResult(warnings=["图表生成失败"])
 
     except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
         return ChartResult(warnings=[f"图表生成失败: {e}"])
 
     html = _build_html(title, "bump_chart", "plotly", _DATA_FMT, _DESC, chart_html)

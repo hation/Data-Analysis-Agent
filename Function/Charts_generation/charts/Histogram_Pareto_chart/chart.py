@@ -10,6 +10,8 @@
 统一接口:
     generate(df, mapping, options) -> ChartResult
 """
+import logging
+log = logging.getLogger(__name__)
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -129,6 +131,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -143,6 +146,7 @@ def generate(
         primary_color = color_scheme.get("primary", "#003D7A")
         secondary_color = color_scheme.get("secondary", "#0084D1")
     except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
         warnings.append(f"配色方案加载失败: {e}，使用默认麦肯锡蓝")
         primary_color = "#003D7A"
         secondary_color = "#0084D1"
@@ -176,7 +180,7 @@ def generate(
             hovertemplate="<b>%{x}</b><br>频次: %{y}<extra></extra>"
         )
 
-        chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+        chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
         html = _build_html(title, "histogram_chart", "plotly", _DATA_FMT, _DESC, chart_html)
 
         meta = {
@@ -273,7 +277,7 @@ def generate(
             )
         )
 
-        chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+        chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
         html = _build_html(title, "histogram_chart", "plotly", _DATA_FMT, _DESC, chart_html)
 
         meta = {

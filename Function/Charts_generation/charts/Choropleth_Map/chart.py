@@ -9,6 +9,8 @@
 面量图用区域填充颜色的深浅表示数值大小。
 白色底图，给定地区数据则改变该地区的颜色，颜色深浅代表数据大小。
 """
+import logging
+log = logging.getLogger(__name__)
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -154,6 +156,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -215,6 +218,7 @@ def generate(
             # 四舍五入到两位小数
             val = round(val, 2)
         except Exception as e:
+            log.warning("[chart] 图表生成异常: %s", e)
             warnings_.append(f"行数据解析失败: {e}")
             continue
 

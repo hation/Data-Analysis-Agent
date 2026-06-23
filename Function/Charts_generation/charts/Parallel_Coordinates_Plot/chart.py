@@ -16,6 +16,8 @@
         options={"title": "国家发展指标", "color_col": "地区"}
     )
 """
+import logging
+log = logging.getLogger(__name__)
 import os
 import sys
 from pathlib import Path
@@ -118,6 +120,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -155,6 +158,7 @@ def generate(
         for dim in dims:
             df[dim] = pd.to_numeric(df[dim], errors="coerce")
     except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
         return ChartResult(warnings=[f"数据转换失败: {e}"])
 
     # 删除包含NaN的行
@@ -167,6 +171,7 @@ def generate(
         color_scheme = get_color_scheme(color_scheme_name)
         primary_color = color_scheme.get("primary", "#0084D1")
     except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
         warnings.append(f"配色方案加载失败: {e}")
         primary_color = "#0084D1"
 
@@ -303,11 +308,12 @@ def generate(
             )
         )
 
-        chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+        chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
         if not chart_html or len(chart_html) < 100:
             return ChartResult(warnings=["图表生成失败"])
 
     except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
         return ChartResult(warnings=[f"图表生成失败: {e}"])
 
     html = _build_html(title, "parallel_coordinates_plot", "plotly", _DATA_FMT, _DESC, chart_html)

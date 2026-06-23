@@ -251,8 +251,8 @@ def _build_markdown(
     if groupby_column and not breakdown_df.empty:
         lines.append(f"### 分组维度（`{groupby_column}`）")
         lines.append(
-            f"交叉分析结果已存储于 `analysis_breakdown` 表，"
-            f"可用于生成堆叠柱状图等可视化。"
+            "交叉分析结果已存储于 `analysis_breakdown` 表，"
+            "可用于生成堆叠柱状图等可视化。"
         )
         lines.append("")
 

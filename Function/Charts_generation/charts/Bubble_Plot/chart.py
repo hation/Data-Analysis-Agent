@@ -5,6 +5,8 @@
 感知排名: ★★★★☆
 支持: x/y/size/color 四维气泡图
 """
+import logging
+log = logging.getLogger(__name__)
 import sys
 from pathlib import Path
 from typing import Dict, Any, List
@@ -113,6 +115,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["需要 df 或 excel_path"])
@@ -139,6 +142,7 @@ def generate(
         positive_color = color_scheme.get("positive", "#7FBA00")
         negative_color = color_scheme.get("negative", "#DA3B01")
     except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
         warnings.append(f"配色方案加载失败: {e}，使用默认配色")
         scheme_colors = MCKINSEY_COLORS
         primary_color = MCK_PRIMARY
@@ -230,7 +234,8 @@ def generate(
     for idx, r in df.iterrows():
         try:
             xv = float(r[_x]); yv = float(r[_y])
-        except Exception:
+        except Exception as e:
+            log.warning("[chart] 图表生成异常: %s", e)
             continue
 
         # 计算气泡像素直径
@@ -239,7 +244,8 @@ def generate(
             try:
                 raw = float(r[_sz])
                 px = int(18 + (raw - slo) / (shi - slo) * 62)
-            except Exception:
+            except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 px = 40
 
         # 颜色处理
@@ -254,7 +260,8 @@ def generate(
                 try:
                     cnum = float(r[_c])
                     color_value = cnum  # 存储数值，让 visualMap 处理颜色映射
-                except Exception:
+                except Exception as e:
+                    log.warning("[chart] 图表生成异常: %s", e)
                     color_value = (cmin + cmax) / 2 if cmin is not None and cmax is not None else 0
 
         # tooltip 内容：名字 → x → y → size
@@ -369,7 +376,8 @@ def generate(
         for idx, r in df.iterrows():
             try:
                 float(r[_x]); float(r[_y])
-            except Exception:
+            except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 continue
             if row_idx >= len(rows):
                 break

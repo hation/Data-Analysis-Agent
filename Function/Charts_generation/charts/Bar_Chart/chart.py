@@ -19,6 +19,8 @@
     print(result.warnings)
     print(result.meta)
 """
+import logging
+log = logging.getLogger(__name__)
 import os
 import sys
 from pathlib import Path
@@ -152,6 +154,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -173,10 +176,10 @@ def generate(
     _y = _auto_col(df, y_col, "y", "数值", "value", "amount", "num", "count")
 
     if _x is None or _x not in df.columns:
-        warnings.append(f"找不到必填字段 [x]")
+        warnings.append("找不到必填字段 [x]")
         return ChartResult(warnings=warnings)
     if _y is None or _y not in df.columns:
-        warnings.append(f"找不到必填字段 [y]")
+        warnings.append("找不到必填字段 [y]")
         return ChartResult(warnings=warnings)
 
     # 数据处理
@@ -213,7 +216,7 @@ def generate(
                       plot_bgcolor="white", paper_bgcolor="white",
                       margin=dict(l=40, r=40, t=60, b=40))
 
-    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
     html = _build_html(title, "bar_chart", "plotly", _DATA_FMT, _DESC, chart_html)
 
     meta = {

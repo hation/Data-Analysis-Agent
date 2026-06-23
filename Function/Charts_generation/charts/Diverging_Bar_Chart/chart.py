@@ -179,7 +179,7 @@ def generate(
     )
     
     if _item is None or _item not in df.columns:
-        return ChartResult(warnings=[f"找不到必填字段 [item]"])
+        return ChartResult(warnings=["找不到必填字段 [item]"])
 
     # 检测数据格式
     fmt = _detect_format(df, _item)
@@ -197,7 +197,7 @@ def generate(
         )
         
         if _value is None or _value not in df.columns:
-            return ChartResult(warnings=[f"找不到必填字段 [value]"])
+            return ChartResult(warnings=["找不到必填字段 [value]"])
 
         return _generate_single_column(df, _item, _value, title, warnings)
 
@@ -271,7 +271,7 @@ def _generate_single_column(df: pd.DataFrame, item_col: str, value_col: str, tit
 
     fig.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.5)
 
-    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
     html = _build_html(title, "diverging_bar", "plotly", _DATA_FMT, "单列模式", chart_html)
 
     meta = {
@@ -374,7 +374,7 @@ def _generate_multi_column(df: pd.DataFrame, item_col: str, title: str, warnings
     # 添加零线
     fig.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.5)
 
-    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
     html = _build_html(title, "diverging_bar", "plotly", _DATA_FMT, "多列模式（李克特量表）", chart_html)
 
 

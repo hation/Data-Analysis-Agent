@@ -20,7 +20,7 @@ Time_Series_ARIMA
 import warnings
 import numpy as np
 import pandas as pd
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 warnings.filterwarnings("ignore")
 
@@ -273,7 +273,7 @@ def _build_md(
         "### 模型概况",
         "| 指标 | 值 |", "|------|-----|",
         f"| 模型类型 | {model_type}({p},{d},{q}) |",
-        f"| 选阶方法 | auto_arima stepwise（AIC，全量数据） |",
+        "| 选阶方法 | auto_arima stepwise（AIC，全量数据） |",
         f"| 时间列 | `{time_col or '（行序号）'}` |",
         f"| 训练样本数 | {len(series)} |",
         f"| 预测步数 | {steps} |",
@@ -331,6 +331,7 @@ def run(
     target_column:  str,
     groupby_column: Optional[str] = None,
     n_deciles:      int = 0,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str]:
     """
     Parameters
@@ -347,6 +348,8 @@ def run(
     metrics_df   → analysis_metrics
     markdown     : Markdown 分析报告
     """
+    progress = progress_callback or (lambda _pct, _message="": None)
+    progress(5, "正在校验 ARIMA 输入")
     try:
         import pmdarima  # noqa — 提前检测依赖
     except ImportError:
@@ -379,18 +382,22 @@ def run(
         raise ValueError(f"有效数据点不足（{len(series)} 个），ARIMA 至少需要 8 个数据点。")
 
     # ── 平稳性检验 ─────────────────────────────────────────────────────────
+    progress(20, "正在检验序列平稳性")
     stationary, adf_pval = _adf_test(series)
 
     # ── 确定阶数 ───────────────────────────────────────────────────────────
+    progress(35, "正在选择 ARIMA 阶数")
     if manual_order is not None:
         order = manual_order
     else:
         order = _auto_order(series)   # stepwise，全量数据，AIC 最优
 
     # ── 拟合 & 预测 ────────────────────────────────────────────────────────
+    progress(65, "正在拟合 ARIMA 并预测")
     fitted, forecast_df, residuals, model_result = _fit_predict(series, order, steps)
 
     # ── 结果表 ─────────────────────────────────────────────────────────────
+    progress(88, "正在整理预测结果")
     result_df    = _build_result_df(series, fitted, forecast_df)
     breakdown_df = _build_breakdown_df(residuals)
     metrics_df   = _build_metrics_df(series, fitted, model_result, order, adf_pval)
@@ -408,4 +415,5 @@ def run(
         series      = series,
     )
 
+    progress(98, "ARIMA 分析计算完成")
     return result_df, breakdown_df, metrics_df, markdown

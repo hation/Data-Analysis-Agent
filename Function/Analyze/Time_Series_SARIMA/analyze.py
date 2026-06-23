@@ -19,7 +19,7 @@ Time_Series_SARIMA
 import warnings
 import numpy as np
 import pandas as pd
-from typing import Optional, Tuple, List
+from typing import Callable, Optional, Tuple, List
 
 warnings.filterwarnings("ignore")
 
@@ -337,7 +337,7 @@ def _build_md(target_col, time_col, order, seasonal_order, adf_pval,
         "### 模型概况",
         "| 指标 | 值 |", "|------|-----|",
         f"| 模型类型 | SARIMA({p},{d},{q})({P},{D},{Q})[{s}] |",
-        f"| 选阶方法 | auto_arima stepwise（AIC，全量数据） |",
+        "| 选阶方法 | auto_arima stepwise（AIC，全量数据） |",
         f"| 时间列 | `{time_col or '（行序号）'}` |",
         f"| 训练样本数 | {len(series)} |",
         f"| 季节周期 s | {period} |",
@@ -390,6 +390,7 @@ def run(
     target_column:  str,
     groupby_column: Optional[str] = None,
     n_deciles:      int = 0,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str]:
     """
     Parameters
@@ -399,6 +400,8 @@ def run(
     groupby_column : 时间列名；或纯数字字符串表示季节周期（如 '12'）
     n_deciles      : 预测步数（默认 12）
     """
+    progress = progress_callback or (lambda _pct, _message="": None)
+    progress(5, "正在校验 SARIMA 输入")
     try:
         import pmdarima  # noqa
     except ImportError:
@@ -426,6 +429,7 @@ def run(
             time_col_hint = groupby_column
 
     # 检测时间列 & 准备序列
+    progress(15, "正在准备季节性序列")
     time_col = _detect_time_col(df, time_col_hint)
     series, freq_str = _prepare_series(df, time_col, target_column)
 
@@ -460,16 +464,20 @@ def run(
         period = 2
 
     # 平稳性
+    progress(28, "正在检验序列平稳性")
     stationary, adf_pval = _adf_test(series)
 
     # auto_arima stepwise 全量选阶
+    progress(42, "正在选择 SARIMA 阶数")
     order, seasonal_order = _auto_order(series, period)
     P, D, Q, s = seasonal_order
 
     # 拟合 & 预测
+    progress(68, "正在拟合 SARIMA 并预测")
     fitted, forecast_df, residuals, model_result, warmup = _fit_predict(series, order, seasonal_order, steps)
 
     # 结果表
+    progress(88, "正在整理预测和季节分解结果")
     result_df    = _build_result_df(series, fitted, forecast_df)
     breakdown_df = _seasonal_decompose(series, period)
     metrics_df   = _build_metrics_df(series, fitted, model_result, order, seasonal_order, adf_pval, period)
@@ -496,4 +504,5 @@ def run(
         period         = s if s > 1 else period,
     )
 
+    progress(98, "SARIMA 分析计算完成")
     return result_df, breakdown_df, metrics_df, markdown

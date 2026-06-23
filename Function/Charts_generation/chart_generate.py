@@ -13,6 +13,163 @@ logger = logging.getLogger(__name__)
 CHART_PROJECT = Path(__file__).parent
 sys.path.insert(0, str(CHART_PROJECT))
 
+# ── 本地静态资源路径（Flask 服务，通过 /static/vendor/ 访问）──────────────
+_PLOTLY_LOCAL = "/static/vendor/plotly.min.js"
+_PLOTLY_CDN   = "https://cdn.plot.ly/plotly-"          # 前缀，用于检测
+_PLOTLY_TAG   = f"<script src='{_PLOTLY_LOCAL}'></script>"
+
+
+def _normalize_chart_mapping(
+    chart_type: str,
+    mapping: Dict[str, Any],
+    columns=None,
+) -> Dict[str, Any]:
+    """Normalize common LLM field-mapping aliases before chart dispatch."""
+    normalized = dict(mapping or {})
+    chart_key = (chart_type or "").lower()
+    column_names = {str(col) for col in ([] if columns is None else columns)}
+
+    # Registry roles use singular names. Some models still emit common plotting
+    # aliases; normalize those centrally instead of making every chart support
+    # the same typo/variant independently.
+    aliases = {
+        "categories": "x",
+        "labels": "label",
+        "values": "value",
+    }
+    for alias, canonical in aliases.items():
+        if alias in normalized and canonical not in normalized:
+            normalized[canonical] = normalized[alias]
+
+    # Models occasionally serialize a column list as one comma-separated
+    # string. Only split when the full string is not itself a real column name.
+    for key in ("y", "value_cols", "dimensions"):
+        value = normalized.get(key)
+        if (
+            isinstance(value, str)
+            and "," in value
+            and value not in column_names
+        ):
+            normalized[key] = [part.strip() for part in value.split(",") if part.strip()]
+
+    # Wide tables sometimes arrive as series=[col1, col2, ...]. In all three
+    # charts a list means value columns, not the name of a grouping column.
+    series = normalized.get("series")
+    if isinstance(series, (list, tuple, set)):
+        series_items = list(series)
+        series_cols = [str(item) for item in series_items if isinstance(item, str)]
+
+        # A list of {name, color} objects is presentation metadata, not a field
+        # mapping. Ignore it; the actual columns must come from y/value_cols.
+        if len(series_cols) == len(series_items):
+            if chart_key in {"line_chart", "area_chart", "stacked_area_chart"}:
+                normalized.setdefault("y", series_cols)
+            else:
+                normalized.setdefault("value_cols", series_cols)
+        normalized.pop("series", None)
+
+    # Multi-series bar charts accept y=[...] as wide-format shorthand.
+    y_value = normalized.get("y")
+    if chart_key in {"grouped_bar_chart", "stacked_bar_chart"} and isinstance(
+        y_value, (list, tuple, set)
+    ):
+        normalized.setdefault("value_cols", list(y_value))
+
+    # Wide-format bars are defined by x + value_cols. Ignore invented long-
+    # format fields and literal color strings that are not SQL result columns;
+    # otherwise the module may silently render only the first numeric column.
+    if chart_key in {"grouped_bar_chart", "stacked_bar_chart"} and normalized.get("value_cols"):
+        for key in ("series", "color"):
+            value = normalized.get(key)
+            if isinstance(value, str) and value not in column_names:
+                normalized.pop(key, None)
+
+    return normalized
+
+
+def _inject_plotly(html: str) -> str:
+    """确保 HTML 内有本地 plotly 脚本，且脚本在所有 inline <script> 之前加载。
+
+    三种场景：
+    1. 已有 CDN plotly 外链（include_plotlyjs="cdn" 模式）→ 替换为本地路径。
+    2. 已有内联 plotly bundle（include_plotlyjs=True 模式）→ 不处理，保持原样。
+    3. 没有任何 plotly 脚本（include_plotlyjs=False 模式）→ 在 <head> 里注入本地
+       外链，并把所有 inline Plotly.newPlot/react 调用包裹进 DOMContentLoaded
+       回调，确保库加载完毕后再执行，消除竞态。
+    """
+    import re
+
+    # 场景 1：替换 CDN 外链为本地路径
+    html = re.sub(
+        r"<script[^>]+src=['\"]https?://cdn\.plot\.ly/plotly-[^'\"]+['\"][^>]*></script>",
+        _PLOTLY_TAG,
+        html,
+    )
+    html = re.sub(
+        r"<script[^>]+src=['\"]https?://cdn\.jsdelivr\.net/npm/plotly\.js[^'\"]*['\"][^>]*></script>",
+        _PLOTLY_TAG,
+        html,
+    )
+
+    # 场景 2/3：检查是否已经有 plotly 脚本（外链 src 或内联 bundle）
+    has_plotly_src    = bool(re.search(r"<script[^>]+plotly", html, re.IGNORECASE))
+    has_plotly_inline = "Plotly=" in html or "window.Plotly" in html  # 内联 bundle 特征
+
+    if not has_plotly_src and not has_plotly_inline:
+        # 场景 3：库缺失。
+        # 把外链注入到 </head> 前（或 <body> 前），保证在 inline script 之前被
+        # 解析器看到；同时把所有 inline Plotly.* 调用包进 DOMContentLoaded，
+        # 消除外链脚本尚未执行时 inline script 就运行的竞态。
+        if "</head>" in html:
+            html = html.replace("</head>", f"{_PLOTLY_TAG}\n</head>", 1)
+        elif "<body" in html:
+            html = re.sub(r"<body[^>]*>",
+                          lambda m: m.group(0) + f"\n{_PLOTLY_TAG}", html, count=1)
+        else:
+            html = _PLOTLY_TAG + "\n" + html
+
+        # 把 inline Plotly.newPlot / Plotly.react 包进 DOMContentLoaded，
+        # 确保外链 plotly.min.js 执行完毕后再调用。
+        # 匹配：<script>...Plotly.newPlot(...)...</script>（不含 src 属性）
+        def _wrap_inline(m: re.Match) -> str:
+            body = m.group(1)
+            if "Plotly." not in body:
+                return m.group(0)
+            return (
+                "<script>"
+                "document.addEventListener('DOMContentLoaded',function(){"
+                + body +
+                "});"
+                "</script>"
+            )
+
+        html = re.sub(
+            r"<script(?![^>]+\bsrc\b)[^>]*>([\s\S]*?)</script>",
+            _wrap_inline,
+            html,
+        )
+
+    return html
+
+
+# Injected into every chart HTML so it renders cleanly inside a dashboard iframe.
+_EMBED_STYLE = (
+    "<style>"
+    "html,body{margin:0!important;padding:0!important;overflow:hidden!important;"
+    "background:transparent!important;}"
+    ".chart-wrap{margin:8px!important;}"
+    ".plotly-graph-div[style*='height:100%']{min-height:360px!important;}"
+    ".desc{display:none!important;}"          # hide the data-format footer in iframes
+    "</style>"
+)
+
+def _inject_embed_style(html: str) -> str:
+    """Prepend embed-mode CSS so chart pages look clean inside dashboard iframes."""
+    if "</head>" in html:
+        return html.replace("</head>", _EMBED_STYLE + "\n</head>", 1)
+    # Fallback: prepend to body
+    return html.replace("<body", _EMBED_STYLE + "\n<body", 1)
+
 try:
     from charts.base import ChartResult, FieldMapping
 except ImportError as e:
@@ -74,6 +231,7 @@ def generate_chart(
         # 但对于列表类型（如dimensions）保持原样
         if mapping:
             mapping = {k: (v if isinstance(v, list) else (str(v) if v is not None else v)) for k, v in mapping.items()}
+        mapping = _normalize_chart_mapping(chart_type, mapping or {}, df.columns)
         
         # 合并 options，添加 color_scheme
         merged_options = options or {}
@@ -87,7 +245,7 @@ def generate_chart(
             if result.is_valid():
                 return {
                     "success": True,
-                    "html": result.html,
+                    "html": _inject_embed_style(_inject_plotly(result.html)),
                     "chart_type": chart_type,
                     "warnings": result.warnings,
                     "meta": result.meta
@@ -103,7 +261,7 @@ def generate_chart(
             if html.strip() and len(html) > 500:
                 return {
                     "success": True,
-                    "html": html,
+                    "html": _inject_embed_style(_inject_plotly(html)),
                     "chart_type": chart_type,
                     "warnings": getattr(result, "warnings", []),
                     "meta": getattr(result, "meta", {})
@@ -117,7 +275,7 @@ def generate_chart(
             if result.get("html"):
                 return {
                     "success": True,
-                    "html": result.get("html"),
+                    "html": _inject_embed_style(_inject_plotly(result.get("html"))),
                     "chart_type": chart_type
                 }
             else:

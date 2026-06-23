@@ -6,6 +6,8 @@
 统一接口:
     generate(df, mapping, options) -> ChartResult
 """
+import logging
+log = logging.getLogger(__name__)
 import os
 import sys
 from pathlib import Path
@@ -169,6 +171,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -190,7 +193,7 @@ def generate(
     _y = _auto_col(df, y_col, "y", "价格", "销售额", "value", "num")
 
     if _y is None or _y not in df.columns:
-        warnings.append(f"找不到必填字段 [y]")
+        warnings.append("找不到必填字段 [y]")
         return ChartResult(warnings=warnings)
 
     if _x and _x not in df.columns:
@@ -216,7 +219,7 @@ def generate(
         yaxis=dict(tickfont=dict(size=11))
     )
 
-    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
     html = _build_html(title, "violin_chart", "plotly", _DATA_FMT, _DESC, chart_html)
 
     meta = {

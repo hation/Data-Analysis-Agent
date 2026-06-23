@@ -16,6 +16,8 @@
         options={"title": "累积趋势"}
     )
 """
+import logging
+log = logging.getLogger(__name__)
 import os
 import sys
 from pathlib import Path
@@ -156,6 +158,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -310,13 +313,14 @@ def generate(
             )
         )
         
-        chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+        chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
         if not chart_html or len(chart_html) < 100:
             fig_empty = go.Figure()
             fig_empty.add_annotation(text="无有效数据", showarrow=False)
-            chart_html = pio.to_html(fig_empty, full_html=False, include_plotlyjs="cdn")
+            chart_html = pio.to_html(fig_empty, full_html=False, include_plotlyjs=False)
             warnings.append("图表数据为空")
     except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
         warnings.append(f"图表生成失败: {e}")
         return ChartResult(warnings=warnings)
     

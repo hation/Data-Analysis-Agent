@@ -1,3 +1,5 @@
+import logging
+log = logging.getLogger(__name__)
 import os
 import re
 import pandas as pd
@@ -23,7 +25,8 @@ def export_to_excel(datasource, tables: List[str], filepath: str) -> str:
                 sheet_name = re.sub(r'[\\/*?:\[\]]', '_', table)[:31]
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
                 written += 1
-            except Exception:
+            except Exception as e:
+                log.warning("[excel_export] 导出表 '%s' 失败: %s", table, e)
                 continue
 
     if written == 0:

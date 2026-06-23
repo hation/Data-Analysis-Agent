@@ -1,6 +1,8 @@
 """
 瀑布图 Waterfall Chart - 累积变化图表
 """
+import logging
+log = logging.getLogger(__name__)
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -79,6 +81,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -198,6 +201,7 @@ def generate(
             return ChartResult(warnings=["图表生成失败"])
 
     except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
         return ChartResult(warnings=[f"图表生成失败: {e}"])
 
     html = _build_html(title, chart_html)

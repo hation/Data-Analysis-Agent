@@ -39,6 +39,7 @@ uploads/
 *.swo
 .DS_Store
 Thumbs.db
+.workbuddy
 
 # ---- OS ----
 desktop.ini
@@ -50,7 +51,18 @@ desktop.ini
 LLM/llm_config.json
 LLM/mcp_config.json
 data/datasource_config.json
+.playwright-mcp
+docs/
+test.bat
+Notes for development.md
+
 
 # ---- Large assets that should not be tracked ----
 *.psd
 !Banner.psd
+
+# ---- Ongoingwork ----
+MCP/Flowchart
+MCP/mindmap
+MCP/playwright
+MCP/flowchart_server.py

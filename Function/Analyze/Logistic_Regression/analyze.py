@@ -457,7 +457,7 @@ def _build_md(
 
     if not binary:
         L.append(
-            f"  系数为多类 OvR 各向量的 L2 范数，反映该特征在所有类别中的综合判别力。"
+            "  系数为多类 OvR 各向量的 L2 范数，反映该特征在所有类别中的综合判别力。"
         )
 
     if top["coefficient"] > 0:

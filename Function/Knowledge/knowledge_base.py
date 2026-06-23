@@ -2,7 +2,7 @@
 """
 KnowledgeBase — SQLite-backed store for business knowledge.
 
-DB location: <project_root>/uploads/knowledge/knowledge.db
+DB location: <data_root>/uploads/knowledge/knowledge.db
   — relative to the project root so the path is portable across machines.
 
 Three tables:
@@ -14,15 +14,34 @@ Every table has an `enabled` column (1 = active, 0 = disabled).
 Only enabled records are injected into the Agent's System Prompt
 and returned by query_knowledge.
 """
+import logging
+log = logging.getLogger(__name__)
 import sqlite3
 import time
+import hashlib
+import json
+import math
+import os
+import re
 from pathlib import Path
+from infrastructure.paths import data_path
 
 # ── Path resolution ───────────────────────────────────────────────────────────
 # Walk up from this file: Function/Knowledge/ → Function/ → project root
-_PROJECT_ROOT = Path(__file__).parent.parent.parent
-_KB_DIR  = _PROJECT_ROOT / "uploads" / "knowledge"
+_KB_DIR  = data_path("uploads", "knowledge")
 _DB_PATH = _KB_DIR / "knowledge.db"
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError) as e:
+        log.debug("[knowledge_base] 环境变量转换失败: %s", e)
+        return default
+
+
+MIN_STRUCTURED_SCORE = _env_float("BAA_KB_MIN_STRUCTURED_SCORE", 0.40)
+MIN_CHUNK_SCORE = _env_float("BAA_KB_MIN_CHUNK_SCORE", 0.45)
 
 
 def _ensure_dir() -> None:
@@ -68,14 +87,156 @@ def _init_db(conn: sqlite3.Connection) -> None:
         CREATE VIRTUAL TABLE IF NOT EXISTS context_notes_fts
             USING fts5(topic, content, tags,
                        content=context_notes, content_rowid=id);
+
+        CREATE TABLE IF NOT EXISTS rag_chunks (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_type TEXT DEFAULT 'file',
+            source_name TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            content     TEXT NOT NULL,
+            embedding   TEXT NOT NULL,
+            enabled     INTEGER DEFAULT 1,
+            updated_at  REAL NOT NULL,
+            UNIQUE(source_type, source_name, chunk_index)
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_fts
+            USING fts5(source_name, content,
+                       content=rag_chunks, content_rowid=id);
     """)
     # Add enabled column to existing tables if upgrading from old schema
     for table in ("metrics", "business_rules", "context_notes"):
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN enabled INTEGER DEFAULT 1")
-        except sqlite3.OperationalError:
-            pass  # column already exists
+        except sqlite3.OperationalError as e:
+            log.debug("[knowledge_base] 列已存在，跳过 ALTER TABLE: %s", e)
+    for ddl in (
+        "ALTER TABLE rag_chunks ADD COLUMN source_type TEXT DEFAULT 'file'",
+        "ALTER TABLE rag_chunks ADD COLUMN enabled INTEGER DEFAULT 1",
+    ):
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError as e:
+            log.debug("[knowledge_base] 列已存在，跳过 DDL: %s", e)
     conn.commit()
+
+
+# ── Local vectorizer ──────────────────────────────────────────────────────────
+
+_EMBED_DIM = 384
+
+
+def _cjk_runs(text: str) -> list[str]:
+    return re.findall(r"[\u4e00-\u9fff]+", text or "")
+
+
+def _cjk_ngrams(text: str, sizes: tuple[int, ...] = (2, 3, 4)) -> list[str]:
+    grams: list[str] = []
+    for run in _cjk_runs(text):
+        chars = list(run)
+        for n in sizes:
+            grams.extend(
+                "".join(chars[i:i + n])
+                for i in range(max(0, len(chars) - n + 1))
+            )
+    return grams
+
+
+def _tokens(text: str) -> list[str]:
+    """Tokenize mixed Chinese/English text for local semantic-ish retrieval.
+
+    This intentionally avoids heavyweight dependencies.  It combines Latin words,
+    CJK unigrams, and short CJK n-grams so Chinese business terms still share
+    signal even when the user's wording is not an exact FTS match.
+    """
+    text = (text or "").lower()
+    words = re.findall(r"[a-z0-9_]+", text)
+    cjk_chars = re.findall(r"[\u4e00-\u9fff]", text)
+    cjk_runs = _cjk_runs(text)
+    return words + cjk_chars + cjk_runs + _cjk_ngrams(text)
+
+
+def _text_match_score(query: str, text: str) -> float:
+    """Lightweight lexical score tuned for Chinese business phrases."""
+    q = (query or "").lower().strip()
+    t = (text or "").lower()
+    if not q or not t:
+        return 0.0
+
+    score = 0.0
+    if q in t:
+        score += 1.2
+
+    q_words = set(re.findall(r"[a-z0-9_]+", q))
+    t_words = set(re.findall(r"[a-z0-9_]+", t))
+    if q_words:
+        score += 0.45 * len(q_words & t_words) / max(1, len(q_words))
+
+    q_grams = set(_cjk_ngrams(q, sizes=(2, 3)))
+    t_grams = set(_cjk_ngrams(t, sizes=(2, 3)))
+    if q_grams:
+        score += 0.9 * len(q_grams & t_grams) / max(1, len(q_grams))
+
+    # Short Chinese terms such as 成本、奖励、溢价 often matter a lot in BI
+    # questions; reward exact term overlap without requiring full phrase match.
+    q_terms = {run for run in _cjk_runs(q) if len(run) >= 2}
+    for term in q_terms:
+        if term in t:
+            score += min(0.3, len(term) / 20)
+
+    return round(score, 4)
+
+
+def _embed(text: str) -> list[float]:
+    vec = [0.0] * _EMBED_DIM
+    for tok in _tokens(text):
+        digest = hashlib.blake2b(tok.encode("utf-8"), digest_size=8).digest()
+        raw = int.from_bytes(digest, "big")
+        idx = raw % _EMBED_DIM
+        sign = -1.0 if raw & 1 else 1.0
+        vec[idx] += sign
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm:
+        vec = [round(v / norm, 6) for v in vec]
+    return vec
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    if not a or not b:
+        return 0.0
+    return sum(x * y for x, y in zip(a, b))
+
+
+def _chunk_text(text: str, max_chars: int = 1200, overlap: int = 160) -> list[str]:
+    """Split text into retrieval chunks with light overlap."""
+    text = re.sub(r"\r\n?", "\n", text or "")
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
+    chunks: list[str] = []
+    current = ""
+    for para in paragraphs:
+        if len(current) + len(para) + 2 <= max_chars:
+            current = f"{current}\n\n{para}".strip() if current else para
+            continue
+        if current:
+            chunks.append(current.strip())
+        if len(para) <= max_chars:
+            tail = current[-overlap:] if current and overlap else ""
+            current = f"{tail}\n\n{para}".strip() if tail else para
+        else:
+            start = 0
+            while start < len(para):
+                end = start + max_chars
+                piece = para[start:end].strip()
+                if piece:
+                    chunks.append(piece)
+                if end >= len(para):
+                    break
+                next_start = end - overlap
+                start = next_start if next_start > start else end
+            current = ""
+    if current:
+        chunks.append(current.strip())
+    return chunks
 
 
 class KnowledgeBase:
@@ -88,6 +249,17 @@ class KnowledgeBase:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         _init_db(self._conn)
+
+    def close(self) -> None:
+        """Close the SQLite connection explicitly.
+
+        The app normally keeps short-lived instances around only briefly, but
+        tests on Windows need this so temporary DB files can be removed.
+        """
+        try:
+            self._conn.close()
+        except Exception as e:
+            log.warning("[knowledge_base] 关闭数据库连接异常: %s", e)
 
     # ── internal helpers ──────────────────────────────────────────────────────
 
@@ -104,6 +276,9 @@ class KnowledgeBase:
         elif table == "context_notes":
             self._conn.execute(
                 "INSERT INTO context_notes_fts(context_notes_fts) VALUES('rebuild')")
+        elif table == "rag_chunks":
+            self._conn.execute(
+                "INSERT INTO rag_chunks_fts(rag_chunks_fts) VALUES('rebuild')")
         self._conn.commit()
 
     # ── enabled summary (for System Prompt injection) ─────────────────────────
@@ -122,18 +297,29 @@ class KnowledgeBase:
         notes = self._rows(self._conn.execute(
             "SELECT topic, content FROM context_notes WHERE enabled=1 ORDER BY topic"
         ))
+        rag_sources = self._rows(self._conn.execute(
+            """SELECT source_name, COUNT(*) AS chunks
+               FROM rag_chunks
+               WHERE enabled=1
+               GROUP BY source_name
+               ORDER BY source_name"""
+        ))
 
-        if not metrics and not rules and not notes:
+        if not metrics and not rules and not notes and not rag_sources:
             return ""
 
         parts: list[str] = ["## Business Knowledge Base (active entries)\n"]
 
         if metrics:
             parts.append("### Metric Definitions")
+            parts.append("(Call query_knowledge with the metric name or alias to get the full SQL template)")
             for m in metrics:
-                alias = f" ({m['alias']})" if m.get("alias") else ""
+                alias = m.get("alias") or ""
                 defn  = m.get("definition") or "—"
-                parts.append(f"- **{m['name']}**{alias}: {defn}")
+                has_sql = "✓ has SQL template" if m.get("sql_template") else ""
+                alias_part = f" | alias: {alias}" if alias else ""
+                sql_part   = f" | {has_sql}" if has_sql else ""
+                parts.append(f"- **{m['name']}**{alias_part}: {defn}{sql_part}")
 
         if rules:
             parts.append("\n### Business Rules")
@@ -145,6 +331,12 @@ class KnowledgeBase:
             parts.append("\n### Context Notes")
             for n in notes:
                 parts.append(f"- **{n['topic']}**: {n.get('content','')[:200]}")
+
+        if rag_sources:
+            parts.append("\n### Indexed Source Documents")
+            parts.append("(Call query_knowledge to retrieve relevant chunks from these sources)")
+            for src in rag_sources:
+                parts.append(f"- {src['source_name']} ({src['chunks']} chunks)")
 
         return "\n".join(parts)
 
@@ -302,51 +494,201 @@ class KnowledgeBase:
         return self._rows(self._conn.execute(
             "SELECT * FROM context_notes ORDER BY topic"))
 
+    # ── RAG document chunks ───────────────────────────────────────────────────
+
+    def index_document(self, source_name: str, text: str,
+                       source_type: str = "file", enabled: int = 1) -> dict[str, int]:
+        """Chunk and vector-index a source document for RAG retrieval."""
+        source_name = Path(source_name).name.strip()
+        chunks = _chunk_text(text)
+        self._conn.execute(
+            "DELETE FROM rag_chunks WHERE source_type=? AND source_name=?",
+            (source_type, source_name),
+        )
+        for idx, chunk in enumerate(chunks):
+            self._conn.execute(
+                """INSERT INTO rag_chunks
+                     (source_type, source_name, chunk_index, content, embedding,
+                      enabled, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    source_type,
+                    source_name,
+                    idx,
+                    chunk,
+                    json.dumps(_embed(chunk), separators=(",", ":")),
+                    enabled,
+                    self._now(),
+                ),
+            )
+        self._conn.commit()
+        self._rebuild_fts("rag_chunks")
+        return {"chunks": len(chunks)}
+
+    def delete_document_index(self, source_name: str, source_type: str = "file") -> int:
+        source_name = Path(source_name).name
+        cur = self._conn.execute(
+            "DELETE FROM rag_chunks WHERE source_type=? AND source_name=?",
+            (source_type, source_name),
+        )
+        self._conn.commit()
+        self._rebuild_fts("rag_chunks")
+        return cur.rowcount
+
+    def list_chunks(self, limit: int = 200) -> list[dict]:
+        return self._rows(self._conn.execute(
+            """SELECT id, source_type, source_name, chunk_index, content,
+                      enabled, updated_at
+               FROM rag_chunks
+               ORDER BY updated_at DESC LIMIT ?""",
+            (limit,),
+        ))
+
+    def _vector_rank_records(
+        self,
+        query: str,
+        records: list[dict],
+        text_getter,
+        limit: int,
+        min_score: float = 0.0,
+    ) -> list[dict]:
+        q_vec = _embed(query)
+        ranked: list[tuple[float, dict]] = []
+        for rec in records:
+            text = text_getter(rec)
+            score = _cosine(q_vec, _embed(text)) + _text_match_score(query, text)
+            if score >= min_score:
+                ranked.append((score, rec))
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        return [dict(r, vector_score=round(s, 4)) for s, r in ranked[:limit]]
+
+    def _search_chunks(
+        self,
+        question: str,
+        limit: int = 5,
+        min_score: float = MIN_CHUNK_SCORE,
+    ) -> list[dict]:
+        q = question.strip()
+        fts_rows: list[dict] = []
+        try:
+            fts_rows = self._rows(self._conn.execute(
+                """SELECT c.id, c.source_type, c.source_name, c.chunk_index,
+                          c.content, c.embedding, 1.0 AS keyword_score
+                   FROM rag_chunks c
+                   JOIN rag_chunks_fts ON rag_chunks_fts.rowid = c.id
+                   WHERE rag_chunks_fts MATCH ? AND c.enabled=1
+                   ORDER BY rank LIMIT ?""",
+                (q, limit * 4),
+            ))
+        except sqlite3.OperationalError as e:
+            log.debug("[knowledge_base] FTS 搜索失败，回退到 LIKE 查询: %s", e)
+            like = f"%{q}%"
+            fts_rows = self._rows(self._conn.execute(
+                """SELECT id, source_type, source_name, chunk_index, content,
+                          embedding, 0.6 AS keyword_score
+                   FROM rag_chunks
+                   WHERE enabled=1 AND (source_name LIKE ? OR content LIKE ?)
+                   LIMIT ?""",
+                (like, like, limit * 4),
+            ))
+
+        all_rows = self._rows(self._conn.execute(
+            """SELECT id, source_type, source_name, chunk_index, content, embedding,
+                      0.0 AS keyword_score
+               FROM rag_chunks
+               WHERE enabled=1"""
+        ))
+        by_id = {r["id"]: r for r in all_rows}
+        for r in fts_rows:
+            by_id[r["id"]] = r
+
+        q_vec = _embed(q)
+        ranked: list[tuple[float, dict]] = []
+        for row in by_id.values():
+            try:
+                emb = json.loads(row.get("embedding") or "[]")
+            except json.JSONDecodeError as e:
+                log.debug("[knowledge_base] embedding JSON 解析失败: %s", e)
+                emb = []
+            vector_score = _cosine(q_vec, emb)
+            lexical_score = _text_match_score(
+                q,
+                f"{row.get('source_name', '')}\n{row.get('content', '')}",
+            )
+            keyword_score = float(row.get("keyword_score") or 0.0)
+            score = vector_score + lexical_score + keyword_score
+            if score < min_score:
+                continue
+            clean = {
+                k: v for k, v in row.items()
+                if k not in {"embedding", "keyword_score"}
+            }
+            clean["vector_score"] = round(vector_score, 4)
+            clean["lexical_score"] = round(lexical_score, 4)
+            clean["score"] = round(score, 4)
+            ranked.append((score, clean))
+
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        return [r for _, r in ranked[:limit]]
+
     # ── search (only enabled records) ─────────────────────────────────────────
 
     def search(self, question: str, limit: int = 5) -> dict[str, list[dict]]:
-        """Full-text search across enabled metrics and context_notes."""
+        """Hybrid RAG search across enabled structured knowledge and chunks."""
         q = question.strip()
 
-        try:
-            metric_rows = self._rows(self._conn.execute(
-                """SELECT m.* FROM metrics m
-                   JOIN metrics_fts ON metrics_fts.rowid = m.id
-                   WHERE metrics_fts MATCH ? AND m.enabled=1
-                   ORDER BY rank LIMIT ?""",
-                (q, limit),
-            ))
-        except sqlite3.OperationalError:
-            like = f"%{q}%"
-            metric_rows = self._rows(self._conn.execute(
-                """SELECT * FROM metrics
-                   WHERE (name LIKE ? OR alias LIKE ? OR definition LIKE ?)
-                   AND enabled=1 LIMIT ?""",
-                (like, like, like, limit),
-            ))
-
-        try:
-            note_rows = self._rows(self._conn.execute(
-                """SELECT n.* FROM context_notes n
-                   JOIN context_notes_fts ON context_notes_fts.rowid = n.id
-                   WHERE context_notes_fts MATCH ? AND n.enabled=1
-                   ORDER BY rank LIMIT ?""",
-                (q, limit),
-            ))
-        except sqlite3.OperationalError:
-            like = f"%{q}%"
-            note_rows = self._rows(self._conn.execute(
-                """SELECT * FROM context_notes
-                   WHERE (topic LIKE ? OR content LIKE ? OR tags LIKE ?)
-                   AND enabled=1 LIMIT ?""",
-                (like, like, like, limit),
-            ))
-
-        rule_rows = self._rows(self._conn.execute(
-            "SELECT * FROM business_rules WHERE enabled=1 ORDER BY severity DESC"
+        # Vector fallback for structured records.  This complements SQLite FTS,
+        # especially for Chinese wording variations where tokenization is weak.
+        all_metrics = self._rows(self._conn.execute(
+            "SELECT * FROM metrics WHERE enabled=1"
+        ))
+        all_rules = self._rows(self._conn.execute(
+            "SELECT * FROM business_rules WHERE enabled=1"
+        ))
+        all_notes = self._rows(self._conn.execute(
+            "SELECT * FROM context_notes WHERE enabled=1"
         ))
 
-        return {"metrics": metric_rows, "rules": rule_rows, "notes": note_rows}
+        metric_rows = self._vector_rank_records(
+            q,
+            all_metrics,
+            lambda m: " ".join([
+                m.get("name", ""), m.get("alias", ""),
+                m.get("definition", ""), m.get("notes", ""),
+            ]),
+            limit,
+            min_score=MIN_STRUCTURED_SCORE,
+        )
+
+        note_rows = self._vector_rank_records(
+            q,
+            all_notes,
+            lambda n: " ".join([
+                n.get("topic", ""), n.get("content", ""), n.get("tags", ""),
+            ]),
+            limit,
+            min_score=MIN_STRUCTURED_SCORE,
+        )
+
+        rule_rows = self._vector_rank_records(
+            q,
+            all_rules,
+            lambda r: " ".join([
+                r.get("rule_id", ""), r.get("description", ""),
+                r.get("condition", ""), r.get("severity", ""),
+            ]),
+            limit,
+            min_score=MIN_STRUCTURED_SCORE,
+        )
+
+        chunk_rows = self._search_chunks(q, limit=limit, min_score=MIN_CHUNK_SCORE)
+
+        return {
+            "metrics": metric_rows[:limit],
+            "rules": rule_rows,
+            "notes": note_rows[:limit],
+            "documents": chunk_rows,
+        }
 
     # ── bulk insert ───────────────────────────────────────────────────────────
 

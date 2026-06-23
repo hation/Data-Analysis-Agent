@@ -6,16 +6,12 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional, List, Literal
 from dataclasses import dataclass, field, asdict
+from infrastructure.paths import runtime_config_path
 
 log = logging.getLogger(__name__)
 
-if os.environ.get("VERCEL"):
-    CONFIG_DIR = Path("/tmp/LLM")
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-else:
-    CONFIG_DIR = Path(__file__).parent
-
-MCP_CONFIG_FILE = CONFIG_DIR / "mcp_config.json"
+MCP_CONFIG_FILE = runtime_config_path("mcp_config.json", "LLM/mcp_config.json")
+CONFIG_DIR = MCP_CONFIG_FILE.parent
 
 
 @dataclass
@@ -52,6 +48,7 @@ class MCPConfigManager:
 
     def _save(self) -> bool:
         try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             data = {"servers": {sid: asdict(cfg) for sid, cfg in self.servers.items()}}
             with open(MCP_CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)

@@ -23,6 +23,8 @@
         options={"title": "分时段堆叠趋势"}
     )
 """
+import logging
+log = logging.getLogger(__name__)
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
@@ -30,7 +32,8 @@ from typing import List, Tuple
 
 try:
     from charts.base import ChartResult
-except ImportError:
+except ImportError as e:
+    log.debug("[chart] 图表生成异常: %s", e)
     class ChartResult:
         def __init__(self, html: str = "", spec: dict = None, warnings: list = None, meta: dict = None):
             self.html = html
@@ -42,7 +45,8 @@ except ImportError:
 
 try:
     from charts.color_schemes import get_color_scheme
-except ImportError:
+except ImportError as e:
+    log.debug("[chart] 图表生成异常: %s", e)
     def get_color_scheme(name="mckinsey"):
         return {"colors": ["#003D7A", "#0084D1", "#00A4EF", "#7FBA00", "#FFB81C",
                            "#F7630C", "#DA3B01", "#A4373A", "#6B2C91", "#00B4EF"]}
@@ -158,6 +162,7 @@ def generate(df: pd.DataFrame, mapping: dict = None, options: dict = None) -> Ch
         try:
             x_col = _auto_col_x(df)
         except ValueError as e:
+            log.debug("[chart] 图表生成异常: %s", e)
             warnings.append(str(e))
             return ChartResult("<p>找不到有效的 x 列</p>", warnings=warnings, meta=meta)
 
@@ -338,7 +343,7 @@ def generate(df: pd.DataFrame, mapping: dict = None, options: dict = None) -> Ch
         legend=dict(orientation="v", yanchor="top", y=0.99, xanchor="left", x=0.01)
     )
 
-    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
     html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>

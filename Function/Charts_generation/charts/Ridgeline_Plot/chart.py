@@ -6,6 +6,8 @@
 统一接口:
     generate(df, mapping, options) -> ChartResult
 """
+import logging
+log = logging.getLogger(__name__)
 import os
 import sys
 from pathlib import Path
@@ -175,6 +177,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -197,11 +200,11 @@ def generate(
     _value = _auto_col(df, value_col, "value", "数值", "销售额", "薪资", "价格")
 
     if _value is None or _value not in df.columns:
-        warnings.append(f"找不到必填字段 [value]")
+        warnings.append("找不到必填字段 [value]")
         return ChartResult(warnings=warnings)
 
     if _group is None or _group not in df.columns:
-        warnings.append(f"找不到必填字段 [group]")
+        warnings.append("找不到必填字段 [group]")
         return ChartResult(warnings=warnings)
 
     # 获取配色方案
@@ -347,7 +350,7 @@ def generate(
         )
     )
 
-    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
     html = _build_html(title, "ridgeline_plot", "plotly", _DATA_FMT, _DESC, chart_html)
 
     meta = {

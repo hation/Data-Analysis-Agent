@@ -48,6 +48,7 @@ def create_app() -> Flask:
     from .jobs            import bp as jobs_bp
     from .skills          import bp as skills_bp
     from .commands        import bp as commands_bp
+    from .desktop         import bp as desktop_bp
 
     app.register_blueprint(models_bp)
     app.register_blueprint(datasource_bp)
@@ -62,6 +63,7 @@ def create_app() -> Flask:
     app.register_blueprint(jobs_bp)
     app.register_blueprint(skills_bp)
     app.register_blueprint(commands_bp)
+    app.register_blueprint(desktop_bp)
 
     @app.get("/")
     def index():

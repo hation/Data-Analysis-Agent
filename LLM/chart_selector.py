@@ -14,6 +14,9 @@ format_selection_result(candidates)                  -> str
 """
 from __future__ import annotations
 
+import logging
+log = logging.getLogger(__name__)
+
 from typing import List, Dict, Any, Optional
 
 

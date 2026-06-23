@@ -11,6 +11,8 @@
 - 第一个数值列 → 散点着色
 - 第二个数值列（可选）→ 散点大小
 """
+import logging
+log = logging.getLogger(__name__)
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -132,6 +134,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -203,6 +206,7 @@ def generate(
             name = _fuzzy_match_region(raw_name)
             val1 = round(float(row[_value1]), 2)
         except Exception as e:
+            log.warning("[chart] 图表生成异常: %s", e)
             warnings_.append(f"行解析失败: {e}")
             continue
 

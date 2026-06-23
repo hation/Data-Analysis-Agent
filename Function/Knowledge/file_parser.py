@@ -124,6 +124,29 @@ def _df_to_text(df: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+def extract_text(filepath: str) -> str:
+    """Extract readable text from a supported knowledge source file.
+
+    Used by the RAG indexer after the user confirms import.  It deliberately
+    keeps sheet names and table-like rows so retrieved chunks retain source
+    context even when the original file was semi-structured.
+    """
+    path = Path(filepath)
+    ext = path.suffix.lower()
+    if ext == ".docx":
+        return _extract_docx_text(filepath)
+    if ext in (".xlsx", ".xls"):
+        xl = pd.ExcelFile(filepath)
+        parts = []
+        for sheet in xl.sheet_names:
+            df = xl.parse(sheet)
+            if df.empty:
+                continue
+            parts.append(f"[Sheet: {sheet}]\n{_df_to_text(df)}")
+        return "\n\n".join(parts)
+    raise ValueError(f"Unsupported file type: {ext}")
+
+
 # ── LLM extraction ────────────────────────────────────────────────────────────
 
 _EXTRACT_PROMPT = """你是业务知识整理助手。请从以下文本中提取所有业务指标定义、业务规则和背景知识。

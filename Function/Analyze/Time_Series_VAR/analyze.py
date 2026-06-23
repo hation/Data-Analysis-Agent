@@ -26,7 +26,7 @@ Time_Series_VAR
 import warnings
 import numpy as np
 import pandas as pd
-from typing import Optional, Tuple, List
+from typing import Callable, Optional, Tuple, List
 
 warnings.filterwarnings("ignore")
 
@@ -373,6 +373,7 @@ def run(
     target_column:  str,
     groupby_column: Optional[str] = None,
     n_deciles:      int = 0,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str]:
     """
     Parameters
@@ -382,6 +383,8 @@ def run(
     groupby_column : 时间列名；或逗号分隔的多变量列名（含 target_column）
     n_deciles      : 预测步数（默认 6）
     """
+    progress = progress_callback or (lambda _pct, _message="": None)
+    progress(5, "正在校验 VAR 输入")
     try:
         from statsmodels.tsa.api import VAR as _chk  # noqa
     except ImportError:
@@ -435,17 +438,21 @@ def run(
         )
 
     # ── 准备数据 ───────────────────────────────────────────────────────────
+    progress(20, "正在准备多变量时序数据")
     data = _prepare_multivariate(df, time_col, value_cols)
     if len(data) < _MAX_LAG * 2 + 4:
         raise ValueError(f"有效数据点不足（{len(data)} 个），VAR 需要更多样本。")
 
     # ── 差分至平稳 ─────────────────────────────────────────────────────────
+    progress(35, "正在进行平稳化处理")
     stationary_data, diffs = _make_stationary(data)
 
     # ── 拟合 VAR ───────────────────────────────────────────────────────────
+    progress(55, "正在拟合 VAR 模型")
     var_result, lag = _fit_var(stationary_data, _MAX_LAG)
 
     # ── 预测 ───────────────────────────────────────────────────────────────
+    progress(72, "正在生成多变量预测")
     forecast_df = _forecast_var(var_result, stationary_data, steps, lag)
 
     # 将差分预测还原（逆差分）
@@ -469,6 +476,7 @@ def run(
             fitted_df[col] = fitted_df[col].cumsum() + last_orig
 
     # ── 格兰杰因果 ─────────────────────────────────────────────────────────
+    progress(85, "正在执行格兰杰因果检验")
     granger_df = _granger_test(stationary_data, min(lag, 4))
 
     # ── 结果表 ────────────────────────────────────────────────────────────
@@ -487,4 +495,5 @@ def run(
         original_data = data,
     )
 
+    progress(98, "VAR 分析计算完成")
     return result_df, granger_df, metrics_df, markdown

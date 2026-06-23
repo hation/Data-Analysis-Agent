@@ -6,6 +6,8 @@
 统一接口:
     generate(df, mapping, options) -> ChartResult
 """
+import logging
+log = logging.getLogger(__name__)
 import os
 import sys
 from pathlib import Path
@@ -129,7 +131,7 @@ def _build_sparkline_html(label: str, y_vals: list, trend_up: bool) -> str:
         hovermode="x unified"
     )
     
-    return pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+    return pio.to_html(fig, full_html=False, include_plotlyjs=False)
 
 
 def _build_html(title: str, chart_name: str, library: str,
@@ -177,6 +179,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])

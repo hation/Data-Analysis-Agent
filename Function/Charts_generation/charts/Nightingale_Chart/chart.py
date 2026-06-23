@@ -6,6 +6,8 @@
 统一接口:
     generate(df, mapping, options) -> ChartResult
 """
+import logging
+log = logging.getLogger(__name__)
 import os
 import sys
 from pathlib import Path
@@ -142,6 +144,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -180,6 +183,7 @@ def generate(
             if len(df) == 0:
                 return ChartResult(warnings=warnings + ["❌ 过滤后无有效数据"])
     except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
         warnings.append(f"⚠️ 数值转换失败: {e}")
     
     # 4. 检查空值
@@ -212,7 +216,7 @@ def generate(
         )
     )
 
-    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
     html = _build_html(title, "nightingale", "plotly", _DATA_FMT, _DESC, chart_html)
 
     meta = {

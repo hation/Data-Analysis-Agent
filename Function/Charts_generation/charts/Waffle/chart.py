@@ -6,6 +6,8 @@
 统一接口:
     generate(df, mapping, options) -> ChartResult
 """
+import logging
+log = logging.getLogger(__name__)
 import os
 import sys
 from pathlib import Path
@@ -149,6 +151,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -174,6 +177,7 @@ def generate(
         color_scheme = get_color_scheme(color_scheme_name)
         colors = color_scheme.get("colors", MCKINSEY_COLORS)
     except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
         warnings.append(f"配色方案加载失败: {e}，使用默认配色")
         colors = MCKINSEY_COLORS
 
@@ -251,7 +255,7 @@ def generate(
         hovermode="closest"
     )
 
-    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
     html = _build_html(title, "waffle", "plotly", _DATA_FMT, _DESC, chart_html)
 
     meta = {

@@ -14,7 +14,7 @@
   },
   "deepseek": {
     "provider": "deepseek",
-    "api_key": "sk",
+    "api_key": "sk-8be0bdeeb08b4894b3c7300cc0d61562",
     "base_url": "https://api.deepseek.com",
     "model": "deepseek-v4-flash",
     "name": null,
@@ -25,11 +25,24 @@
     "enable_thinking": true,
     "thinking_budget": 8000
   },
+  "custom_minimax-m2.7": {
+    "provider": "custom_minimax-m2.7",
+    "api_key": "sk-cp-dU1KrVgoc3vDZQOcXcdViricBrZkG95MgaS5AYm8TNYzr7ui2i1HEHIXM9mjw5nDfFr0Axylten828TcQhffQoKZVu-Gyiy9Ie3SuzlSxW6OejCja6_NPmU",
+    "base_url": "https://api.minimaxi.com/v1",
+    "model": "MiniMax-M2.7-highspeed",
+    "name": null,
+    "enabled": true,
+    "is_custom": true,
+    "context_window": 100000,
+    "max_output_tokens": 100000,
+    "enable_thinking": true,
+    "thinking_budget": 8000
+  },
   "atlascloud": {
     "provider": "atlascloud",
-    "api_key": "apikey",
+    "api_key": "apikey-99157aa810ed4105aefe4b31789e55ab",
     "base_url": "https://api.atlascloud.ai/v1",
-    "model": "deepseek-ai/deepseek-v4-pro",
+    "model": "moonshotai/kimi-k2.6",
     "name": null,
     "enabled": true,
     "is_custom": false,

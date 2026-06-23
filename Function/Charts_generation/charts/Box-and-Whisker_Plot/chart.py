@@ -6,6 +6,8 @@
 统一接口:
     generate(df, mapping, options) -> ChartResult
 """
+import logging
+log = logging.getLogger(__name__)
 import os
 import sys
 from pathlib import Path
@@ -147,6 +149,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -179,7 +182,7 @@ def generate(
         plot_df = df
 
     if _y is None or _y not in plot_df.columns:
-        warnings.append(f"找不到必填字段 [y]")
+        warnings.append("找不到必填字段 [y]")
         return ChartResult(warnings=warnings)
 
     if _x and _x not in plot_df.columns:
@@ -190,6 +193,7 @@ def generate(
         color_scheme = get_color_scheme(color_scheme_name)
         primary_color = color_scheme.get("primary", "#003D7A")
     except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
         warnings.append(f"配色方案加载失败: {e}，使用默认配色")
         primary_color = "#003D7A"
 
@@ -228,7 +232,7 @@ def generate(
         hovermode="closest"
     )
 
-    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
     html = _build_html(title, "boxplot_chart", "plotly", _DATA_FMT, _DESC, chart_html)
 
     meta = {

@@ -11,14 +11,12 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional, Any, List
 from dataclasses import dataclass, asdict
+from infrastructure.paths import runtime_config_path
 
 log = logging.getLogger(__name__)
 
-CONFIG_DIR = Path("/tmp/LLM") if os.environ.get("VERCEL") else Path(__file__).parent
-if os.environ.get("VERCEL"):
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-
-LLM_CONFIG_FILE = CONFIG_DIR / "llm_config.json"
+LLM_CONFIG_FILE = runtime_config_path("llm_config.json", "LLM/llm_config.json")
+CONFIG_DIR = LLM_CONFIG_FILE.parent
 
 @dataclass
 class LLMConfig:
@@ -109,6 +107,7 @@ class LLMConfigManager:
     def save_configs(self):
         """保存配置到文件"""
         try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             data = {
                 provider: asdict(config)
                 for provider, config in self.configs.items()

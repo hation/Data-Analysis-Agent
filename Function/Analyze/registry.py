@@ -6,6 +6,8 @@ Each entry maps analysis_id → directory name under Function/Analyze/.
 Modules are loaded via importlib.util (path-based) so directory names may
 contain hyphens or other characters not valid in Python identifiers.
 """
+import logging
+log = logging.getLogger(__name__)
 import importlib.util
 import os
 from pathlib import Path
@@ -20,6 +22,7 @@ _REGISTRY_MAP: Dict[str, str] = {
     "K_Means":               "K-Means",
     "Logistic_Regression":   "Logistic_Regression",
     "Regression":            "Regression",
+    "Univariate_Screening":  "Univariate_Screening",
     "Time_Series_ARIMA":     "Time_Series_ARIMA",
     "Time_Series_SARIMA":    "Time_Series_SARIMA",
     "Time_Series_VAR":       "Time_Series_VAR",
@@ -63,6 +66,7 @@ def get_all() -> Dict[str, Dict[str, Any]]:
                 "run":           mod.run,
             }
         except Exception as exc:
+            log.warning("[registry] 加载分析模块 '%s' 失败: %s", aid, exc)
             result[aid] = {
                 "id": aid, "name": aid,
                 "desc": f"(load error: {exc})", "run": None,

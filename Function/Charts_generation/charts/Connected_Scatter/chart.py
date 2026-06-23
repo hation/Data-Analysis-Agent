@@ -16,6 +16,8 @@
         options={"title": "销售与利润演变"}
     )
 """
+import logging
+log = logging.getLogger(__name__)
 import os
 import sys
 from pathlib import Path
@@ -163,6 +165,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -207,6 +210,7 @@ def generate(
         if df[_x].isna().all() or df[_y].isna().all():
             return ChartResult(warnings=["x或y列包含非数值数据"])
     except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
         return ChartResult(warnings=[f"数据转换失败: {e}"])
 
     # 按order排序
@@ -221,6 +225,7 @@ def generate(
                 # 按字符串排序
                 df_plot = df.sort_values(_order)
         except Exception as e:
+            log.warning("[chart] 图表生成异常: %s", e)
             warnings.append(f"排序失败: {e}")
             df_plot = df
     else:
@@ -245,6 +250,7 @@ def generate(
                 else:
                     marker_sizes = [15] * len(df_plot)
         except Exception as e:
+            log.warning("[chart] 图表生成异常: %s", e)
             warnings.append(f"气泡大小处理失败: {e}")
 
     # 获取配色
@@ -252,6 +258,7 @@ def generate(
         color_scheme = get_color_scheme(color_scheme_name)
         primary_color = color_scheme.get("primary", "#0084D1")
     except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
         warnings.append(f"配色方案加载失败: {e}")
         primary_color = "#0084D1"
 
@@ -355,11 +362,12 @@ def generate(
             height=500
         )
 
-        chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+        chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
         if not chart_html or len(chart_html) < 100:
             return ChartResult(warnings=["图表生成失败"])
 
     except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
         return ChartResult(warnings=[f"图表生成失败: {e}"])
 
     html = _build_html(title, "connected_scatter", "plotly", _DATA_FMT, _DESC, chart_html)

@@ -2,6 +2,8 @@
 弦图 Chord Diagram - 关系图表
 使用 D3.js chord 布局实现
 """
+import logging
+log = logging.getLogger(__name__)
 import os, sys, json
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
@@ -273,6 +275,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -317,6 +320,7 @@ def generate(
     try:
         matrix = matrix.astype(float)
     except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
         return ChartResult(warnings=[f"数据类型转换失败: {e}"])
 
     html = _build_chord_html(matrix, title, highlight_node, highlight_color)

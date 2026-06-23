@@ -79,7 +79,7 @@ python app.py
 # 5. 在侧边栏配置 API Key，上传数据，开始提问！
 ```
 
-> 💡 Windows 用户也可以直接从 [Releases](https://github.com/Zafer-Liu/Data-Analysis-Agent/tree/main/Releases) 下载 exe 安装包。
+> 💡 Windows 用户也可以直接从 [GitHub Releases](https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest) 下载 exe 安装包。
 
 ```text
 试试问：最近三个月销售额趋势如何？
@@ -321,7 +321,7 @@ https://github.com/user-attachments/assets/f298aae2-6238-475e-9d85-1da33b7b847e
 
 ### 🖥️ 方式 1：Windows 安装包（最简单，推荐）
 
-从 [GitHub Releases](https://github.com/Zafer-Liu/Data-Analysis-Agent/tree/main/Releases) 下载最新版本：
+从 [GitHub Releases](https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest) 下载最新版本：
 
 | 平台 | 文件 |
 |------|------|

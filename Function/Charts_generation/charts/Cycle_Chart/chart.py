@@ -6,6 +6,8 @@
 统一接口:
     generate(df, mapping, options) -> ChartResult
 """
+import logging
+log = logging.getLogger(__name__)
 import os
 import sys
 from pathlib import Path
@@ -92,6 +94,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -230,7 +233,7 @@ def _generate_wide_format(df: pd.DataFrame, title: str, warnings: list) -> Chart
         tickfont=dict(color="#3A4650")
     )
 
-    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
     html = _build_html(
         title,
         "cycle_chart",
@@ -306,6 +309,6 @@ def _generate_long_format(df: pd.DataFrame, mapping: Dict[str, str], title: str,
     ))
     fig.update_layout(title=title, xaxis_title='时间', yaxis_title='数值', height=500)
 
-    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
     html = _build_html(title, "cycle_chart", "plotly", _DATA_FMT, "长格式：自动识别失败，回退单线图", chart_html)
     return ChartResult(html=html, spec={}, warnings=warnings + ["未识别出周期结构，已回退单线图"], meta={"format": "long_fallback"})

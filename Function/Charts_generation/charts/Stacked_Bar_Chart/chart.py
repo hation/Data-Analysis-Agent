@@ -6,6 +6,8 @@
 统一接口:
     generate(df, mapping, options) -> ChartResult
 """
+import logging
+log = logging.getLogger(__name__)
 import os
 import sys
 from pathlib import Path
@@ -49,7 +51,8 @@ def _auto_col(df: pd.DataFrame, *hints: str) -> Optional[str]:
     """
     strs = [c for c in df.columns if df[c].dtype == object or df[c].dtype == 'string']
     nums = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    col_lower = {c.lower(): c for c in df.columns}
+    col_lower = {str(c).lower(): c for c in df.columns}
+    hints = tuple(h for h in hints if isinstance(h, str) and h)
     
     # 1. 精确匹配 hints
     for h in hints:
@@ -60,9 +63,13 @@ def _auto_col(df: pd.DataFrame, *hints: str) -> Optional[str]:
     # 2. 模糊匹配（包含关系）
     for h in hints:
         h_lower = h.lower()
+        if len(h_lower) < 2:
+            continue
         for col in df.columns:
-            col_lower_name = col.lower()
-            if h_lower in col_lower_name or col_lower_name in h_lower:
+            col_lower_name = str(col).lower()
+            if len(col_lower_name) >= 2 and (
+                h_lower in col_lower_name or col_lower_name in h_lower
+            ):
                 return col
     
     # 3. 类型匹配：根据 hint 的语义推断应该是什么类型
@@ -102,8 +109,16 @@ def _auto_col(df: pd.DataFrame, *hints: str) -> Optional[str]:
     return None
 
 
-def _detect_wide_format(df: pd.DataFrame) -> bool:
+def _detect_wide_format(df: pd.DataFrame, mapping: dict) -> bool:
     """检测是否为宽格式数据（1个字符串列 + 多个数值列）"""
+    if mapping.get("value_cols") or isinstance(mapping.get("y"), list) \
+            or isinstance(mapping.get("series"), list):
+        return True
+
+    series_hint = mapping.get("series") or mapping.get("color")
+    if isinstance(series_hint, str) and series_hint in df.columns:
+        return False
+
     strs = [c for c in df.columns if df[c].dtype == object or df[c].dtype == 'string']
     nums = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
     
@@ -111,7 +126,8 @@ def _detect_wide_format(df: pd.DataFrame) -> bool:
     return len(strs) == 1 and len(nums) >= 2
 
 
-def _convert_wide_to_long(df: pd.DataFrame, id_col: str) -> pd.DataFrame:
+def _convert_wide_to_long(df: pd.DataFrame, id_col: str,
+                          value_cols: list = None) -> pd.DataFrame:
     """将宽格式转换为长格式
     
     输入：
@@ -126,7 +142,9 @@ def _convert_wide_to_long(df: pd.DataFrame, id_col: str) -> pd.DataFrame:
         ...
     """
     # 获取所有数值列（按原始顺序）
-    value_cols = [c for c in df.columns if c != id_col and pd.api.types.is_numeric_dtype(df[c])]
+    if value_cols is None:
+        value_cols = [c for c in df.columns
+                      if c != id_col and pd.api.types.is_numeric_dtype(df[c])]
     
     # melt：将宽格式转为长格式
     df_long = df.melt(
@@ -181,20 +199,32 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
 
     x_col = mapping.get("x") or x
     y_col = mapping.get("y") or y
-    color_col = mapping.get("color") or color
+    color_col = mapping.get("color") or mapping.get("series") or color
     title = options.get("title", title)
 
     # ── 检测并转换宽格式数据 ──────────────────────────────
-    if _detect_wide_format(df):
+    if _detect_wide_format(df, mapping):
         # 找到字符串列作为 id_col
-        id_col = [c for c in df.columns if df[c].dtype == object or df[c].dtype == 'string'][0]
-        df = _convert_wide_to_long(df, id_col)
+        x_hint = mapping.get("x") or x_col
+        string_cols = [c for c in df.columns if df[c].dtype == object or df[c].dtype == 'string']
+        id_col = x_hint if isinstance(x_hint, str) and x_hint in df.columns else (
+            string_cols[0] if string_cols else df.columns[0]
+        )
+        value_cols = mapping.get("value_cols")
+        if not value_cols and isinstance(mapping.get("y"), list):
+            value_cols = mapping["y"]
+        if not value_cols and isinstance(mapping.get("series"), list):
+            value_cols = mapping["series"]
+        if value_cols:
+            value_cols = [c for c in value_cols if c in df.columns and c != id_col]
+        df = _convert_wide_to_long(df, id_col, value_cols or None)
         
         # 转换后的长格式：id_col, 分类, 数值
         _x = id_col  # 行标签作为 x
@@ -206,17 +236,26 @@ def generate(
         # 长格式数据：正常处理
         _x = _auto_col(df, x_col, "x", "季度", "时间", "类别", "行标签")
         _y = _auto_col(df, y_col, "y", "销售额", "销量", "value", "amount", "数值")
-        _color = _auto_col(df, color_col, "color", "产品", "区域", "group", "category", "分类")
+        if isinstance(color_col, str) and color_col in df.columns:
+            _color = color_col
+        elif "series" in df.columns:
+            _color = "series"
+        elif "color" in df.columns:
+            _color = "color"
+        else:
+            _color = _auto_col(
+                df, color_col, "color", "产品", "区域", "group", "category", "分类"
+            )
 
     for role, col_ in [("x", _x), ("y", _y)]:
         if col_ is None or col_ not in df.columns:
             warnings.append(f"找不到必填字段 [{role}]")
 
     if _x is None or _x not in df.columns:
-        warnings.append(f"找不到必填字段 [x]")
+        warnings.append("找不到必填字段 [x]")
         return ChartResult(warnings=warnings)
     if _y is None or _y not in df.columns:
-        warnings.append(f"找不到必填字段 [y]")
+        warnings.append("找不到必填字段 [y]")
         return ChartResult(warnings=warnings)
 
     if _color and _color not in df.columns:
@@ -246,7 +285,7 @@ def generate(
     fig.update_xaxes(showgrid=False, linecolor="#D9D9D9")
     fig.update_yaxes(showgrid=True, gridcolor="#E6E9EF", zeroline=False)
 
-    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
     html = _build_html(title, "stacked_bar", "plotly", _DATA_FMT, _DESC, chart_html)
 
 

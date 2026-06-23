@@ -15,6 +15,8 @@
   2. 计算每组的 Q25（下界）、Q50（中位数）、Q75（上界）
   3. 绘制误差条（Q25-Q75）和中位数柱子
 """
+import logging
+log = logging.getLogger(__name__)
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -126,6 +128,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -140,6 +143,7 @@ def generate(
         color_scheme = get_color_scheme(color_scheme_name)
         bar_color = color_scheme.get("primary", "#B58F78")  # 更接近示例棕色
     except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
         warnings.append(f"配色方案加载失败: {e}，使用默认颜色")
         bar_color = "#B58F78"
 
@@ -275,7 +279,7 @@ def generate(
         )
         fig.update_xaxes(gridcolor="rgba(0,0,0,0)")
 
-    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
     html = _build_html(title, "error_bar_chart", "plotly", _DATA_FMT, _DESC, chart_html)
 
     # 可选：导出静态图片（需要 kaleido）
@@ -284,6 +288,7 @@ def generate(
         try:
             image_bytes = fig.to_image(format="png", scale=2)
         except Exception as e:
+            log.warning("[chart] 图表生成异常: %s", e)
             warnings.append(f"PNG导出失败(需安装kaleido): {e}")
 
     meta = {

@@ -15,6 +15,8 @@
         options={"title": "销售趋势"}
     )
 """
+import logging
+log = logging.getLogger(__name__)
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Union
@@ -151,6 +153,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -170,8 +173,15 @@ def generate(
     elif not isinstance(y_cols, list):
         y_cols = [str(y_cols)]
 
+    # A list under series represents wide-format value columns, not a column
+    # name. Accept it for callers that use series=["A", "B"] as shorthand.
+    if isinstance(series_col, (list, tuple, set)):
+        if not y_cols:
+            y_cols = list(series_col)
+        series_col = None
+
     # ── Series 分组模式（x=维度, y=数值, series=分组列）──────────────
-    if series_col and series_col in df.columns:
+    if isinstance(series_col, str) and series_col in df.columns:
         x_key = x_col if (x_col and x_col in df.columns) else _auto_col(df, x_col, "x")
         y_key = (y_cols[0] if isinstance(y_cols, list) and y_cols else y_cols) if y_cols else None
         if not y_key or y_key not in df.columns:
@@ -234,7 +244,7 @@ def generate(
                             borderwidth=0, font=dict(size=11)),
                 hovermode="x unified" if not is_roc_like else "closest",
             )
-            chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+            chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
             html = _build_html(title, "line_chart", "plotly", _DATA_FMT, _DESC, chart_html)
             return ChartResult(html=html, spec={}, warnings=warnings,
                                meta={"chart_id": "line_chart", "n_rows": len(df),
@@ -349,7 +359,7 @@ def generate(
         showline=False,
         zeroline=False
     )
-    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+    chart_html = pio.to_html(fig, full_html=False, include_plotlyjs=False)
     html = _build_html(title, "line_chart", "plotly", _DATA_FMT, _DESC, chart_html)
 
     return ChartResult(

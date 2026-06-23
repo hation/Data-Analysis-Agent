@@ -22,7 +22,7 @@ GRU 核心公式（标准定义）：
 
 import numpy as np
 import pandas as pd
-from typing import Optional, Tuple, List
+from typing import Callable, Optional, Tuple, List
 
 # ── 模块元数据 ──────────────────────────────────────────────────────────────
 ANALYSIS_ID   = "Time_Series_GRU"
@@ -264,6 +264,7 @@ def _train(
     X_val:   np.ndarray, y_val:   np.ndarray,
     hidden_size: int, epochs: int, lr: float, batch_size: int,
     seed: int = 42,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> Tuple[GRUModel, list, list]:
     model = GRUModel(hidden_size=hidden_size, seed=seed)
     rng   = np.random.RandomState(seed)
@@ -271,6 +272,10 @@ def _train(
     train_losses, val_losses = [], []
 
     for epoch in range(epochs):
+        if progress_callback is not None and (
+            epoch == 0 or epoch == epochs - 1 or epoch % max(1, epochs // 10) == 0
+        ):
+            progress_callback(epoch, f"GRU 训练轮次 {epoch + 1}/{epochs}")
         # shuffle
         idx = rng.permutation(n)
         X_sh, y_sh = X_train[idx], y_train[idx]
@@ -439,7 +444,7 @@ def _build_md(target_col, time_col, steps, series, metrics_df, result_df, train_
         f"## GRU 时间序列预测 — `{target_col}`\n",
         "### 模型概况",
         "| 指标 | 值 |", "|------|-----|",
-        f"| 模型类型 | GRU（门控循环单元，纯 numpy 实现） |",
+        "| 模型类型 | GRU（门控循环单元，纯 numpy 实现） |",
         f"| 时间列 | `{time_col or '（行序号）'}` |",
         f"| 训练样本数 | {len(series)} |",
         f"| 预测步数 | {steps} |",
@@ -494,6 +499,7 @@ def run(
     target_column:  str,
     groupby_column: Optional[str] = None,
     n_deciles:      int = 0,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str]:
     """
     Parameters
@@ -503,6 +509,8 @@ def run(
     groupby_column : 时间列名（默认自动探测）
     n_deciles      : 预测步数（默认 12）
     """
+    progress = progress_callback or (lambda _pct, _message="": None)
+    progress(5, "正在校验 GRU 输入")
     if target_column not in df.columns:
         raise ValueError(f"目标列 '{target_column}' 不存在。可用列：{', '.join(df.columns[:20])}")
     if not pd.api.types.is_numeric_dtype(df[target_column]):
@@ -518,6 +526,7 @@ def run(
         )
 
     # ── 归一化 ────────────────────────────────────────────────────────────
+    progress(18, "正在构建 GRU 训练样本")
     values_norm, mu, std = _normalize(series.values)
 
     # ── 构建窗口样本 ───────────────────────────────────────────────────────
@@ -530,12 +539,17 @@ def run(
     X_val,   y_val   = X_all[n_train:], y_all[n_train:]
 
     # ── 训练 ──────────────────────────────────────────────────────────────
+    def _training_progress(epoch: int, message: str):
+        pct = 30 + int(45 * epoch / max(1, _EPOCHS - 1))
+        progress(pct, message)
+
     model, train_losses, val_losses = _train(
         X_train, y_train, X_val, y_val,
         hidden_size = _HIDDEN_SIZE,
         epochs      = _EPOCHS,
         lr          = _LR,
         batch_size  = _BATCH_SIZE,
+        progress_callback = _training_progress,
     )
 
     # ── 历史拟合值 ────────────────────────────────────────────────────────
@@ -543,11 +557,13 @@ def run(
 
     # ── 多步滚动预测 + MC Dropout 置信区间 ────────────────────────────────
     last_window = values_norm[-_WINDOW:]
+    progress(80, "正在生成 GRU 滚动预测")
     y_pred, lower, upper = _rolling_forecast(
         model, last_window, steps, _MC_SAMPLES, _DROPOUT_RATE, mu, std
     )
 
     # ── 结果表 ────────────────────────────────────────────────────────────
+    progress(90, "正在整理 GRU 结果")
     result_df   = _build_result_df(series, fitted_norm, mu, std, _WINDOW,
                                     y_pred, lower, upper, steps)
     loss_df     = _build_loss_df(train_losses, val_losses)
@@ -564,4 +580,5 @@ def run(
         train_losses = train_losses,
     )
 
+    progress(98, "GRU 分析计算完成")
     return result_df, loss_df, metrics_df, markdown

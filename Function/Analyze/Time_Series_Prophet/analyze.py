@@ -31,7 +31,7 @@ Time_Series_Prophet
 
 import numpy as np
 import pandas as pd
-from typing import Optional, Tuple, List
+from typing import Callable, Optional, Tuple, List
 
 # ── 模块元数据 ──────────────────────────────────────────────────────────────
 ANALYSIS_ID   = "Time_Series_Prophet"
@@ -665,7 +665,7 @@ def _build_md(target_col, time_col, steps, series, params, metrics_df, result_df
         f"## Prophet 风格时间序列预测 — `{target_col}`\n",
         "### 模型概况",
         "| 指标 | 值 |", "|------|-----|",
-        f"| 模型类型 | Prophet 加法分解（趋势 + 季节性） |",
+        "| 模型类型 | Prophet 加法分解（趋势 + 季节性） |",
         f"| 时间列 | `{time_col or '（行序号）'}` |",
         f"| 训练样本数 | {len(series)} |",
         f"| 预测步数 | {steps} |",
@@ -736,6 +736,7 @@ def run(
     target_column:  str,
     groupby_column: Optional[str] = None,
     n_deciles:      int = 0,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str]:
     """
     Parameters
@@ -745,6 +746,8 @@ def run(
     groupby_column : 时间列名(默认自动探测)
     n_deciles      : 预测步数(默认 30)
     """
+    progress = progress_callback or (lambda _pct, _message="": None)
+    progress(5, "正在校验 Prophet 输入")
     if target_column not in df.columns:
         raise ValueError(f"目标列 '{target_column}' 不存在。可用列：{', '.join(df.columns[:20])}")
     if not pd.api.types.is_numeric_dtype(df[target_column]):
@@ -757,6 +760,7 @@ def run(
     if steps <= 0:
         steps = _DEFAULT_STEPS
 
+    progress(18, "正在准备时间序列")
     time_col = _detect_time_col(df, groupby_column or "")
     series, day_scale = _prepare_series(df, time_col, target_column)
 
@@ -774,6 +778,7 @@ def run(
     if time_col and isinstance(series.index, pd.DatetimeIndex) and len(series) > _RESAMPLE_THRESHOLD:
         # 候选：4小时、8小时、1天
         cand = ["4H", "8H", "D"]
+        progress(30, "正在评估降采样频率")
         new_series, selected_freq = _select_best_resample(series, cand, steps)
         if selected_freq != "original":
             series = new_series
@@ -791,10 +796,13 @@ def run(
 
     _, t_max_days_tmp = _to_t(series.index)
     yearly_order, weekly_order, daily_order = _auto_fourier_orders(t_max_days_tmp, day_scale)
+    progress(48, "正在拟合趋势和季节性")
     params = _fit_prophet(series, day_scale, yearly_order, weekly_order, daily_order)
 
     # 构建结果表
+    progress(72, "正在生成 Prophet 预测")
     result_df, breakdown_df = _build_result_df(series, params, steps, day_scale, clip_negative)
+    progress(84, "正在执行滚动回测")
     bt = _rolling_backtest(series, day_scale, n_folds=3, horizon=min(steps, max(7, len(series) // 12)))
     metrics_df = _build_metrics_df(series, params, backtest=bt)
 
@@ -822,4 +830,5 @@ def run(
         result_df  = result_df,
     )
 
+    progress(98, "Prophet 分析计算完成")
     return result_df, breakdown_df, metrics_df, markdown

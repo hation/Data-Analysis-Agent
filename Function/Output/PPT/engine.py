@@ -13,6 +13,8 @@ Usage:
 
 Every layout method creates one slide and auto-increments page numbers.
 """
+import logging
+log = logging.getLogger(__name__)
 import math
 import os
 from pptx import Presentation
@@ -3272,5 +3274,5 @@ class MckEngine:
             os.makedirs(outdir, exist_ok=True)
         self.prs.save(outpath)
         full_cleanup(outpath)
-        print(f"✅ Saved: {outpath} ({self._page} slides, {os.path.getsize(outpath):,} bytes)")
+        log.info("[ppt_engine] 已保存: %s (%d slides, %s bytes)", outpath, self._page, f"{os.path.getsize(outpath):,}")
         return outpath

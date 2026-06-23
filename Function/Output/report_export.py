@@ -1,3 +1,5 @@
+import logging
+log = logging.getLogger(__name__)
 import os
 import datetime
 import zipfile

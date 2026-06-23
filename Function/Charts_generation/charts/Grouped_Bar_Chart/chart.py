@@ -6,6 +6,8 @@
 统一接口:
     generate(df, mapping, options) -> ChartResult
 """
+import logging
+log = logging.getLogger(__name__)
 import os
 import sys
 from pathlib import Path
@@ -222,6 +224,7 @@ def generate(
             try:
                 df = pd.read_excel(excel_path)
             except Exception as e:
+                log.warning("[chart] 图表生成异常: %s", e)
                 return ChartResult(warnings=[f"读取Excel失败: {e}"])
         else:
             return ChartResult(warnings=["请提供 df 或 excel_path"])
@@ -322,8 +325,8 @@ def generate(
             ratio_share = ((s >= 0) & (s <= 1)).mean()
             # 超过80%数据在[0,1]，认为是比例
             is_ratio = ratio_share >= 0.8
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("[chart] 图表生成异常: %s", e)
 
     fig = px.bar(
     df,
