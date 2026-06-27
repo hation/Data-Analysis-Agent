@@ -89,8 +89,14 @@ def ensure_requirements():
         stamp_file.write_text(str(req_mtime))  # ✅ 写入标记，下次直接跳过
         log.info("[app] All requirements already satisfied.")
 
-# Vercel 环境依赖由平台管理，只在本地运行
-if os.environ.get("VERCEL") != "1":
+# 托管平台会在构建阶段安装依赖；运行时重启会被平台视为进程崩溃。
+# 本地环境仍保留自动依赖检查，兼容现有桌面启动方式。
+is_managed_runtime = (
+    os.environ.get("VERCEL") == "1"
+    or bool(os.environ.get("RAILWAY_PROJECT_ID"))
+    or os.environ.get("BAA_SKIP_DEPENDENCY_CHECK") == "1"
+)
+if not is_managed_runtime:
     ensure_requirements()
 
 # -------------------------------
