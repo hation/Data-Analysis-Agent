@@ -8,6 +8,8 @@
 
 <div align="center">
 
+[![Trendshift](https://trendshift.io/api/badge/trendshift/repositories/29216/daily?language=Python)](https://trendshift.io/repositories/29216?utm_source=trendshift-badge&utm_medium=badge&utm_campaign=badge-trendshift-29216)
+
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)
 ![Flask](https://img.shields.io/badge/Backend-Flask-black.svg)
 ![Plotly](https://img.shields.io/badge/Visualization-Plotly-3F4F75.svg)
