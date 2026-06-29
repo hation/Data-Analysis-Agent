@@ -3,20 +3,14 @@
 <!-- 语言切换 -->
 <p align="right"><a href="./README_EN.md">English</a></p>
 
-<!-- 项目 Banner -->
 <p align="center">
   <img src="./Information/assets/Banner.png" alt="智能商业分析 Agent Banner" width="100%" />
 </p>
 
-<!-- 核心徽标区域 -->
 <div align="center">
 
-  <!-- Trendshift 每日排名（醒目展示） -->
-  <a href="https://trendshift.io/repositories/29216" target="_blank">
-    <img src="https://trendshift.io/api/badge/trendshift/repositories/29216/daily?language=Python" 
-         alt="#6 Python Repository of the Day" 
-         width="280" />
-  </a>
+[![Trendshift](https://trendshift.io/api/badge/trendshift/repositories/29216/daily?language=Python)](https://trendshift.io/repositories/29216?utm_source=trendshift-badge&utm_medium=badge&utm_campaign=badge-trendshift-29216)
+
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)
 ![Flask](https://img.shields.io/badge/Backend-Flask-black.svg)
 ![Plotly](https://img.shields.io/badge/Visualization-Plotly-3F4F75.svg)
@@ -25,6 +19,7 @@
 ![License](https://img.shields.io/badge/License-Apache%202.0-yellow.svg)
 
 </div>
+
 
 > 一个面向商业分析场景的 AI Agent。  
 > 连接数据源后，用户只需使用自然语言提问，系统即可自动完成：
