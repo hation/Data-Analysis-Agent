@@ -1,9 +1,8 @@
+<p align="right"><a href="./README_EN.md">English</a></p>
+
 <p align="center">
   <img src="./Information/assets/Banner.png" alt="智能商业分析 Agent Banner" width="100%" />
 </p>
-
-<!-- 语言切换 -->
-<p align="right"><a href="./README_EN.md">English</a></p>
 
 <div align="center">
 
@@ -17,6 +16,7 @@
 ![License](https://img.shields.io/badge/License-Apache%202.0-yellow.svg)
 
 </div>
+
 
 
 > 一个面向商业分析场景的 AI Agent。  
