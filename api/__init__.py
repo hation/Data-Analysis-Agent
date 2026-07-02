@@ -111,7 +111,10 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index():
-        return render_template("agent_chat.html")
+        return render_template(
+            "agent_chat.html",
+            desktop_lifecycle_enabled=os.environ.get("BAA_DESKTOP_LIFECYCLE") == "1",
+        )
 
     @app.get("/api/health")
     def health():

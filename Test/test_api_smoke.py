@@ -10,10 +10,12 @@ These catch:
   - Trivial route-method mismatches
 """
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -253,6 +255,27 @@ class TestStaticAssets(unittest.TestCase):
         self.assertIn("function toggleTheme()", theme_js)
         self.assertIn("localStorage.setItem(STORAGE_KEY, theme)", theme_js)
         self.assertIn('id="theme-toggle"', chat_html)
+
+    def test_web_index_skips_desktop_lifecycle_and_has_favicon(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("BAA_DESKTOP_LIFECYCLE", None)
+            chat_html = self.client.get("/").get_data(as_text=True)
+        self.assertIn("static/Images/icon.png", chat_html)
+        self.assertNotIn("desktop_lifecycle.js", chat_html)
+        with patch.dict(os.environ, {"BAA_DESKTOP_LIFECYCLE": "1"}, clear=False):
+            desktop_html = self.client.get("/").get_data(as_text=True)
+        self.assertIn("desktop_lifecycle.js", desktop_html)
+
+    def test_vite_dist_assets_are_git_trackable(self):
+        root = Path(__file__).resolve().parents[1]
+        gitignore = (root / ".gitignore").read_text(encoding="utf-8")
+        for pattern in (
+            "!static/dist/",
+            "!static/dist/*.js",
+            "!static/dist/chunks/**",
+            "!static/dist/.vite/**",
+        ):
+            self.assertIn(pattern, gitignore)
 
     def test_fe1_vite_entries_and_api_client_contract(self):
         root = Path(__file__).resolve().parents[1]

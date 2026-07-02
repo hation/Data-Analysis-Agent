@@ -19,7 +19,18 @@ node_modules/
 build/
 dist/
 frontend/dist/
-static/dist/
+# The Flask app serves Vite output directly from static/dist in source builds.
+# Keep generated runtime assets trackable so GitHub users do not load a 404 shell.
+static/dist/*
+!static/dist/
+!static/dist/*.js
+!static/dist/*.css
+!static/dist/chunks/
+!static/dist/chunks/**
+!static/dist/assets/
+!static/dist/assets/**
+!static/dist/.vite/
+!static/dist/.vite/**
 *.spec
 !packaging/business_agent.spec
 *.egg-info/
