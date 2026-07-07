@@ -13,7 +13,7 @@
 ![Plotly](https://img.shields.io/badge/Visualization-Plotly-3F4F75.svg)
 ![LLM](https://img.shields.io/badge/LLM-OpenAI%20Compatible-green.svg)
 ![Charts](https://img.shields.io/badge/Charts-41_Types-orange.svg)
-![License](https://img.shields.io/badge/License-Apache%202.0-yellow.svg)
+![License](https://img.shields.io/badge/License-CC%20BY--NC%204.0-blue.svg)
 
 </div>
 
@@ -26,6 +26,8 @@
 > - SQL 生成与执行
 > - 图表生成
 > - 业务洞察分析
+
+> © 2026 Zafer-Liu · 已申请中国计算机软件著作权（受理号 2026R11S0817877，软件名称：自然语言交互式经营数据分析软件 V1.0）· 采用 CC BY-NC 4.0 授权，**禁止未授权商业使用，商用请联系作者**。
 
 > 💬 **官方交流群：** QQ 群 `991636855` · [Telegram 群](https://t.me/+cdRNfS68u9BlYjJl) · [Discord](https://discord.gg/EEG4Sw7tde)
 
@@ -755,7 +757,10 @@ outputs/charts
 
 # 📄 License
 
-Apache License 2.0
+本软件采用 **CC BY-NC 4.0** 授权，并已申请中国计算机软件著作权（受理号 2026R11S0817877，软件名称：自然语言交互式经营数据分析软件 V1.0）。  
+完整条款见 [LICENSE](./LICENSE) 文件。
+
+> 禁止未授权商业使用；商用请联系作者另行签署商业授权书。
 
 ---
 

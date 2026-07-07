@@ -15,7 +15,7 @@
 ![Plotly](https://img.shields.io/badge/Visualization-Plotly-3F4F75.svg)
 ![LLM](https://img.shields.io/badge/LLM-OpenAI%20Compatible-green.svg)
 ![Charts](https://img.shields.io/badge/Charts-41_Types-orange.svg)
-![License](https://img.shields.io/badge/License-Apache%202.0-yellow.svg)
+![License](https://img.shields.io/badge/License-CC%20BY--NC%204.0-blue.svg)
 
 </div>
 
@@ -26,6 +26,8 @@
 > - SQL generation & execution
 > - Chart generation
 > - Business insight analysis
+
+> © 2026 Zafer-Liu · Chinese software copyright registration applied (Acceptance No. 2026R11S0817877, Software: Natural-Language Interactive Business Data Analysis Software V1.0) · Licensed under CC BY-NC 4.0. **Unauthorized commercial use is prohibited; contact the author for commercial licensing.**
 
 > 💬 **Official Community:** QQ Group `991636855` · [Telegram Group](https://t.me/+cdRNfS68u9BlYjJl) · [Discord](https://discord.gg/EEG4Sw7tde)
 
@@ -732,7 +734,10 @@ We've hit a few deeply challenging, high-value problems. If you love solving har
 
 # 📄 License
 
-Apache License 2.0
+This software is licensed under **CC BY-NC 4.0** and a Chinese software copyright registration has been applied for (Acceptance No. 2026R11S0817877, Software: Natural-Language Interactive Business Data Analysis Software V1.0).  
+See the [LICENSE](./LICENSE) file for the full terms.
+
+> Unauthorized commercial use is prohibited; contact the author for a separate commercial license.
 
 ---
 
