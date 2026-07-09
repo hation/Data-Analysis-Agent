@@ -96,7 +96,7 @@ Thank you to the following sponsors for supporting this project!
 
 Thank you to Bloome for sponsoring this project! Bloome lets multiple AI agents (Claude, ChatGPT, DeepSeek, etc.) collaborate in a single conversation — zero setup, cloud-based, works on web and mobile, and you can share your configured agents with your team.
 
-👉 **Try Bloome: [https://bloome.im/login?ref=ZaferLiu](https://bloome.im/login?ref=ZaferLiu)**
+👉 **[Try Bloome](https://bloome.im/login?ref=ZaferLiu)**
 
 ---
 
@@ -106,7 +106,7 @@ Thank you to Bloome for sponsoring this project! Bloome lets multiple AI agents 
 
 Thank you to DolOffer for supporting this project! DolOffer is a platform focused on digital product recommendations and deal sharing, helping users quickly discover useful tools, services, and limited-time offers. The platform provides popular subscription services such as YouTube Premium, Claude, ChatGPT Plus, Spotify, Apple Music, and more, with prices as low as 30% of the official price or even lower. All services are genuine, stable, and backed by reliable after-sales support. Register through our exclusive link and use the coupon code **AI8888** when topping up to enjoy an additional 10% discount.
 
-👉 **Learn more: [https://github.com/Doloffer-g/guide](https://github.com/Doloffer-g/guide)**
+👉 **[Learn more](https://github.com/Doloffer-g/guide)**
 
 ---
 
@@ -116,7 +116,7 @@ Thank you to DolOffer for supporting this project! DolOffer is a platform focuse
 
 Thank you to Atlas Cloud for supporting this project! Atlas Cloud is an all-modal AI inference platform that provides developers with a unified AI API interface, covering video generation, image generation, and large language model APIs. Instead of integrating multiple providers separately, you can connect once and access more than 300 carefully selected all-modal models through a single interface. Check out Atlas Cloud’s newly launched coding plan promotion to get more cost-effective API access.
 
-👉 **Learn more: [https://www.atlascloud.ai](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=data-analysis-agent)**
+👉 **[Learn more](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=data-analysis-agent)**
 
 ---
 
