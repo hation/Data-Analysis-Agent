@@ -109,8 +109,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
-            build/windows-package/installer/BusinessAnalyticsAgent-Windows-x64.exe
-            build/windows-package/reports/*.json
+            build/w/installer/BusinessAnalyticsAgent-Windows-x64.exe
+            build/w/reports/*.json
 
   build-macos:
     name: Build macOS DMG

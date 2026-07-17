@@ -20,7 +20,8 @@ if (-not [Environment]::Is64BitOperatingSystem) {
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $buildRoot = [System.IO.Path]::GetFullPath((Join-Path $projectRoot 'build'))
 if (-not $WorkRoot) {
-    $WorkRoot = Join-Path $buildRoot 'windows-package'
+    # Keep this path short: PyTorch ships deeply nested license files that Inno Setup must compress.
+    $WorkRoot = Join-Path $buildRoot 'w'
 }
 $WorkRoot = [System.IO.Path]::GetFullPath($WorkRoot)
 if (-not $WorkRoot.StartsWith($buildRoot + [System.IO.Path]::DirectorySeparatorChar,

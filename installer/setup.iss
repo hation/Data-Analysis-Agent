@@ -10,10 +10,10 @@
 #define AppURL "https://github.com/Zafer-Liu/Data-Analysis-Agent"
 #define AppExeName "BusinessAnalyticsAgent.exe"
 #ifndef OnedirSource
-  #define OnedirSource "..\build\windows-package\pyinstaller-dist\BusinessAnalyticsAgent"
+  #define OnedirSource "..\build\w\pyinstaller-dist\BusinessAnalyticsAgent"
 #endif
 #ifndef InstallerOutputDir
-  #define InstallerOutputDir "..\build\windows-package\installer"
+  #define InstallerOutputDir "..\build\w\installer"
 #endif
 
 [Setup]
