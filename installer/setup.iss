@@ -15,6 +15,9 @@
 #ifndef InstallerOutputDir
   #define InstallerOutputDir "..\build\w\installer"
 #endif
+#ifndef IconFilePath
+  #define IconFilePath "icon.ico"
+#endif
 
 [Setup]
 AppId={{8F3A2C1D-4B5E-4F6A-9D7C-2E8F1A3B5C9D}
@@ -30,7 +33,7 @@ DisableDirPage=no
 AllowNoIcons=yes
 OutputDir={#InstallerOutputDir}
 OutputBaseFilename=BusinessAnalyticsAgent-Windows-x64
-SetupIconFile=icon.ico
+SetupIconFile={#IconFilePath}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern

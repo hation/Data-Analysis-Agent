@@ -101,10 +101,41 @@ if (-not $InnoCompiler -or -not (Test-Path -LiteralPath $InnoCompiler)) {
     throw 'Inno Setup 6 compiler (ISCC.exe) was not found.'
 }
 
-& $InnoCompiler "/DOnedirSource=$onedir" "/DInstallerOutputDir=$installerOutput" `
-    "/DAppVersion=$Version" (Join-Path $projectRoot 'installer\setup.iss')
+$iconFile = Join-Path $projectRoot 'installer\icon.ico'
+if (-not (Test-Path -LiteralPath $iconFile -PathType Leaf)) {
+    throw "Installer icon was not found: $iconFile"
+}
+
+# Inno Setup still uses legacy path handling while compressing. PyTorch ships
+# license paths that exceed MAX_PATH under the GitHub Actions checkout, so map
+# the existing work directory to a temporary drive for the compile step only.
+$innoDrive = @('Z', 'Y', 'X', 'W', 'V', 'U', 'T') |
+    Where-Object { -not (Test-Path -LiteralPath "${_}:\") } |
+    Select-Object -First 1
+if (-not $innoDrive) {
+    throw 'No free drive letter is available for the Inno Setup build.'
+}
+$innoDriveName = "${innoDrive}:"
+& subst.exe $innoDriveName $WorkRoot
 if ($LASTEXITCODE -ne 0) {
-    throw "Inno Setup failed with exit code $LASTEXITCODE."
+    throw "Failed to map $WorkRoot to $innoDriveName for Inno Setup."
+}
+
+$innoExitCode = $null
+try {
+    $innoRoot = "${innoDriveName}\"
+    $innoOnedir = Join-Path $innoRoot 'pyinstaller-dist\BusinessAnalyticsAgent'
+    $innoInstallerOutput = Join-Path $innoRoot 'installer'
+    & $InnoCompiler "/DOnedirSource=$innoOnedir" `
+        "/DInstallerOutputDir=$innoInstallerOutput" `
+        "/DIconFilePath=$iconFile" "/DAppVersion=$Version" `
+        (Join-Path $projectRoot 'installer\setup.iss')
+    $innoExitCode = $LASTEXITCODE
+} finally {
+    & subst.exe $innoDriveName /D | Out-Null
+}
+if ($innoExitCode -ne 0) {
+    throw "Inno Setup failed with exit code $innoExitCode."
 }
 
 $installer = Join-Path $installerOutput 'BusinessAnalyticsAgent-Windows-x64.exe'
