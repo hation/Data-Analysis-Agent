@@ -292,37 +292,60 @@ class WorkspaceRuntime:
     }
 
     def list_data_files(self, max_files: int = 50) -> List[dict]:
-        """列出工作目录内（浅层，不递归进子目录）的数据文件。
+        """递归列出工作目录内可作为数据源候选的文件。
 
-        返回 [{"name": "销售.xlsx", "size": 12345, "suffix": ".xlsx"}, ...]
-        跳过 artifacts/、.baa_cache/、隐藏文件、黑名单路径。
+        返回 [{"name": "子目录/销售.xlsx", "size": 12345, "suffix": ".xlsx"}, ...]
+        跳过 artifacts/、.zhixi/、.baa_cache/、隐藏目录/文件、黑名单路径。
         """
         results: List[dict] = []
+        max_files = max(1, int(max_files))
+        skip_dirs = {"artifacts", ".zhixi", ".baa_cache", "__pycache__", "node_modules", ".venv"}
         try:
-            for entry in sorted(self.workdir.iterdir(), key=lambda p: p.name.lower()):
-                if entry.is_dir():
-                    continue
-                name = entry.name
-                # 跳过隐藏文件和缓存目录产物
-                if name.startswith(".") or name.startswith("~"):
-                    continue
-                suffix = entry.suffix.lower()
-                if suffix not in self._DATA_SUFFIXES:
-                    continue
-                # 黑名单二次校验（保险）
-                if _is_blocked_path(entry):
-                    continue
-                try:
-                    size = entry.stat().st_size
-                except OSError:
-                    size = 0
-                results.append({
-                    "name": name,
-                    "size": size,
-                    "suffix": suffix,
-                })
-                if len(results) >= max_files:
-                    break
+            root = self.workdir.resolve()
+            for current, dirs, filenames in os.walk(self.workdir, followlinks=False):
+                current_path = Path(current)
+                allowed_dirs: list[str] = []
+                for dirname in dirs:
+                    lower = dirname.lower()
+                    child = current_path / dirname
+                    if dirname.startswith(".") or dirname.startswith("~") or lower in skip_dirs:
+                        continue
+                    try:
+                        if child.is_symlink() or _is_blocked_path(child.resolve(strict=False)):
+                            continue
+                    except (OSError, RuntimeError):
+                        continue
+                    allowed_dirs.append(dirname)
+                dirs[:] = sorted(allowed_dirs, key=str.lower)
+
+                for filename in sorted(filenames, key=str.lower):
+                    if filename.startswith(".") or filename.startswith("~"):
+                        continue
+                    entry = current_path / filename
+                    suffix = entry.suffix.lower()
+                    if suffix not in self._DATA_SUFFIXES:
+                        continue
+                    try:
+                        if entry.is_symlink() or not entry.is_file():
+                            continue
+                        safe = entry.resolve(strict=False)
+                        safe.relative_to(root)
+                    except (OSError, RuntimeError, ValueError):
+                        continue
+                    # 黑名单二次校验（保险）
+                    if _is_blocked_path(safe):
+                        continue
+                    try:
+                        size = safe.stat().st_size
+                    except OSError:
+                        size = 0
+                    results.append({
+                        "name": safe.relative_to(root).as_posix(),
+                        "size": size,
+                        "suffix": suffix,
+                    })
+                    if len(results) >= max_files:
+                        return results
         except (OSError, PermissionError) as e:
             log.warning("[workspace] list_data_files failed: %s", e)
         return results

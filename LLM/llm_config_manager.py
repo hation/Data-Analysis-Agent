@@ -20,6 +20,21 @@ CONFIG_DIR = LLM_CONFIG_FILE.parent
 DEFAULT_CONTEXT_WINDOW = 1_000_000
 DEFAULT_MAX_OUTPUT_TOKENS = 384_000
 
+# 本地模型占位 API Key（Ollama 等本地推理服务无需鉴权，但 OpenAI SDK 要求非空）
+LOCAL_KEY_PLACEHOLDER = "no-key"
+
+
+def _is_local_base_url(url: Optional[str]) -> bool:
+    """判断 base_url 是否指向本地地址——本地模型无需 API Key。"""
+    if not url:
+        return False
+    u = url.lower()
+    local_markers = (
+        "localhost", "127.0.0.1", "0.0.0.0", "[::1]",
+        "0:0:0:0:0:0:0:1",
+    )
+    return any(m in u for m in local_markers)
+
 @dataclass
 class LLMConfig:
     """LLM 配置"""
@@ -77,6 +92,20 @@ class LLMConfigManager:
             "prompt_cache_mode": "none",
             "prompt_cache_retention": "in_memory",
         },
+        "ollama": {
+            # Ollama 提供 OpenAI 兼容端点：http://localhost:11434/v1
+            # 本地推理无需 API Key，调用时使用 LOCAL_KEY_PLACEHOLDER 占位
+            # 默认值留空，引导用户自行填写（不同用户可能用不同端口/模型）
+            "base_url": "",
+            "model": "",
+            "env_var": None,  # 本地服务，无环境变量
+            "is_custom": False,
+            "context_window": 0,
+            "max_output_tokens": 0,
+            "supports_prompt_cache": False,
+            "prompt_cache_mode": "none",
+            "prompt_cache_retention": "in_memory",
+        },
     }
 
     def __init__(self, load_from_env: bool = False):
@@ -106,7 +135,10 @@ class LLMConfigManager:
     def _load_from_env(self):
         """从环境变量加载内置提供商配置（仅在显式开启时使用）"""
         for provider, defaults in self.DEFAULT_CONFIGS.items():
-            env_var = defaults["env_var"]
+            env_var = defaults.get("env_var")
+            if not env_var:
+                # ollama 等本地 provider 无 env_var，跳过
+                continue
             api_key = os.environ.get(env_var)
 
             if api_key and provider not in self.configs:
@@ -153,8 +185,14 @@ class LLMConfigManager:
             return False, "API 调用链接不能为空"
         if not model_name or not model_name.strip():
             return False, "模型名称不能为空"
+        # 本地模型（如 Ollama）无需 API Key，自动填占位符
         if not api_key or not api_key.strip():
-            return False, "API Key 不能为空"
+            if _is_local_base_url(base_url):
+                api_key = LOCAL_KEY_PLACEHOLDER
+            else:
+                return False, "API Key 不能为空"
+        else:
+            api_key = api_key.strip()
 
         provider_id = f"custom_{name.lower().replace(' ', '_')}"
         if provider_id in self.configs:
@@ -162,7 +200,7 @@ class LLMConfigManager:
 
         self.configs[provider_id] = LLMConfig(
             provider=provider_id,
-            api_key=api_key.strip(),
+            api_key=api_key,
             base_url=base_url.strip(),
             model=model_name.strip(),
             name=name.strip(),               # 供应商显示名称（用户填写的 ac-name）
@@ -191,11 +229,17 @@ class LLMConfigManager:
             log.warning("不支持的提供商: %s", provider)
             return False
 
-        if not api_key or not api_key.strip():
-            log.warning("API Key 不能为空")
-            return False
-
         defaults = self.DEFAULT_CONFIGS[provider]
+        # 本地 provider（ollama）无需 API Key，自动填占位符
+        if not api_key or not api_key.strip():
+            if _is_local_base_url(defaults.get("base_url")):
+                api_key = LOCAL_KEY_PLACEHOLDER
+            else:
+                log.warning("API Key 不能为空")
+                return False
+        else:
+            api_key = api_key.strip()
+
         self.configs[provider] = LLMConfig(
             provider=provider,
             api_key=api_key.strip(),
@@ -230,8 +274,9 @@ class LLMConfigManager:
         self.configs.pop(provider, None)
 
         # 清理当前进程环境变量（即使你现在不写 env，也防历史残留）
-        env_var = self.DEFAULT_CONFIGS[provider]["env_var"]
-        os.environ.pop(env_var, None)
+        env_var = self.DEFAULT_CONFIGS[provider].get("env_var")
+        if env_var:
+            os.environ.pop(env_var, None)
 
         if self.save_configs():
             return True, f"内置配置已清空: {provider}"
@@ -255,8 +300,13 @@ class LLMConfigManager:
             return False, "API Base URL 不能为空"
         if not model_name or not model_name.strip():
             return False, "Model ID 不能为空"
-        # api_key 留空则保留旧值
-        new_key = api_key.strip() if api_key and api_key.strip() else cfg.api_key
+        # api_key 留空则保留旧值；本地地址则用占位符
+        if api_key and api_key.strip():
+            new_key = api_key.strip()
+        elif _is_local_base_url(base_url):
+            new_key = LOCAL_KEY_PLACEHOLDER
+        else:
+            new_key = cfg.api_key
         old = self.configs[provider]
         self.configs[provider] = LLMConfig(
             provider=provider,
@@ -308,7 +358,7 @@ class LLMConfigManager:
         ]
 
     def get_default_provider(self) -> Optional[str]:
-        priority = ["deepseek", "openai", "atlascloud", "claude"]
+        priority = ["deepseek", "openai", "atlascloud", "ollama", "claude"]
         for provider in priority:
             if provider in self.configs and self.configs[provider].enabled:
                 return provider
@@ -371,7 +421,11 @@ class LLMConfigManager:
             effective_model = model     or config.model
 
         if not effective_key:
-            return {"success": False, "message": "API Key 不能为空", "provider": provider}
+            # 本地模型（如 Ollama）无需 API Key，使用占位符继续测试
+            if _is_local_base_url(effective_url):
+                effective_key = LOCAL_KEY_PLACEHOLDER
+            else:
+                return {"success": False, "message": "API Key 不能为空", "provider": provider}
 
         try:
             from openai import OpenAI
@@ -430,7 +484,7 @@ def get_llm_client_with_fallback(preferred_provider: Optional[str] = None):
     if preferred_provider:
         candidates.append(preferred_provider)
 
-    priority = ["deepseek", "openai", "atlascloud", "claude"]
+    priority = ["deepseek", "openai", "atlascloud", "ollama", "claude"]
     for p in priority:
         if p not in candidates and p in manager.configs and manager.configs[p].enabled:
             candidates.append(p)

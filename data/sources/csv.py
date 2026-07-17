@@ -30,7 +30,8 @@ class CSVDataSource(DataSource):
             self._conn.execute(
                 f"CREATE OR REPLACE TABLE \"{table}\" AS "
                 f"SELECT * FROM read_csv_auto('{file_path}', header=true, "
-                f"null_padding=true, ignore_errors=true)"
+                f"null_padding=true, ignore_errors=true, "
+                f"nullstr=['', 'null', 'NULL', 'Null', 'nan', 'NaN', 'N/A', 'n/a'])"
             )
             # Rename columns to cleaned identifiers
             cols_raw = [r[0] for r in self._conn.execute(f'DESCRIBE "{table}"').fetchall()]
@@ -43,7 +44,12 @@ class CSVDataSource(DataSource):
             log.info("[CSVDS] loaded %r via read_csv_auto", file_path)
         except Exception as e:
             log.warning("[CSVDS] read_csv_auto failed (%s), falling back to pandas", e)
-            df = pd.read_csv(file_path, encoding="utf-8-sig")
+            df = pd.read_csv(
+                file_path,
+                encoding="utf-8-sig",
+                na_values=["", "null", "NULL", "Null", "nan", "NaN", "N/A", "n/a"],
+                keep_default_na=True,
+            )
             df.columns = _dedup_columns([_clean_identifier(c) for c in df.columns])
             df = df.dropna(how="all")
             _register(self._conn, table, df)

@@ -555,10 +555,38 @@ def _compute_error_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     }
 
 
+def _backtest_fold(args: Tuple[pd.Series, pd.Series, float]) -> dict:
+    """Single rolling-backtest fold.
+
+    Kept at module scope (not a closure) so it pickles cleanly for the
+    ProcessPoolExecutor spawn context. Each fold runs its own ``_fit_prophet``
+    (numpy ridge regression + Fourier features) which is pure CPU work —
+    exactly the kind of GIL-bound loop that threads cannot parallelize.
+    Returns the error metrics dict, or ``{}`` on failure (caller filters).
+    """
+    train_series, val_series, day_scale = args
+    try:
+        _, t_max_days_tmp = _to_t(train_series.index)
+        yo, wo, do = _auto_fourier_orders(t_max_days_tmp, day_scale)
+        p = _fit_prophet(train_series, day_scale, yo, wo, do)
+        _, _, _, y_f = _forecast_prophet(p, len(val_series))
+        # 若训练数据全非负，保持和主流程一致
+        if (train_series.values >= 0).all():
+            y_f = np.maximum(y_f, 0.0)
+        return _compute_error_metrics(val_series.values.astype(float), y_f.astype(float))
+    except Exception:
+        return {}
+
+
 def _rolling_backtest(series: pd.Series, day_scale: float, n_folds: int = 3, horizon: int = 30) -> dict:
     """
     简化版滚动回测：
     每折：前段训练、后 horizon 验证
+
+    并行策略：n_folds 个 fold 互相独立，每折内部是纯 numpy CPU 密集
+    运算（岭回归 + 傅里叶特征），GIL 下线程无法真正并行。改用
+    ProcessPoolExecutor（spawn 上下文）绕开 GIL，n_folds 个进程同时
+    拟合。小数据或进程池不可用时自动降级为同步。
     """
     y_all = series.values.astype(float)
     n = len(series)
@@ -569,29 +597,23 @@ def _rolling_backtest(series: pd.Series, day_scale: float, n_folds: int = 3, hor
     if n < min_train + horizon + 5:
         return {"ok": False}
 
-    fold_metrics = []
-    # 从后往前取 n_folds 个切分点
+    # 收集各 fold 的输入（train_series, val_series, day_scale）
+    fold_args: List[Tuple[pd.Series, pd.Series, float]] = []
     for i in range(n_folds, 0, -1):
         val_end = n - (i - 1) * horizon
         val_start = val_end - horizon
         train_end = val_start
         if train_end < min_train:
             continue
+        fold_args.append((series.iloc[:train_end], series.iloc[val_start:val_end], day_scale))
 
-        train_series = series.iloc[:train_end]
-        val_series = series.iloc[val_start:val_end]
+    if not fold_args:
+        return {"ok": False}
 
-        _, t_max_days_tmp = _to_t(train_series.index)
-        yo, wo, do = _auto_fourier_orders(t_max_days_tmp, day_scale)
-        p = _fit_prophet(train_series, day_scale, yo, wo, do)
-
-        _, _, _, y_f = _forecast_prophet(p, len(val_series))
-        # 若训练数据全非负，保持和主流程一致
-        if (train_series.values >= 0).all():
-            y_f = np.maximum(y_f, 0.0)
-
-        m = _compute_error_metrics(val_series.values.astype(float), y_f.astype(float))
-        fold_metrics.append(m)
+    # CPU 密集：每折独立拟合，用进程池绕开 GIL；失败自动降级为同步
+    from infrastructure.cpu_pool import map_cpu_bound
+    raw_metrics = map_cpu_bound(_backtest_fold, fold_args)
+    fold_metrics = [m for m in raw_metrics if m]
 
     if not fold_metrics:
         return {"ok": False}

@@ -134,6 +134,10 @@ class ChatSession:
     _usage_lock: threading.RLock = field(
         default_factory=threading.RLock, repr=False, compare=False,
     )
+    # Skill name auto-loaded by the LLM via load_analysis_skill tool.
+    # Persisted across turns so guard/nudge logic works in subsequent turns
+    # (e.g. after ask_user user-reply starts a new turn).
+    auto_loaded_skill: str = ""
 
     # ── Multi-source API ───────────────────────────────────────────────────────
 

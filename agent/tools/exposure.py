@@ -7,6 +7,7 @@ import logging
 log = logging.getLogger(__name__)
 
 from copy import deepcopy
+import re
 
 from agent.activation import ActivationContext
 
@@ -21,12 +22,31 @@ def _normalize_discovery_text(text: str) -> str:
     return " ".join(str(text or "").lower().replace("_", " ").split())
 
 
+_READ_ACTION_RE = re.compile(r"(查看|读取|打开|读一下|看一下|看下|看看|read|open|view)", re.IGNORECASE)
+_FILE_OBJECT_RE = re.compile(
+    r"(说明(?:文件|文档)?|文件|文档|资料|正文|内容|file|document|doc(?:x)?|txt|md)",
+    re.IGNORECASE,
+)
+_DOCUMENT_SUFFIX_RE = re.compile(r"\.(?:docx?|txt|md)\b", re.IGNORECASE)
+
+
+def _looks_like_workspace_file_read_request(query: str) -> bool:
+    text = str(query or "")
+    if not text.strip():
+        return False
+    if _DOCUMENT_SUFFIX_RE.search(text):
+        return True
+    return bool(_READ_ACTION_RE.search(text) and _FILE_OBJECT_RE.search(text))
+
+
 def discover_tool_names_for_query(query: str) -> set[str]:
     """Return discoverable built-in tools mentioned by the user query."""
     haystack = _normalize_discovery_text(query)
     if not haystack:
         return set()
     discovered: set[str] = set()
+    if _looks_like_workspace_file_read_request(query):
+        discovered.add("workspace_read_file")
     raw = str(query or "").lower()
     for spec in BUILTIN_TOOL_REGISTRY.all():
         if not spec.discoverable:

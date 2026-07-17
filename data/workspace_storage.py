@@ -283,6 +283,70 @@ def _collect_json_reference_index(
     return {key: value for key, value in references.items() if value}, diagnostics
 
 
+def _load_json_value(value: str | None, fallback: Any) -> Any:
+    try:
+        return json.loads(value or "")
+    except (json.JSONDecodeError, TypeError):
+        return fallback
+
+
+def _collect_workflow_reference_index(
+    *,
+    root_path: Path,
+    workspace_id: str,
+    table_names: set[str],
+) -> tuple[dict[str, list[dict[str, str]]], list[dict[str, str]]]:
+    references: dict[str, list[dict[str, str]]] = {name: [] for name in table_names}
+    diagnostics: list[dict[str, str]] = []
+    db_path = root_path / ".zhixi" / "workflows.sqlite3"
+    if not db_path.is_file() or not table_names:
+        return {}, []
+
+    conn = None
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT m.id, m.run_id, m.node_run_id, m.kind, m.items_json, "
+            "r.session_id, r.workflow_version_id "
+            "FROM workflow_artifact_manifests m "
+            "JOIN workflow_runs r ON r.id = m.run_id "
+            "WHERE m.workspace_id = ? "
+            "ORDER BY m.created_at DESC LIMIT 1000",
+            (workspace_id,),
+        ).fetchall()
+        for row in rows:
+            payload = {
+                "manifest_id": row["id"],
+                "run_id": row["run_id"],
+                "node_run_id": row["node_run_id"],
+                "kind": row["kind"],
+                "items": _load_json_value(row["items_json"], []),
+                "session_id": row["session_id"],
+                "workflow_version_id": row["workflow_version_id"],
+            }
+            for table in table_names:
+                if _json_mentions_table(payload, table):
+                    references[table].append({
+                        "kind": "workflow_artifact",
+                        "name": f"{row['kind']}:{row['id']}",
+                        "path": str(db_path),
+                        "run_id": str(row["run_id"] or ""),
+                        "manifest_id": str(row["id"] or ""),
+                        "node_run_id": str(row["node_run_id"] or ""),
+                    })
+    except sqlite3.Error as exc:
+        diagnostics.append({
+            "code": "workflow_reference_scan_failed",
+            "message": str(exc),
+        })
+    finally:
+        if conn is not None:
+            conn.close()
+
+    return {key: value for key, value in references.items() if value}, diagnostics
+
+
 def build_workspace_storage_plan(
     target: WorkspaceStorageTarget,
     *,
@@ -299,6 +363,15 @@ def build_workspace_storage_plan(
         table_names=table_names,
     )
     diagnostics.extend(reference_diags)
+    workflow_references_by_table, workflow_reference_diags = _collect_workflow_reference_index(
+        root_path=target.root_path,
+        workspace_id=target.workspace_id,
+        table_names=table_names,
+    )
+    diagnostics.extend(workflow_reference_diags)
+    for table, refs in workflow_references_by_table.items():
+        references_by_table.setdefault(table, []).extend(refs)
+
     registered_tables: dict[str, str] = {}
     registry_entries = []
     candidates = []
@@ -373,7 +446,7 @@ def build_workspace_storage_plan(
             protected.append({
                 "id": f"registry:{key}",
                 "kind": "protected_reference",
-                "reason": "registered stale tables are referenced by saved history",
+                "reason": "registered stale tables are referenced by saved history or workflow lineage",
                 "references": table_references,
             })
 

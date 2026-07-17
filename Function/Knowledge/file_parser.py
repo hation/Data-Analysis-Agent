@@ -28,7 +28,7 @@ _TEMPLATE_THRESHOLD = 2
 
 _METRIC_HEADERS: dict[str, str] = {
     # canonical field  : accepted column aliases (lowercase)
-    "name":         {"name", "名称", "指标名", "指标", "metric"},
+    "name":         {"name", "名称", "指标名", "指标名称", "指标", "metric"},
     "alias":        {"alias", "别名", "别称", "aliases"},
     "definition":   {"definition", "定义", "desc", "description", "说明"},
     "sql_template": {"sql", "sql_template", "sql模板", "query"},

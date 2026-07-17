@@ -39,6 +39,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Iterable, Tuple
+from infrastructure.artifact_lifecycle import reclaim_expired_session_trash
 from infrastructure.paths import data_root
 
 log = logging.getLogger(__name__)
@@ -94,6 +95,9 @@ def run_cleanup(base_dir: Path, rules: Iterable[Tuple[str, int, str]] = DEFAULT_
         n, b = _sweep_one(base_dir / rel, days, label)
         total_removed += n
         total_freed += b
+    session_summary = reclaim_expired_session_trash(retention_days=int(os.environ.get("BAA_SESSION_TRASH_DAYS", "30")))
+    total_removed += session_summary["files"]
+    total_freed += session_summary["bytes"]
     if total_removed == 0:
         log.debug("[cleanup] sweep complete — nothing to remove")
 

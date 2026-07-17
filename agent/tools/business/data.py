@@ -60,7 +60,7 @@ class DataToolsMixin:
         try:
             from Function.Knowledge.knowledge_base import KnowledgeBase
             kb = KnowledgeBase(
-                workspace_id=getattr(self, "_workspace_id", ""),
+                workspace_id="",
                 user_id=getattr(self, "_user_id", ""),
             )
             try:

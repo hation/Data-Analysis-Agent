@@ -44,14 +44,23 @@ def _scope_context() -> tuple[str, str]:
 
 def _kb_dir() -> Path:
     from Function.Knowledge.knowledge_base import knowledge_scope_dir
-    workspace_id, user_id = _scope_context()
-    return knowledge_scope_dir(workspace_id=workspace_id, user_id=user_id)
+    _wid, user_id = _scope_context()
+    return knowledge_scope_dir(workspace_id="", user_id=user_id)
 
 
 def _kb():
     from Function.Knowledge.knowledge_base import KnowledgeBase
-    workspace_id, user_id = _scope_context()
-    return KnowledgeBase(workspace_id=workspace_id, user_id=user_id)
+    _wid, user_id = _scope_context()
+    return KnowledgeBase(workspace_id="", user_id=user_id)
+
+
+def _category_id(default: int = 1):
+    body = request.get_json(silent=True) if request.is_json else {}
+    raw = request.args.get("category_id") or (body or {}).get("category_id") or default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
 
 
 def _get_client(sid: str, provider: str = ""):
@@ -74,6 +83,53 @@ def _get_client(sid: str, provider: str = ""):
     cfg = config_manager.get_config(provider)
     log.info("[knowledge] using provider=%s model=%s for LLM extraction", provider, cfg.model)
     return client, cfg.model
+
+
+
+
+# ── Business categories ───────────────────────────────────────────────────────
+
+@bp.get("/api/knowledge/categories")
+def list_categories():
+    return jsonify(_kb().list_categories())
+
+
+@bp.post("/api/knowledge/categories")
+def add_category():
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(_kb().add_category(body.get("name", ""))), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@bp.put("/api/knowledge/categories/<int:cid>")
+def update_category(cid: int):
+    body = request.get_json(silent=True) or {}
+    patch = {k: body[k] for k in ("name", "enabled") if k in body}
+    record = _kb().update_category(cid, **patch)
+    if record is None:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify(record)
+
+
+@bp.post("/api/knowledge/categories/<int:cid>/toggle")
+def toggle_category(cid: int):
+    rec = _kb().get_category_by_id(cid)
+    if not rec:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify(_kb().update_category(cid, enabled=0 if rec["enabled"] else 1))
+
+
+@bp.delete("/api/knowledge/categories/<int:cid>")
+def delete_category(cid: int):
+    try:
+        deleted = _kb().delete_category(cid)
+        return jsonify({"ok": True, "deleted": deleted})
+    except LookupError as e:
+        return jsonify({"error": str(e)}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
 
 # ── File parse → preview ──────────────────────────────────────────────────────
@@ -162,7 +218,8 @@ def confirm_records():
         return jsonify({"error": "No records or source file provided"}), 400
     try:
         kb = _kb()
-        counts = kb.bulk_insert(records) if records else {"metrics": 0, "rules": 0, "notes": 0}
+        category_id = _category_id()
+        counts = kb.bulk_insert(records, category_id=category_id) if records else {"metrics": 0, "rules": 0, "notes": 0}
         rag = {"chunks": 0}
         if filename:
             source_path = _kb_dir() / filename
@@ -170,7 +227,7 @@ def confirm_records():
                 from Function.Knowledge.file_parser import extract_text
                 text = extract_text(str(source_path))
                 if text.strip():
-                    rag = kb.index_document(filename, text, source_type="file")
+                    rag = kb.index_document(filename, text, source_type="file", category_id=category_id)
         return jsonify({"ok": True, "inserted": counts, "rag": rag})
     except Exception as e:
         log.exception("Knowledge confirm failed")
@@ -210,7 +267,7 @@ def toggle_note(nid: int):
 
 @bp.get("/api/knowledge/metrics")
 def list_metrics():
-    return jsonify(_kb().list_metrics())
+    return jsonify(_kb().list_metrics(_category_id()))
 
 
 @bp.post("/api/knowledge/metrics")
@@ -223,6 +280,7 @@ def add_metric():
             definition=body.get("definition", ""),
             sql_template=body.get("sql_template", ""),
             notes=body.get("notes", ""),
+            category_id=body.get("category_id"),
         )
         return jsonify(record), 201
     except Exception as e:
@@ -248,7 +306,7 @@ def delete_metric(mid: int):
 
 @bp.get("/api/knowledge/rules")
 def list_rules():
-    return jsonify(_kb().list_rules())
+    return jsonify(_kb().list_rules(_category_id()))
 
 
 @bp.post("/api/knowledge/rules")
@@ -260,6 +318,7 @@ def add_rule():
             description=body.get("description", ""),
             condition=body.get("condition", ""),
             severity=body.get("severity", "warning"),
+            category_id=body.get("category_id"),
         )
         return jsonify(record), 201
     except Exception as e:
@@ -285,7 +344,7 @@ def delete_rule(rid: int):
 
 @bp.get("/api/knowledge/notes")
 def list_notes():
-    return jsonify(_kb().list_notes())
+    return jsonify(_kb().list_notes(_category_id()))
 
 
 @bp.post("/api/knowledge/notes")
@@ -296,6 +355,7 @@ def add_note():
             topic=body.get("topic", ""),
             content=body.get("content", ""),
             tags=body.get("tags", ""),
+            category_id=body.get("category_id"),
         )
         return jsonify(record), 201
     except Exception as e:

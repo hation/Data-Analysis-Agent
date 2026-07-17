@@ -81,6 +81,7 @@ class JobRunner:
         self._event_condition = threading.Condition()
         self._scope = threading.local()
         self._job_leases: Dict[str, str] = {}
+        self._terminal_listeners: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
 
     # ── Submission/execution ──────────────────────────────────────────────
 
@@ -157,7 +158,9 @@ class JobRunner:
         workspace_id, lease_acquired = self._acquire_workspace_lease()
         try:
             job = self._store.create(
-                self._sid, job_type, label=label, workspace_id=workspace_id,
+                self._sid, job_type, label=label,
+                parent_id=getattr(self._scope, "parent_id", ""),
+                workspace_id=workspace_id,
             )
         except Exception:
             if lease_acquired:
@@ -242,6 +245,7 @@ class JobRunner:
         finally:
             self._release_job_lease(jid)
             self._notify_event()
+            self._notify_terminal_listeners(jid)
 
     def _forget_future(self, jid: str) -> None:
         with self._lock:
@@ -251,6 +255,42 @@ class JobRunner:
         self._forget_future(jid)
         if future.cancelled():
             self._release_job_lease(jid)
+
+    def add_terminal_listener(
+        self,
+        jid: str,
+        callback: Callable[[Dict[str, Any]], None],
+    ) -> None:
+        """Call *callback* once after the Job terminal state is durable."""
+        immediate = None
+        with self._lock:
+            job = self._store.get_for_session(self._sid, jid)
+            if job is None:
+                raise ValueError(f"job not found: {jid}")
+            if job["status"] in _TERMINAL:
+                immediate = job
+            else:
+                self._terminal_listeners.setdefault(jid, []).append(callback)
+        if immediate is not None:
+            callback(immediate)
+
+    def _notify_terminal_listeners(self, jid: str) -> None:
+        job = self._store.get_for_session(self._sid, jid)
+        if job is None or job["status"] not in _TERMINAL:
+            return
+        with self._lock:
+            callbacks = self._terminal_listeners.pop(jid, [])
+        for callback in callbacks:
+            try:
+                callback(job)
+            except Exception:
+                log.exception("[job %s] terminal listener failed", jid)
+
+    def remove_terminal_listeners(self, jid: str) -> int:
+        """Remove pending callbacks when an owning workflow is disposed."""
+        with self._lock:
+            callbacks = self._terminal_listeners.pop(jid, [])
+        return len(callbacks)
 
     def _is_canceled(self, jid: str) -> bool:
         with self._lock:
@@ -279,6 +319,7 @@ class JobRunner:
         if canceled_before_start:
             self._store.mark_canceled(jid)
             self._release_job_lease(jid)
+            self._notify_terminal_listeners(jid)
         self._notify_event()
         return True
 
@@ -357,6 +398,12 @@ class JobRunner:
 
     def list_detail_events(self, job_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
         return self._store.list_detail_events(self._sid, job_ids)
+
+    def get_status_for_session(self, session_id: str, job_id: str) -> Optional[Dict[str, Any]]:
+        return self._store.get_for_session(session_id, job_id)
+
+    def purge_terminal_for_session(self, session_id: str, job_ids: List[str]) -> int:
+        return self._store.purge_terminal_ids(session_id, job_ids)
 
     def clear_terminal(self) -> int:
         return self._store.clear_terminal(self._sid)

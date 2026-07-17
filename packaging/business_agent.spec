@@ -68,6 +68,9 @@ datas.extend([
 ])
 # pmdarima resolves its version through importlib.metadata during import.
 datas.extend(copy_metadata("pmdarima"))
+# torch + tokenizers need their metadata for version checks at runtime.
+datas.extend(copy_metadata("torch"))
+datas.extend(copy_metadata("tokenizers"))
 
 hiddenimports = [
     # pandas selects Excel engines dynamically.
@@ -87,6 +90,13 @@ hiddenimports = [
     "statsmodels.tsa.statespace.sarimax",
     "statsmodels.tsa.stattools",
     "statsmodels.tsa.seasonal",
+    # Neural embedding (BGE-small-zh) — torch + tokenizers are imported
+    # lazily inside neural_embedder._init_neural, so PyInstaller won't
+    # detect them automatically.
+    "torch",
+    "torch.nn",
+    "torch.nn.functional",
+    "tokenizers",
 ]
 hiddenimports += collect_submodules("charts")
 hiddenimports += collect_submodules("PPT")
@@ -106,6 +116,11 @@ a = Analysis(
         "MCP.flowchart_server",
         "gunicorn",
         "pytest",
+        # torch CUDA backends — not needed for CPU-only inference.
+        "torch.cuda",
+        "torch.distributed",
+        "torch.testing",
+        "torch.utils.data.distributed",
     ],
     noarchive=False,
     optimize=1,

@@ -9,6 +9,8 @@ import logging
 log = logging.getLogger(__name__)
 from ..prompts import _ANALYZE_GUIDE, _CHART_IDS  # _CHART_IDS built from chart_selector._CHARTS
 
+# Keep JSON-like booleans readable in compact schema declarations.
+true = True
 TOOL_SCHEMA_VERSION = "1.1"
 
 AGENT_TOOLS = [
@@ -22,8 +24,9 @@ AGENT_TOOLS = [
                 "user workspace. The summary contains counts and at most five recent "
                 "files per root; it never reads file contents. System-root files are "
                 "metadata only: page with workspace_glob and inspect only relevant "
-                "files. Files in a mounted user workspace are already registered as "
-                "data-source tables and should be queried through get_schema/query_data."
+                "files. Structured files in a mounted user workspace are already registered as "
+                "data-source tables and should be queried through get_schema/query_data; "
+                "common documents such as .txt/.doc/.docx can be read with workspace_read_file."
                 "\n\nCall this FIRST whenever the user mentions local files, a project "
                 "folder, or asks you to read/analyse files they have on disk. "
                 "NEVER reply 'I cannot browse' or 'please upload' without calling this tool. "
@@ -313,10 +316,13 @@ AGENT_TOOLS = [
         "function": {
             "name": "profile_data",
             "description": (
-                "Profile a data table: per-column missing value %, dtype, "
-                "and for numeric columns: mean/std/min/max/quartiles. "
-                "Also generates distribution histogram charts automatically. "
-                "Call this for the /data command."
+                "Profile a data table before analysis: row/column count, dtype, SQL missing %, "
+                "pseudo-null strings such as 'null'/'NaN'/'N/A', date parse rates, "
+                "and numeric mean/std/min/max/quartiles. Also generates distribution "
+                "histogram charts automatically. Call this for the /data command and before "
+                "create_analysis_table when key filters depend on missing values, dates, ids or labels. "
+                "If the profile reports pseudo-null strings or low date parse rates, clean or explain "
+                "the blocker before computing key metrics."
             ),
             "parameters": {
                 "type": "object",
@@ -691,7 +697,7 @@ AGENT_TOOLS = [
                                 "sql": {"type": "string", "description": "Valid SQL against real tables."},
                                 "field_mapping": {
                                     "type": "object",
-                                    "description": "Maps chart axes/roles to column names.",
+                                    "description": "Maps chart axes/roles to SQL result column names. Values must be real column names from the SQL query output, never placeholder strings like 'category'. Example: {\"x\":\"month\",\"y\":\"revenue\"} or {\"x\":\"city\",\"y\":[\"sales\",\"profit\"]}.",
                                 },
                                 "options": {"type": "object"},
                                 "grid": {
@@ -741,7 +747,7 @@ AGENT_TOOLS = [
                                     ),
                                 },
                                 "sql": {"type": "string"},
-                                "field_mapping": {"type": "object"},
+                                "field_mapping": {"type": "object", "description": "Maps chart axes/roles to SQL result column names. Never use placeholder strings like 'category'."},
                                 "options": {"type": "object"},
                                 "grid": {
                                     "type": "object",
@@ -894,9 +900,9 @@ AGENT_TOOLS.extend(HOOKS_AUTOMATION_TOOL_SCHEMAS)
 
 
 WORKSPACE_TOOL_SCHEMAS = [
-    {"type": "function", "function": {"name": "workspace_glob", "description": "Page through file metadata. When a user workspace is mounted, omit path to search that mounted directory first; returned user/... paths can be passed unchanged to read, move, or delete tools. Use explicit workspace://uploads, workspace://outputs, or workspace://mcp only for system roots. Contents are never read by this tool.", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string", "description": "Optional root/base. Omit for the mounted user workspace; otherwise use workspace://user, workspace://uploads, workspace://outputs, or workspace://mcp."}, "max_results": {"type": "integer", "minimum": 1, "maximum": 100}, "cursor": {"type": "integer", "minimum": 0}}, "required": ["pattern"]}}},
+    {"type": "function", "function": {"name": "workspace_glob", "description": "Page through file metadata recursively. When a user workspace is mounted, omit path to search that mounted directory first; pattern '*' or '**/*' lists files under subfolders too. Returned user/... paths can be passed unchanged to read, move, or delete tools. Use explicit workspace://uploads, workspace://outputs, or workspace://mcp only for system roots. Contents are never read by this tool.", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string", "description": "Optional root/base. Omit for the mounted user workspace; otherwise use workspace://user, workspace://uploads, workspace://outputs, or workspace://mcp."}, "max_results": {"type": "integer", "minimum": 1, "maximum": 100}, "cursor": {"type": "integer", "minimum": 0}}, "required": ["pattern"]}}},
     {"type": "function", "function": {"name": "workspace_grep", "description": "Regex-search allowlisted UTF-8 text files on demand. At most 50 matches and 200 candidate files are examined; dependency, cache and build directories are skipped.", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}, "include": {"type": "string"}, "max_results": {"type": "integer", "minimum": 1, "maximum": 50}}, "required": ["pattern"]}}},
-    {"type": "function", "function": {"name": "workspace_read_file", "description": "Read one allowlisted UTF-8 text, DOCX, or spreadsheet file. Excel/XLS/XLSX/ODS files return a bounded worksheet preview (up to 256 MiB file size); use sheet_name, offset, and next_offset to page through rows. Text/DOCX files allow up to 20 MiB. Output remains capped at 400 lines and 12000 characters. Existing files must be read before write/edit.", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 400}, "sheet_name": {"type": "string", "description": "Optional worksheet name for spreadsheet files; defaults to the first sheet."}}, "required": ["file_path"]}}},
+    {"type": "function", "function": {"name": "workspace_read_file", "description": "Read one allowlisted text, DOC/DOCX, or spreadsheet file from the mounted/system workspace. The file_path must be an exact path from workspace_glob/workspace_status or the conversation; never guess names like readme.txt or 字段说明.md when the user asks for a vague 说明文档. Text files support common encodings such as UTF-8, UTF-16 and GB18030; legacy .doc uses best-effort text extraction. Excel/XLS/XLSX/ODS files return a bounded worksheet preview (up to 256 MiB file size); use sheet_name, offset, and next_offset to page through rows. Text/DOC/DOCX files allow up to 20 MiB. Output remains capped at 400 lines and 12000 characters. Existing files must be read before write/edit.", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 400}, "sheet_name": {"type": "string", "description": "Optional worksheet name for spreadsheet files; defaults to the first sheet."}}, "required": ["file_path"]}}},
     {"type": "function", "function": {"name": "workspace_write_file", "description": "Write UTF-8 content up to 20 MiB to workspace://outputs or an explicitly mounted user workspace. Existing files must be read first; uploads, mcp and sensitive/internal paths are read-only.", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "content": {"type": "string"}}, "required": ["file_path", "content"]}}},
     {"type": "function", "function": {"name": "workspace_edit_file", "description": "Replace one unique exact string in a previously-read file under outputs or the mounted user workspace. System uploads and mcp roots are read-only.", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}}, "required": ["file_path", "old_string", "new_string"]}}},
     {"type": "function", "function": {"name": "workspace_delete_file", "description": "Delete exactly one file from workspace://outputs or a writable mounted user workspace. Recursive/directory deletion is forbidden and confirm=true is always required.", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "confirm": {"type": "boolean", "description": "Must be true after confirming the exact file path to delete."}}, "required": ["file_path", "confirm"]}}},
@@ -919,16 +925,27 @@ TASK_TOOL_SCHEMAS = [
 AGENT_TOOLS.extend(TASK_TOOL_SCHEMAS)
 
 TEAM_TOOL_SCHEMAS = [
-    {"type": "function", "function": {"name": "team_create", "description": "Create a persistent analyst team definition in the mounted workspace. Members are roles, not unrestricted OS processes. Team and member names may be Chinese or English. Pass members as an array of objects, not a string.", "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "description": {"type": "string"}, "members": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "role": {"type": "string"}, "instructions": {"type": "string"}}, "required": ["name"]}}}, "required": ["name", "members"]}}},
-    {"type": "function", "function": {"name": "team_delete", "description": "Delete a team definition and mailbox from the mounted workspace.", "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}},
+    {"type": "function", "function": {"name": "team_create", "description": "Create a persistent analyst team definition in the mounted workspace. Members are roles, not unrestricted OS processes. Team and member names may be Chinese or English. Pass members as an array of objects, not a string. The platform automatically adds a fixed read-only quality reviewer member for data/SQL evidence checks.", "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "description": {"type": "string"}, "members": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "role": {"type": "string"}, "instructions": {"type": "string"}}, "required": ["name"]}}}, "required": ["name", "members"]}}},
+    {"type": "function", "function": {"name": "team_delete", "description": "Delete a team definition and mailbox from the mounted workspace. Protected by default: if the team has messages, errors, or quality-review evidence, first inspect team_status and keep it for audit. Only pass force=true when the user explicitly confirms deletion after review.", "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "force": {"type": "boolean", "description": "Set true only after explicit user confirmation; bypasses evidence-retention protection but still refuses active queued/running teams."}}, "required": ["name"]}}},
     {"type": "function", "function": {"name": "team_list", "description": "List persistent analyst teams in the mounted workspace with member statuses.", "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "team_status", "description": "Get one workspace team status, member inbox counts, and recent mailbox messages.", "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}},
     {"type": "function", "function": {"name": "send_message", "description": "Store a message for a named member in a mounted-workspace team mailbox. Use recipient='*' to broadcast to all members.", "parameters": {"type": "object", "properties": {"team_name": {"type": "string"}, "recipient": {"type": "string"}, "message": {"type": "string"}}, "required": ["team_name", "recipient", "message"]}}},
-    {"type": "function", "function": {"name": "agent_delegate", "description": "Delegate a bounded reasoning task to a named workspace team member. The delegated member has a limited read-only toolset for schema inspection, data queries, knowledge search, and workspace reading; it consumes unread mailbox messages and writes the result back to the team leader mailbox.", "parameters": {"type": "object", "properties": {"prompt": {"type": "string"}, "description": {"type": "string"}, "team_name": {"type": "string"}, "member_name": {"type": "string"}}, "required": ["prompt"]}}},
-    {"type": "function", "function": {"name": "team_delegate", "description": "Delegate multiple independent bounded reasoning tasks to named team members in parallel. Prefer this over repeated agent_delegate calls when Teams are enabled. Keep each member prompt focused and concise. Each teammate has a limited read-only toolset for schema inspection, data queries, knowledge search, and workspace reading; it consumes unread mailbox messages and writes the result back to the leader mailbox.", "parameters": {"type": "object", "properties": {"team_name": {"type": "string"}, "assignments": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "object", "properties": {"member_name": {"type": "string"}, "prompt": {"type": "string"}, "description": {"type": "string"}}, "required": ["member_name", "prompt"]}}, "timeout_seconds": {"type": "integer", "minimum": 10, "maximum": 300, "description": "Per-member timeout. Default 300."}, "max_concurrency": {"type": "integer", "minimum": 1, "maximum": 8, "description": "Parallel worker count. Default is assignments count capped at 6."}, "result_max_tokens": {"type": "integer", "minimum": 400, "maximum": 2500, "description": "Per-member output cap. Default 1200 for speed."}}, "required": ["team_name", "assignments"]}}},
+    {"type": "function", "function": {"name": "agent_delegate", "description": "Delegate a bounded reasoning task to a named workspace team member. The delegated member has a limited read-only toolset for schema inspection, data queries, knowledge search, and workspace reading; it consumes unread mailbox messages and writes the result back to the team leader mailbox. When team_name/member_name are used, the fixed quality reviewer runs after the member as a second data/SQL evidence barrier.", "parameters": {"type": "object", "properties": {"prompt": {"type": "string"}, "description": {"type": "string"}, "team_name": {"type": "string"}, "member_name": {"type": "string"}}, "required": ["prompt"]}}},
+    {"type": "function", "function": {"name": "team_plan_create", "description": "Create a bounded dynamic team plan without running members. Use this when the user explicitly asks to create, preview, or confirm a team plan first. Execute the returned plan_id later with team_delegate(plan_id=...).", "parameters": {"type": "object", "properties": {"team_name": {"type": "string"}, "goal": {"type": "string"}, "assignments": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "object", "properties": {"task_id": {"type": "string"}, "member_name": {"type": "string"}, "prompt": {"type": "string"}, "description": {"type": "string"}, "depends_on": {"type": "array", "items": {"type": "string"}}}, "required": ["member_name", "prompt"]}}}, "required": ["team_name", "goal", "assignments"]}}},
+    {"type": "function", "function": {"name": "team_delegate", "description": "Delegate multiple independent bounded reasoning tasks to named team members in parallel. Prefer this over repeated agent_delegate calls when Teams are enabled. Keep each member prompt focused and concise. Each teammate has a limited read-only toolset for schema inspection, data queries, knowledge search, and workspace reading; it consumes unread mailbox messages and writes the result back to the leader mailbox. After member results complete, the fixed quality reviewer automatically runs as a second data/SQL evidence barrier.", "parameters": {"type": "object", "properties": {"team_name": {"type": "string"}, "goal": {"type": "string", "description": "Bounded overall goal recorded on the dynamic plan."}, "retry_plan_id": {"type": "string", "description": "Existing dynamic plan ID for retrying failed tasks."}, "review_plan_id": {"type": "string", "description": "Review-blocked dynamic plan ID to revise."}, "review_task_ids": {"type": "array", "items": {"type": "string"}, "description": "Completed tasks requiring revision; downstream tasks rerun automatically."}, "plan_id": {"type": "string", "description": "Existing planned dynamic plan ID to execute after explicit confirmation."}, "retry_task_ids": {"type": "array", "items": {"type": "string"}}, "assignments": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "object", "properties": {"task_id": {"type": "string"}, "member_name": {"type": "string"}, "prompt": {"type": "string"}, "description": {"type": "string"}, "depends_on": {"type": "array", "items": {"type": "string"}}}, "required": ["member_name", "prompt"]}}, "timeout_seconds": {"type": "integer", "minimum": 10, "maximum": 300, "description": "Per-member timeout. Default 300."}, "max_concurrency": {"type": "integer", "minimum": 1, "maximum": 8, "description": "Parallel worker count. Default is assignments count capped at 6."}, "result_max_tokens": {"type": "integer", "minimum": 400, "maximum": 2500, "description": "Per-member output cap. Default 1200 for speed."}}, "required": ["team_name"]}}},
 ]
 
 AGENT_TOOLS.extend(TEAM_TOOL_SCHEMAS)
+WORKFLOW_TOOL_SCHEMAS = [
+    {"type": "function", "function": {"name": "workflow_create", "description": "Create and publish a standard AI-team analysis Workflow from chat. Use when the user says create workflow/创建工作流/创建workflow. It creates agent profiles, a DAG, approval/retry edges, validates, and publishes the Workflow. After creation, the user can start it with workflow_start or inspect it in the Teams Workflow panel.", "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "description": {"type": "string"}, "mode": {"type": "string", "enum": ["full_auto", "key_approval", "exception_review"]}, "source_key": {"type": "string", "description": "Input field name, default source_snapshot."}}}}},
+    {"type": "function", "function": {"name": "workflow_list", "description": "List published Workflows available in the mounted workspace. Use before starting a workflow when the user gives a name rather than an exact id.", "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "workflow_start", "description": "Start one published auto-edge Workflow by name, workflow id, or version id. Returns a durable Run and NodeRun status immediately while nodes continue through JobRunner.", "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "workflow_id": {"type": "string"}, "workflow_version_id": {"type": "string"}, "inputs": {"type": "object", "additionalProperties": true}}}}},
+    {"type": "function", "function": {"name": "workflow_status", "description": "Advance/reconcile and return the durable status, nodes, and events of one Workflow Run.", "parameters": {"type": "object", "properties": {"run_id": {"type": "string"}}, "required": ["run_id"]}}},
+]
+
+AGENT_TOOLS.extend(WORKFLOW_TOOL_SCHEMAS)
+
+
 
 CONTROL_TOOL_SCHEMAS = [
     {"type": "function", "function": {"name": "read_tool_result", "description": "Read a recoverable tool-result Artifact that belongs to this session. Use query for matching snippets or offset/limit for bounded character pagination. Never guess missing Artifact content.", "parameters": {"type": "object", "properties": {"artifact_id": {"type": "string", "description": "Opaque tr_... id from a prior tool result."}, "offset": {"type": "integer", "minimum": 0, "default": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 4000, "default": 4000}, "query": {"type": "string", "description": "Optional case-insensitive text to find with bounded context."}}, "required": ["artifact_id"]}}},
@@ -937,6 +954,133 @@ CONTROL_TOOL_SCHEMAS = [
 ]
 
 AGENT_TOOLS.extend(CONTROL_TOOL_SCHEMAS)
+
+
+DIAGRAM_TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "display_diagram",
+            "description": (
+                "Display a draw.io diagram in the business canvas drawer. "
+                "PREFERRED: use content-fill mode (template_id + content) for known frameworks "
+                "to guarantee correct layout. Only use raw xml for custom diagrams. "
+                "Available templates: business_model_canvas, bcg_matrix, swot_analysis, value_proposition."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "xml": {
+                        "type": "string",
+                        "description": "Complete draw.io XML for custom diagrams. OMIT this when using content-fill mode."
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Diagram title shown in the drawer header."
+                    },
+                    "template_id": {
+                        "type": "string",
+                        "description": "Template id for content-fill mode. Use this WITH content parameter instead of xml for known frameworks.",
+                        "enum": ["business_model_canvas", "bcg_matrix", "swot_analysis", "value_proposition"]
+                    },
+                    "content": {
+                        "type": "object",
+                        "description": "Content-fill mode: JSON object mapping section keys to text strings. Requires template_id. BMC keys: key_partners, key_activities, key_resources, value_proposition, customer_relationships, channels, customer_segments, cost_structure, revenue_streams. BCG keys: stars, question_marks, cash_cows, dogs. SWOT keys: strengths, weaknesses, opportunities, threats. VP keys: product_service, customer_segments, customer_jobs, pain_relievers, gain_creators, competitors.",
+                        "additionalProperties": {"type": "string"}
+                    },
+                    "project_id": {
+                        "type": "string",
+                        "description": "Optional existing canvas project id to update. If omitted, a new project is created."
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_diagram",
+            "description": (
+                "Edit specific cells in the current diagram by ID-based operations (update/add/delete). "
+                "ALWAYS call get_diagram first to see current cell IDs before editing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "The canvas project id to edit."
+                    },
+                    "operations": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "operation": {
+                                    "type": "string",
+                                    "enum": ["update", "add", "delete"],
+                                    "description": "The operation type."
+                                },
+                                "cell_id": {
+                                    "type": "string",
+                                    "description": "The mxCell id to target."
+                                },
+                                "new_xml": {
+                                    "type": "string",
+                                    "description": "For update/add: the new mxCell XML fragment. Must contain an mxCell element with the same id as cell_id."
+                                }
+                            },
+                            "required": ["operation", "cell_id"]
+                        },
+                        "description": "Array of operations to apply to the diagram."
+                    }
+                },
+                "required": ["project_id", "operations"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_diagram",
+            "description": "Get the current diagram XML from a canvas project. Use this before edit_diagram to see current cell IDs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "The canvas project id."
+                    }
+                },
+                "required": ["project_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_shape_library",
+            "description": (
+                "Fetch draw.io shape library documentation. Call this BEFORE using any icon library "
+                "in your diagram XML. Never guess shape style syntax — always look it up first."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "library": {
+                        "type": "string",
+                        "description": "Shape library name. Available: basic, flowchart, bpmn, infographic, arrows2",
+                        "enum": ["basic", "flowchart", "bpmn", "infographic", "arrows2"]
+                    }
+                },
+                "required": ["library"]
+            }
+        }
+    },
+]
+
+AGENT_TOOLS.extend(DIAGRAM_TOOL_SCHEMAS)
 
 
 TOOL_SCHEMA_VERSIONS = {

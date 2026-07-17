@@ -11,6 +11,7 @@ from flask import Blueprint, request, jsonify
 from .state import session_manager, config_manager
 from data.connector import ExcelDataSource, CSVDataSource
 from agent.reasoning import split_reasoning_tags
+from infrastructure.artifact_lifecycle import register_session_file, soft_delete_session_group
 from infrastructure.paths import data_path
 
 log = logging.getLogger(__name__)
@@ -258,6 +259,7 @@ def autosave_session(sid: str):
         path = SAVE_DIR / f"autosave_{sid}.json"
 
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    register_session_file(path, session_id=sid, autosave=True)
     log.debug("[session] autosave  sid=%s  file=%s  msg_count=%d",
               sid, path.name, _visible_msg_count(sess.history))
     return jsonify({"ok": True, "saved_at": payload["saved_at"], "filename": path.name})
@@ -311,6 +313,7 @@ def save_session(sid: str):
     ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = SAVE_DIR / f"{stem}_{ts}.json"
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    register_session_file(path, session_id=sid, autosave=False)
 
     log.info("[session] saved  sid=%s  name=%r  file=%s  msg_count=%d",
              sid, name, path.name, _visible_msg_count(sess.history))
@@ -490,7 +493,8 @@ def delete_session(filename: str):
     path = _session_file(filename)
     if not path.exists() or path.suffix != ".json":
         return jsonify({"error": "文件不存在"}), 404
-    path.unlink()
-    # Chart HTML in outputs/charts/ is intentionally NOT deleted — it is shared
-    # storage and may still be referenced by other saved conversations.
-    return jsonify({"ok": True})
+    try:
+        cleanup = soft_delete_session_group(SAVE_DIR, path.name)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, **cleanup})

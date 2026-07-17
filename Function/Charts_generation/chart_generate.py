@@ -19,14 +19,46 @@ _PLOTLY_CDN   = "https://cdn.plot.ly/plotly-"          # 前缀，用于检测
 _PLOTLY_TAG   = f"<script src='{_PLOTLY_LOCAL}'></script>"
 
 
+def _chart_key(chart_type: str) -> str:
+    return str(chart_type or "").strip().lower()
+
+
+def _unwrap_item_dicts(mapping: Dict[str, Any]) -> Dict[str, Any]:
+    """Unwrap {"item": [...]} dicts that some LLM serializers produce.
+
+    Certain function-calling adapters convert XML-style arrays
+    into {"y": {"item": ["col1"]}} instead of {"y": ["col1"]}.
+    This unwraps such structures so downstream logic sees plain lists.
+    """
+    result = {}
+    for key, value in (mapping or {}).items():
+        if isinstance(value, dict):
+            if "item" in value and isinstance(value["item"], (list, tuple)):
+                result[key] = list(value["item"])
+                continue
+            if "item" in value and isinstance(value["item"], str):
+                result[key] = value["item"]
+                continue
+            list_vals = [v for v in value.values() if isinstance(v, (list, tuple))]
+            if list_vals:
+                result[key] = list(list_vals[0])
+                continue
+            result[key] = value
+        else:
+            result[key] = value
+    return result
+
+
 def _normalize_chart_mapping(
     chart_type: str,
     mapping: Dict[str, Any],
     columns=None,
 ) -> Dict[str, Any]:
     """Normalize common LLM field-mapping aliases before chart dispatch."""
-    normalized = dict(mapping or {})
-    chart_key = (chart_type or "").lower()
+    # Unwrap {"item": [...]} wrapping from certain LLM serializers BEFORE
+    # any str() coercion or comma-split logic sees it.
+    normalized = _unwrap_item_dicts(mapping or {})
+    chart_key = _chart_key(chart_type)
     column_names = {str(col) for col in ([] if columns is None else columns)}
 
     # Registry roles use singular names. Some models still emit common plotting
@@ -188,6 +220,51 @@ except ImportError as e:
         pass
 
 
+def _iter_mapping_columns(mapping: Dict[str, Any]):
+    for role, value in (mapping or {}).items():
+        if isinstance(value, str):
+            yield str(role), value
+        elif isinstance(value, (list, tuple, set)):
+            for item in value:
+                if isinstance(item, str):
+                    yield str(role), item
+        elif isinstance(value, dict):
+            # Unwrap {"item": [...]} or similar dict wrapping
+            for sub in value.values():
+                if isinstance(sub, (list, tuple)):
+                    for item in sub:
+                        if isinstance(item, str):
+                            yield str(role), item
+                elif isinstance(sub, str):
+                    yield str(role), sub
+
+
+def _validate_mapping_columns(mapping: Dict[str, Any], columns) -> Optional[str]:
+    column_names = {str(col) for col in columns}
+    missing = sorted({
+        col
+        for role, col in _iter_mapping_columns(mapping)
+        if col not in column_names and role not in {"series", "color", "group"}
+    })
+    if missing:
+        return "field_mapping references missing SQL result columns: " + ", ".join(missing)
+    return None
+
+
+def _required_mapping_error(chart_type: str, mapping: Dict[str, Any]) -> Optional[str]:
+    chart_key = _chart_key(chart_type)
+    if chart_key in {"bar_chart", "line_chart"}:
+        required = ("x", "y")
+    elif chart_key in {"grouped_bar_chart", "stacked_bar_chart"}:
+        required = ("x",)
+    else:
+        return None
+    missing = [role for role in required if not mapping.get(role)]
+    if missing:
+        return "field_mapping missing required role(s): " + ", ".join(missing)
+    return None
+
+
 def generate_chart(
     df: pd.DataFrame = None,
     excel_path: str = None,
@@ -227,11 +304,21 @@ def generate_chart(
         if not mapping:
             mapping = _auto_detect_mapping(df, chart_type)
 
-        # 统一 mapping 中的列名为字符串（mapping 的 value 通常是列名）
-        # 但对于列表类型（如dimensions）保持原样
+        # Unwrap {"item": [...]} wrapping before any str() coercion
+        # to prevent dict repr like "{'item': [...]}" being split
         if mapping:
-            mapping = {k: (v if isinstance(v, list) else (str(v) if v is not None else v)) for k, v in mapping.items()}
+            mapping = _unwrap_item_dicts(mapping)
+        # 统一 mapping 中的列名为字符串（mapping 的 value 通常是列名）
+        # 但对于列表/dict 类型保持原样
+        if mapping:
+            mapping = {k: (v if isinstance(v, (list, tuple, dict)) else (str(v) if v is not None else v)) for k, v in mapping.items()}
         mapping = _normalize_chart_mapping(chart_type, mapping or {}, df.columns)
+        mapping_error = _validate_mapping_columns(mapping, df.columns)
+        if mapping_error:
+            return {"error": mapping_error}
+        required_error = _required_mapping_error(chart_type, mapping)
+        if required_error:
+            return {"error": required_error}
         
         # 合并 options，添加 color_scheme
         merged_options = options or {}
@@ -294,21 +381,23 @@ def _auto_detect_mapping(df: pd.DataFrame, chart_type: str) -> Dict[str, str]:
         df = df.copy()
         df.columns = df.columns.map(str)
         numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-        string_cols = df.select_dtypes(include=['object']).columns.tolist()
+        string_cols = df.select_dtypes(include=['object', 'string']).columns.tolist()
         
         mapping = {}
+        chart_key = _chart_key(chart_type)
         
         # 根据图表类型推荐映射
-        if chart_type in ["bar_chart", "grouped_bar", "stacked_bar"]:
+        if chart_key in {"bar_chart", "bar", "grouped_bar", "grouped_bar_chart", "stacked_bar", "stacked_bar_chart"}:
             if string_cols and numeric_cols:
                 mapping["x"] = string_cols[0]
                 mapping["y"] = numeric_cols[0]
-                if len(string_cols) > 1:
-                    mapping["series"] = string_cols[1]
-                elif len(numeric_cols) > 1:
-                    mapping["series"] = numeric_cols[1]
+                if chart_key in {"grouped_bar", "grouped_bar_chart", "stacked_bar", "stacked_bar_chart"}:
+                    if len(string_cols) > 1:
+                        mapping["series"] = string_cols[1]
+                    elif len(numeric_cols) > 1:
+                        mapping["value_cols"] = numeric_cols
         
-        elif chart_type == "line_chart":
+        elif chart_key == "line_chart":
             if string_cols and numeric_cols:
                 mapping["x"] = string_cols[0]
                 mapping["y"] = numeric_cols[0]
@@ -316,7 +405,7 @@ def _auto_detect_mapping(df: pd.DataFrame, chart_type: str) -> Dict[str, str]:
                 mapping["x"] = numeric_cols[0]
                 mapping["y"] = numeric_cols[1]
         
-        elif chart_type == "scatter_plot":
+        elif chart_key == "scatter_plot":
             if len(numeric_cols) >= 2:
                 mapping["x"] = numeric_cols[0]
                 mapping["y"] = numeric_cols[1]
@@ -421,7 +510,7 @@ def recommend_charts(df: pd.DataFrame = None, excel_path: str = None, limit: int
             return []
         
         numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-        string_cols = df.select_dtypes(include=['object']).columns.tolist()
+        string_cols = df.select_dtypes(include=['object', 'string']).columns.tolist()
         
         recommendations = []
         

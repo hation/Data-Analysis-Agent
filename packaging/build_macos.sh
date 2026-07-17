@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="1.2.0"
 WORK_ROOT=""
 PREPARE_ONLY=0
 

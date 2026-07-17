@@ -4,3 +4,5 @@
 @import "parts/chat.css?v=fe2-workspace-merged";
 @import "parts/modals.css";
 @import "parts/kb.css";
+@import "parts/business-canvas.css";
+@import "parts/diagram.css";

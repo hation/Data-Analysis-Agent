@@ -4,7 +4,7 @@
 
 #define AppName "Business Analytics Agent"
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "1.2.0"
 #endif
 #define AppPublisher "Zafer Liu"
 #define AppURL "https://github.com/Zafer-Liu/Data-Analysis-Agent"

@@ -7,6 +7,8 @@ log = logging.getLogger(__name__)
 import os
 import re
 import uuid
+from pathlib import Path
+from infrastructure.artifact_lifecycle import register_artifact
 from infrastructure.paths import data_path
 
 REPORT_JOB_SECTION_THRESHOLD = 6
@@ -83,6 +85,7 @@ class ExportToolsMixin:
             log.warning("[export] excel export failed: %s", exc)
             return f"❌ 导出失败：{exc}"
 
+        register_artifact(Path(filepath), artifact_type="export", session_id=getattr(self, "_session_id", ""), workspace_id=getattr(self, "_workspace_id", ""))
         download_url = self._build_download_url(safe_name)
         return (
             f"✅ Excel 文件已生成，共 {len(tables)} 张表：{', '.join(tables)}。\n\n"
@@ -129,6 +132,7 @@ class ExportToolsMixin:
 
         n_charts = len(chart_htmls)
         chart_note = f"（含 {n_charts} 张图表）" if n_charts else ""
+        register_artifact(Path(_result_path), artifact_type="report", session_id=getattr(self, "_session_id", ""), workspace_id=getattr(self, "_workspace_id", ""))
         download_url = self._build_download_url(download_name)
         return (
             f"✅ 报告已生成，共 {len(sections)} 个章节{chart_note}。\n\n"
@@ -448,6 +452,7 @@ class ExportToolsMixin:
             log.warning("[export] PPT save failed: %s", exc)
             return f"❌ PPT 文件保存失败：{exc}"
 
+        register_artifact(Path(filepath), artifact_type="export", session_id=getattr(self, "_session_id", ""), workspace_id=getattr(self, "_workspace_id", ""))
         download_url = self._build_download_url(safe_name)
         return (
             f"✅ PowerPoint 演示文稿已生成，共 **{total}** 张幻灯片。\n\n"
@@ -495,9 +500,10 @@ class ExportToolsMixin:
         sid = self._session_id
         if sid:
             url = f"{url}?sid={sid}"
+        export_url = f"/api/dashboard/{dashboard_id}/export-html"
         return (
             f"✅ 看板「{name}」已生成，包含 **{len(widgets)}** 个图表组件。\n\n"
-            f"[📊 打开看板]({url})"
+            f"[📊 打开看板]({url})  [📥 下载 HTML]({export_url})"
         )
 
     def _format_dashboard_result(self, name: str, widgets: list, data: dict) -> str:
@@ -506,9 +512,10 @@ class ExportToolsMixin:
         sid = self._session_id
         if sid:
             url = f"{url}?sid={sid}"
+        export_url = f"/api/dashboard/{dashboard_id}/export-html"
         return (
             f"✅ 看板「{name}」已生成，包含 **{len(widgets)}** 个图表组件。\n\n"
-            f"[📊 打开看板]({url})"
+            f"[📊 打开看板]({url})  [📥 下载 HTML]({export_url})"
         )
 
     def _tool_generate_dashboard_with_jobs(

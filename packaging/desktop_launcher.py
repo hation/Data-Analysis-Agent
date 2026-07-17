@@ -91,7 +91,12 @@ def _positive_float_env(name: str, default: float) -> float:
 def _monitor_desktop_clients(registry, shutdown_event, close_server) -> None:
     startup_timeout = _positive_float_env("BAA_DESKTOP_STARTUP_TIMEOUT", 120.0)
     idle_timeout = _positive_float_env("BAA_DESKTOP_IDLE_TIMEOUT", 5.0)
-    heartbeat_timeout = _positive_float_env("BAA_DESKTOP_HEARTBEAT_TIMEOUT", 10.0)
+    # Browsers throttle background-tab timers to ~once per minute, so the
+    # heartbeat can legitimately stall well past the client's send interval.
+    # Keep a generous grace period so a backgrounded page never makes the
+    # server shut down under the user (which surfaces as "Failed to fetch").
+    # Explicit page close still exits promptly via disconnect + idle_timeout.
+    heartbeat_timeout = _positive_float_env("BAA_DESKTOP_HEARTBEAT_TIMEOUT", 90.0)
     while not shutdown_event.wait(0.5):
         if registry.should_shutdown(
             startup_timeout=startup_timeout,

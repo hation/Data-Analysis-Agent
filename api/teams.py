@@ -39,7 +39,9 @@ def delete_team(sid: str, team_name: str):
         return _error_response(ValueError("解散团队前必须明确确认。"), 400)
     try:
         result = WorkspaceTeamStore(sid).delete(
-            team_name, require_inactive=True,
+            team_name,
+            require_inactive=True,
+            force=body.get("force") is True,
         )
     except WorkspaceTeamError as exc:
         message = str(exc)
@@ -70,3 +72,59 @@ def clear_team_messages(sid: str, team_name: str):
             status = 400
         return _error_response(exc, status)
     return jsonify({"ok": True, **result})
+
+@bp.get("/api/session/<sid>/team-plans")
+def list_team_plans(sid: str):
+    from agent.teams.dynamic_plans import DynamicTeamPlanStore
+    try:
+        plans = DynamicTeamPlanStore(sid).list(
+            team_name=str(request.args.get("team_name") or "")
+        )
+    except WorkspaceTeamError as exc:
+        return _error_response(exc, 400)
+    return jsonify({"ok": True, "plans": plans})
+
+
+@bp.get("/api/session/<sid>/team-plans/<plan_id>")
+def get_team_plan(sid: str, plan_id: str):
+    from agent.teams.dynamic_plans import DynamicTeamPlanStore
+    try:
+        plan = DynamicTeamPlanStore(sid).get(plan_id)
+    except WorkspaceTeamError as exc:
+        return _error_response(exc, 404 if "not found" in str(exc) else 400)
+    return jsonify({"ok": True, "plan": plan})
+
+
+@bp.post("/api/session/<sid>/team-plans/<plan_id>/actions/<action>")
+def control_team_plan(sid: str, plan_id: str, action: str):
+    from agent.teams.dynamic_plans import DynamicTeamPlanStore
+    try:
+        plan = DynamicTeamPlanStore(sid).control(plan_id, action)
+    except WorkspaceTeamError as exc:
+        return _error_response(exc, 409 if "cannot" in str(exc) else 400)
+    canceled_jobs = 0
+    if action == "cancel":
+        from api.state import session_manager
+
+        session = session_manager.get(sid)
+        runner = getattr(session, "job_runner", None) if session else None
+        if runner is not None:
+            for task in plan.get("tasks") or []:
+                job_id = str(task.get("job_id") or "")
+                if job_id:
+                    runner.cancel_tracked(job_id)
+                    canceled_jobs += 1
+    return jsonify({"ok": True, "plan": plan, "canceled_jobs": canceled_jobs})
+
+
+@bp.post("/api/session/<sid>/team-plans/<plan_id>/workflow-draft")
+def create_team_plan_workflow_draft(sid: str, plan_id: str):
+    from agent.teams.dynamic_plans import DynamicTeamPlanStore
+    body = request.get_json(silent=True) or {}
+    try:
+        workflow = DynamicTeamPlanStore(sid).create_workflow_draft(
+            plan_id, created_by=str(body.get("created_by") or "teams_panel"),
+        )
+    except WorkspaceTeamError as exc:
+        return _error_response(exc, 409 if "completed" in str(exc) else 400)
+    return jsonify({"ok": True, "workflow": workflow}), 201

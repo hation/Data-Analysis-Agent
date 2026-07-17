@@ -67,7 +67,7 @@
 
 # 📝 Changelog
 
-> **Current version [`v1.1.0 LTS`](https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest)** · July 2, 2026 · [📦 Download Installer](https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest)
+> **Current version [`v1.2.0 LTS`](https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest)** · July 17, 2026 · [📦 Download Installer](https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest)
 
 This release introduces the **Slash Command System, File Timeline Rewind, Hooks Automation, and AI Prompt Suggestions**, while significantly improving the chat interface and Dashboard experience. It is the next Long-Term Support (LTS) version following v1.0 LTS.
 

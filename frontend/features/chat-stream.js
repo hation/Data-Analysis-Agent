@@ -33,8 +33,43 @@ import { loadSavedList } from "../legacy/sessions.js";
   // ── Send / Stop ────────────────────────────────────────────────────
   function onSendOrStop() {
     const hasDraft = _hasComposerDraft();
-    if (state.isStreaming && !hasDraft) stopStreaming();
-    else sendMessage();
+    if (state.isStreaming && !hasDraft) {
+      if (state.askUserPending) _cancelAskUser();
+      else stopStreaming();
+    } else sendMessage();
+  }
+
+  function _cancelAskUser() {
+    // User clicked stop while ask_user card is open — cancel the turn.
+    state.askUserPending = false;
+    _cancelTailActivity();
+    // Hide tool-activity ("正在思考下一步…") on the current assistant bubble.
+    const curAssistant = state.activeTurn?.assistantId
+      ? document.querySelector(`[data-vue-msg-id="${state.activeTurn.assistantId}"]`)
+      : null;
+    if (curAssistant) {
+      const curSteps = curAssistant.querySelector(".tool-steps");
+      if (curSteps && getUiIsland("chat")?.hideToolActivity) {
+        getUiIsland("chat").hideToolActivity(curSteps, { delayMs: 0 });
+      }
+    }
+    // Remove typing dots from the current assistant bubble.
+    document.querySelectorAll(".msg-bubble .typing-dots").forEach(el => { if (el.parentNode) el.remove(); });
+    // Lock all ask_user cards so the user can't submit after cancelling.
+    document.querySelectorAll(".ask-user-card").forEach(card => {
+      card.querySelectorAll("button, input").forEach(el => { el.disabled = true; });
+    });
+    state.isStreaming = false;
+    state.activeTurn = null;
+    syncSendButton();
+    // Show a stop note before the last assistant bubble.
+    const lastAssistant = document.querySelector(".msg-row.assistant:last-child .msg-bubble");
+    if (lastAssistant) {
+      const stopNote = document.createElement("div");
+      stopNote.className = "stop-note";
+      stopNote.textContent = t('stop_note') || "已停止";
+      lastAssistant.before(stopNote);
+    }
   }
 
   async function stopStreaming() {
@@ -300,8 +335,8 @@ import { loadSavedList } from "../legacy/sessions.js";
     await _streamChat(payload, stepsEl, bubbleEl, typing);
   }
 
-  function _enqueueTurn(payload, displayText) {
-    const shell = _appendTurnShell(displayText, { user: { variant: "append" } });
+  function _enqueueTurn(payload, displayText, userOptions = {}) {
+    const shell = _appendTurnShell(displayText, { user: { variant: "append", ...userOptions } });
     const item = {
       id: `queued-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       payload,
@@ -677,8 +712,15 @@ import { loadSavedList } from "../legacy/sessions.js";
     const selectedSkill = state.activeSkill;
     const displayText = selectedCommand
       ? `/${selectedCommand} ${text}`
-      : selectedSkill ? `[Skill: ${selectedSkill}] ${text}` : text;
-    const payload = { message: text, teams_enabled: !!state.teamsEnabled };
+      : text;
+    const skillMeta = selectedSkill
+      ? window.BAA.skills?.SKILLS?.find(s => s.name === selectedSkill)
+      : null;
+    const userOptions = {};
+    if (skillMeta) {
+      userOptions.skill = { name: skillMeta.name, icon: skillMeta.icon || "🧩" };
+    }
+    const payload = { message: text, teams_enabled: !!state.teamsEnabled, auto_match_skill: state.autoMatchSkill !== false };
     if (selectedCommand) payload.command = selectedCommand;
     if (selectedSkill) payload.skill = selectedSkill;
     clearCmd();
@@ -696,24 +738,45 @@ import { loadSavedList } from "../legacy/sessions.js";
       }
     }
     if (state.isStreaming) {
-      _enqueueTurn(payload, displayText);
+      _enqueueTurn(payload, displayText, userOptions);
       syncSendButton();
       return;
     }
-    const shell = _appendTurnShell(displayText);
+    const shell = _appendTurnShell(displayText, { user: userOptions });
     await _startTurn(payload, shell.assistant, shell.assistantId, displayText);
   }
 
   // Confirm / revise stream for ppt/excel/report/dashboard outline cards.
   async function sendConfirmStream(payload) {
-    if (state.isStreaming) return;
+    if (state.isStreaming && !state.askUserPending) return;
+    // Inherit global settings so confirm/answer turns respect the same toggles.
+    payload.teams_enabled = !!state.teamsEnabled;
+    payload.auto_match_skill = state.autoMatchSkill !== false;
+    // Clear ask_user pending state — user is answering, resume normal streaming.
+    state.askUserPending = false;
     _invalidatePromptSuggestion();
     hideWelcome();
+
+    // Hide tool-activity ("正在思考下一步…") on the previous assistant bubble
+    // before starting the new turn, otherwise it persists after the user answers.
+    _cancelTailActivity();
+    const prevAssistant = state.activeTurn?.assistantId
+      ? document.querySelector(`[data-vue-msg-id="${state.activeTurn.assistantId}"]`)
+      : null;
+    if (prevAssistant) {
+      const prevSteps = prevAssistant.querySelector(".tool-steps");
+      if (prevSteps && getUiIsland("chat")?.hideToolActivity) {
+        getUiIsland("chat").hideToolActivity(prevSteps, { delayMs: 0 });
+      }
+    }
 
     appendMsg("user", payload.message || "确认");
     const aEl      = appendMsg("assistant", null);
     const stepsEl  = aEl.querySelector(".tool-steps");
     const bubbleEl = aEl.querySelector(".msg-bubble");
+
+    // Remove any leftover typing-dots from the previous (ask_user) turn.
+    document.querySelectorAll(".msg-bubble .typing-dots").forEach(el => { if (el.parentNode) el.remove(); });
 
     const typing = document.createElement("div");
     typing.className = "typing-dots";
@@ -723,6 +786,16 @@ import { loadSavedList } from "../legacy/sessions.js";
     state.isStreaming = true;
     _setSendBtnStopping(true);
     scrollReset();   // reset scroll state for confirm stream
+
+    // Preserve activation context (skill/command) so subsequent ask_user
+    // rounds can inherit it.  Without this, state.activeTurn is null after
+    // the first _streamChat finally block clears it, and the second ask_user
+    // answer loses the dashboard skill context.
+    state.activeTurn = {
+      payload: _clonePayload(payload),
+      assistantId: aEl?.dataset?.vueMsgId || "",
+      displayText: "",
+    };
 
     await _streamChat(payload, stepsEl, bubbleEl, typing);
   }
@@ -779,6 +852,15 @@ import { loadSavedList } from "../legacy/sessions.js";
         await handleEvent({ type: "error", message: error?.message || String(error) }, stepsEl, bubbleEl, typing);
       }
     } finally {
+      // If an ask_user card is showing, the turn is NOT finished — the user
+      // still needs to answer.  Keep typing-dots, isStreaming, and the stop
+      // button in place.  Cleanup happens in sendConfirmStream (answer) or
+      // _cancelAskUser (stop).
+      if (state.askUserPending) {
+        state._streamReader = null;
+        scrollBottom();
+        return;
+      }
       const continuingAfterAppend = !!state.silentContinuation;
       const stoppedByUser = !!state._stopRequested;
       if (continuingAfterAppend) {
@@ -797,7 +879,7 @@ import { loadSavedList } from "../legacy/sessions.js";
       state._streamReader = null;
       state.isStreaming   = false;
       syncSendButton();
-      scrollBottom(true);   // force-scroll once stream ends regardless of user position
+      scrollBottom();       // respect users who scrolled up during streaming
       // Trigger auto-save after every completed AI reply
       scheduleAutosave();
       state.silentContinuation = false;
@@ -1313,6 +1395,9 @@ import { loadSavedList } from "../legacy/sessions.js";
   }
 
   function _onError(ev, ctx) {
+    // If ask_user is pending, ignore stream errors — the turn is waiting for
+    // user input, not actually in an error state.
+    if (state.askUserPending) return;
     _cancelTailActivity();
     _hideToolActivity(ctx);
     if (getUiIsland("chat") && getUiIsland("chat").setError) {
@@ -1326,6 +1411,9 @@ import { loadSavedList } from "../legacy/sessions.js";
   }
 
   function _onStopped(_ev, ctx) {
+    // If ask_user is pending, the stream ending is expected — don't show a
+    // "stopped" note or remove typing dots; the ask_user card is still open.
+    if (state.askUserPending) return;
     _cancelTailActivity();
     if (state.silentContinuation) {
       _showToolActivity(ctx);
@@ -1481,24 +1569,44 @@ import { loadSavedList } from "../legacy/sessions.js";
   function _onAskUser(ev, ctx) {
     _cancelTailActivity();
     _hideToolActivity(ctx);
-    if (ctx.typing.parentNode) ctx.typing.remove();
+    // Keep typing-dots visible during ask_user so the user sees a continuous
+    // "thinking" state.  _streamChat's finally block will skip cleanup while
+    // state.askUserPending is true; the dots are removed when the user submits
+    // an answer (sendConfirmStream) or cancels (_cancelAskUser).
     if (!(getUiIsland("chat") && getUiIsland("chat").finishAllTools && getUiIsland("chat").finishAllTools(ctx.stepsEl))) {
       _tickAllSteps(ctx.stepsEl);
     }
+    state.askUserPending = true;
+    state.isStreaming = true;       // keep "stopping" button + activity look
+    syncSendButton();
+
+    // Capture skill/command NOW while state.activeTurn is still alive.
+    // _streamChat's finally block will null state.activeTurn after this turn,
+    // but the ask_user card persists and the user clicks later.
+    const _base = state.activeTurn?.payload || {};
+    const _skill = _base.skill || "";
+    const _command = _base.command || "";
 
     if (getUiIsland("chat") && getUiIsland("chat").addAskUserCard) {
       if (getUiIsland("chat").addAskUserCard(ctx.bubbleEl, ev, {
-        onSubmit: (answer) => sendConfirmStream({ message: answer }),
+        onSubmit: (answer) => {
+          const payload = { message: answer };
+          if (_skill) payload.skill = _skill;
+          if (_command) payload.command = _command;
+          sendConfirmStream(payload);
+        },
       })) {
         scrollBottom();
         return;
       }
     }
 
-    _legacyAskUserBody(ev, ctx);
+    _legacyAskUserBody(ev, ctx, { _skill, _command });
   }
 
-  function _legacyAskUserBody(ev, ctx) {
+  function _legacyAskUserBody(ev, ctx, captured = {}) {
+    const _skill = captured._skill || "";
+    const _command = captured._command || "";
     const multiSelect = !!ev.multi_select;
     const options = (Array.isArray(ev.options) ? ev.options : [])
       .map(option => {
@@ -1596,7 +1704,10 @@ import { loadSavedList } from "../legacy/sessions.js";
 
     function _submit(answer) {
       _lock();
-      sendConfirmStream({ message: answer });
+      const payload = { message: answer };
+      if (_skill) payload.skill = _skill;
+      if (_command) payload.command = _command;
+      sendConfirmStream(payload);
     }
 
     otherBtn.addEventListener("click", () => {
@@ -1622,6 +1733,42 @@ import { loadSavedList } from "../legacy/sessions.js";
     _renderChips();
   }
 
+  function _onSkillMatched(ev, ctx) {
+    if (ctx?.stepsEl) {
+      _cancelTailActivity();
+      if (ctx.typing && ctx.typing.parentNode) ctx.typing.remove();
+      const skills = Array.isArray(ev.skills) ? ev.skills : [];
+      const names = skills.map(s => s.name).join(", ");
+      const s = document.createElement("div");
+      s.className = "tool-step skill-step";
+      s.dataset.tool = "skill_match";
+      const desc = skills.length === 1
+        ? esc(skills[0].description || "")
+        : `${skills.length} 个候选`;
+      s.innerHTML = `<span class="skill-icon">🧩</span><span class="tool-step-text">匹配 Skill: ${esc(names)}</span><span class="skill-step-desc">${desc}</span>`;
+      ctx.stepsEl.appendChild(s);
+      _scheduleTailActivity(ctx);
+      scrollBottom();
+    }
+    window.BAA.skills?.showMatchedSkills?.(ev.skills || []);
+  }
+
+  function _onSkillActivated(ev, ctx) {
+    if (ctx?.stepsEl) {
+      _cancelTailActivity();
+      if (ctx.typing && ctx.typing.parentNode) ctx.typing.remove();
+      const s = document.createElement("div");
+      s.className = "tool-step skill-step done";
+      s.dataset.tool = "skill_activate";
+      s.dataset.finished = "1";
+      s.innerHTML = `<span class="skill-icon">✦</span><span class="tool-step-text">激活 Skill: ${esc(ev.name || "")}</span>`;
+      ctx.stepsEl.appendChild(s);
+      _scheduleTailActivity(ctx);
+      scrollBottom();
+    }
+    window.BAA.skills?.activateSkill?.(ev.name);
+  }
+
   const SSE_HANDLERS = {
     tool_start:         _onToolStart,
     tool_end:           _onToolEnd,
@@ -1644,6 +1791,8 @@ import { loadSavedList } from "../legacy/sessions.js";
     report_outline:     _onOutline,
     dashboard_outline:  _onOutline,
     ask_user:           _onAskUser,
+    skill_matched:      _onSkillMatched,
+    skill_activated:    _onSkillActivated,
     job_created:        _onJobCreated,
     job_started:        _onJobStarted,
     job_progress:       _onJobProgress,
@@ -1651,9 +1800,21 @@ import { loadSavedList } from "../legacy/sessions.js";
     job_done:           _onJobDone,
     job_error:          _onJobError,
     job_canceled:       _onJobCanceled,
+    canvas_event:       _onCanvasEvent,
   };
 
-  const PAINT_BREAK_EVENTS = new Set(["tool_start", "tool_end", "knowledge_refs", "data_refs", "tool_audit", "agent_activity"]);
+  function _onCanvasEvent(ev) {
+    const action = ev.canvas_action || ev.action || "";
+    if (action === "diagram_update") {
+      // Auto-open the workbench if not already open
+      if (!document.body.classList.contains("business-canvas-open")) {
+        window.BAA.businessCanvas?.open?.();
+      }
+      window.BAA.businessCanvas?.loadDiagramXml?.(ev.xml || "");
+    }
+  }
+
+  const PAINT_BREAK_EVENTS = new Set(["tool_start", "tool_end", "knowledge_refs", "data_refs", "tool_audit", "agent_activity", "skill_matched", "skill_activated"]);
   const STREAM_PAINT_EVENTS = new Set(["text_delta"]);
   let lastStreamPaintAt = 0;
 

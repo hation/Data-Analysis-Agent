@@ -6,7 +6,7 @@
 <title>智析Agent</title>
 <link rel="icon" href="{{ url_for('static', filename='Images/icon.png') }}">
 <script src="{{ url_for('static', filename='js/theme_bootstrap.js', v='fe0') }}"></script>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/agent_chat.css', v='ui-phase-0-2') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/agent_chat.css', v='klein-blue-5') }}">
 {% if desktop_lifecycle_enabled %}
 <script defer src="{{ url_for('static', filename='js/modules/desktop_lifecycle.js', v='desktop-lease-1') }}"></script>
 {% endif %}
@@ -29,8 +29,8 @@
         <button class="sb-status-row" id="session-row" data-action="openSidebarDrawer:sessions"
                 title="查看会话文件">
           <span class="sb-status-dot on"></span>
-          <span class="sb-status-label">会话</span>
-          <span class="sb-status-value" id="session-status-text">创建中…</span>
+          <span class="sb-status-label" data-i18n="sidebar.session">会话</span>
+          <span class="sb-status-value" id="session-status-text" data-i18n="sidebar.session_creating">创建中…</span>
           <span class="sb-status-chev">›</span>
         </button>
 
@@ -46,7 +46,7 @@
             <option value="" data-i18n="sidebar.model_placeholder">— 选择模型 —</option>
           </select>
           <button class="sb-status-iconbtn" data-i18n-title="modal.settings.title"
-                  title="模型设置" data-action="openOverlay:ov-settings">⚙</button>
+                  title="模型设置" data-action="openOverlay:ov-settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
         </div>
 
         <button class="sb-status-row" id="src-row" data-action="openSidebarDrawer:sources"
@@ -62,7 +62,7 @@
                 title="点击管理 MCP 工具服务器">
           <span class="sb-status-dot" id="mcp-dot"></span>
           <span class="sb-status-label">MCP</span>
-          <span class="sb-status-value" id="mcp-status-text">未连接</span>
+          <span class="sb-status-value" id="mcp-status-text" data-i18n="sidebar.mcp_disconnected">未连接</span>
           <span class="sb-status-chev">›</span>
         </button>
         <span id="mcp-status-hint" hidden>点击管理 MCP 工具服务器</span>
@@ -80,37 +80,40 @@
 
       <nav class="sb-nav" aria-label="Agent navigation">
         <button class="sb-nav-item active" data-sidebar-nav="agent" data-action="setSidebarNav:agent">
-          <span class="sb-nav-icon">A</span><span class="sb-nav-label">Agent 模式</span>
+          <span class="sb-nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3L4 14h7l-1 7 8-11h-7l1-7z"/></svg></span><span class="sb-nav-label" data-i18n="sidebar.agent_mode">Agent 模式</span>
         </button>
-        <button class="sb-nav-item" data-sidebar-nav="skills" data-action="openSkillPicker">
-          <span class="sb-nav-icon">S</span><span class="sb-nav-label">Skills</span>
+        <button class="sb-nav-item" data-sidebar-nav="skills" data-action="openPanel:skills">
+          <span class="sb-nav-icon"><svg viewBox="0 0 24 24"><path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z"/></svg></span><span class="sb-nav-label">Skills</span>
         </button>
-        <button class="sb-nav-item" data-sidebar-nav="knowledge" data-action="openOverlay:ov-knowledge">
-          <span class="sb-nav-icon">K</span><span class="sb-nav-label">业务知识库</span>
+        <button class="sb-nav-item" data-sidebar-nav="knowledge" data-action="openPanel:knowledge">
+          <span class="sb-nav-icon"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h6v17H6a2 2 0 0 1-2-2V5z"/><path d="M20 5a2 2 0 0 0-2-2h-6v17h6a2 2 0 0 0 2-2V5z"/></svg></span><span class="sb-nav-label" data-i18n="sidebar.knowledge">业务知识库</span>
         </button>
-        <button class="sb-nav-item" data-sidebar-nav="mcp" data-action="openMcpSettings">
-          <span class="sb-nav-icon">M</span><span class="sb-nav-label">MCP</span>
+        <button class="sb-nav-item" data-sidebar-nav="mcp" data-action="openPanel:mcp">
+          <span class="sb-nav-icon"><svg viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M9 18v4M15 18v4M5 8h14v5a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4V8z"/></svg></span><span class="sb-nav-label">MCP</span>
         </button>
         <button class="sb-nav-item" data-sidebar-nav="history" data-action="openSidebarDrawer:sessions">
-          <span class="sb-nav-icon">H</span><span class="sb-nav-label">历史对话</span>
+          <span class="sb-nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><span class="sb-nav-label" data-i18n="sidebar.history">历史对话</span>
+        </button>
+        <button class="sb-nav-item" data-sidebar-nav="business-canvas" data-action="openBusinessCanvas">
+          <span class="sb-nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span class="sb-nav-label" data-i18n="sidebar.business_canvas">商业画布</span>
         </button>
         <button class="sb-nav-item" data-sidebar-nav="help" data-action="openInstruction">
-          <span class="sb-nav-icon">?</span><span class="sb-nav-label">帮助文档</span>
+          <span class="sb-nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 3.5"/><circle cx="12" cy="17" r=".5" fill="currentColor"/></svg></span><span class="sb-nav-label" data-i18n="sidebar.help">帮助文档</span>
         </button>
       </nav>
       <button class="sr-only-action" id="temp-prompt-entry" data-action="openOverlay:ov-temp-prompt"
               title="为当前对话临时设定一段补充指令" aria-hidden="true" tabindex="-1"></button>
 
       <footer class="sb-footer">
-        <div class="sb-footer-meta">v1.1.0 LTS · Zafer_Liu</div>
+        <div class="sb-footer-meta">v1.2.0 LTS · Zafer_Liu</div>
         <div class="sb-footer-actions">
-          <button class="sb-iconbtn sb-footer-update" data-action="openOverlay:ov-update" data-i18n="sidebar.check_update">🔄 检查更新</button>
+          <button class="sb-iconbtn sb-footer-update" data-action="openOverlay:ov-update" data-i18n="sidebar.check_update"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg><span data-i18n="sidebar.check_update">检查更新</span></button>
           <button class="sb-iconbtn sb-footer-community" type="button" data-action="openOverlay:ov-community"
-                  title="社群" data-i18n-title="sidebar.community">💬</button>
+                  title="社群" data-i18n-title="sidebar.community"><svg viewBox="0 0 24 24"><path d="M21 11.5a8.5 8.5 0 0 1-12.5 7.5L3 21l2-5.5A8.5 8.5 0 1 1 21 11.5z"/></svg></button>
           <button class="sb-iconbtn sb-footer-settings" data-action="openOverlay:ov-app-settings"
-                  title="设置" data-i18n-title="sidebar.settings">⚙</button>
+                  title="设置" data-i18n-title="sidebar.settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
           <button class="sb-iconbtn" id="lang-toggle" data-action="toggleLang">EN</button>
-          <button class="sb-iconbtn" id="theme-toggle" data-action="toggleTheme" title="Dark mode">🌙</button>
+          <button class="sb-iconbtn" id="theme-toggle" data-action="toggleTheme" title="Dark mode"><svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></button>
         </div>
       </footer>
     </div>
@@ -133,15 +136,15 @@
         <section class="sb-drawer-page active" data-drawer-page="sessions">
           <div class="sb-actions-row">
             <button class="sb-btn sb-btn-ghost" data-action="newChat"
-                    data-i18n="sidebar.new_chat">✦ 新对话</button>
+                    data-i18n="sidebar.new_chat"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="sidebar.new_chat">新对话</span></button>
             <button class="sb-btn sb-btn-ghost" data-action="openSaveDialog"
-                    title="保存当前对话" data-i18n="sidebar.save">💾 保存</button>
+                    title="保存当前对话" data-i18n="sidebar.save"><svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg><span data-i18n="sidebar.save">保存</span></button>
           </div>
           <div class="sb-history">
             <div class="sb-history-head">
               <span data-i18n="sidebar.saved_sessions">已保存对话</span>
               <button class="sb-history-refresh" data-action="loadSavedList"
-                      title="刷新" data-i18n-title="sidebar.refresh">↻</button>
+                      title="刷新" data-i18n-title="sidebar.refresh"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg></button>
             </div>
             <div id="saved-list" class="sb-history-list">
               <div class="saved-empty" data-i18n="sidebar.loading">加载中…</div>
@@ -152,28 +155,28 @@
         <section class="sb-drawer-page" data-drawer-page="sources">
           <div class="sb-actions-row">
             <button class="sb-btn sb-btn-ghost" data-action="openSaveWarehouseDialog"
-                    title="保存当前数据源组合">💾 保存</button>
+                    title="保存当前数据源组合"><svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg><span>保存</span></button>
             <button class="sb-btn sb-btn-ghost" data-action="loadWarehouseList"
-                    title="刷新已保存数据仓库">↻ 刷新</button>
+                    title="刷新已保存数据仓库"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg><span>刷新</span></button>
           </div>
           <div class="sb-dropdown" id="sb-add-src">
             <button class="sb-btn sb-btn-primary sb-btn-block"
                     data-action="toggleAddSrc"
                     aria-haspopup="true" aria-expanded="false">
-              <span>＋ <span data-i18n="sidebar.add_source">添加数据源</span></span>
+              <span><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> <span data-i18n="sidebar.add_source">添加数据源</span></span>
               <span class="sb-dropdown-caret">▾</span>
             </button>
             <div class="sb-dropdown-menu" role="menu">
-              <button class="sb-dropdown-item" data-action="openOverlay:ov-excel"   data-i18n="sidebar.upload">📂 上传 Excel / CSV</button>
-              <button class="sb-dropdown-item" data-action="openOverlay:ov-db"      data-i18n="sidebar.connect_db">🗄️ 连接 SQL 数据库</button>
-              <button class="sb-dropdown-item" data-action="openOverlay:ov-gsheets" data-i18n="sidebar.connect_gsheets">📊 连接 Google Sheets</button>
-              <button class="sb-dropdown-item" data-action="openOverlay:ov-api"     data-i18n="sidebar.connect_api">🔗 连接自定义 API</button>
+              <button class="sb-dropdown-item" data-action="openOverlay:ov-excel"   data-i18n="sidebar.upload"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/></svg><span data-i18n="sidebar.upload">上传 Excel / CSV</span></button>
+              <button class="sb-dropdown-item" data-action="openOverlay:ov-db"      data-i18n="sidebar.connect_db"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5M3 12a9 3 0 0 0 18 0"/></svg><span data-i18n="sidebar.connect_db">连接 SQL 数据库</span></button>
+              <button class="sb-dropdown-item" data-action="openOverlay:ov-gsheets" data-i18n="sidebar.connect_gsheets"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg><span data-i18n="sidebar.connect_gsheets">连接 Google Sheets</span></button>
+              <button class="sb-dropdown-item" data-action="openOverlay:ov-api"     data-i18n="sidebar.connect_api"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg><span data-i18n="sidebar.connect_api">连接自定义 API</span></button>
               <hr class="sb-dropdown-sep">
-              <button class="sb-dropdown-item" data-action="openWorkspace" data-i18n="sidebar.mount_workspace">📁 挂载工作目录</button>
+              <button class="sb-dropdown-item" data-action="openWorkspace" data-i18n="sidebar.mount_workspace"><svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span data-i18n="sidebar.mount_workspace">挂载工作目录</span></button>
               <hr class="sb-dropdown-sep" id="sb-disc-sep" hidden>
               <button class="sb-dropdown-item sb-dropdown-item--danger"
                       id="btn-disc" hidden data-action="disconnectSrc"
-                      data-i18n="sidebar.disconnect">断开连接</button>
+                      data-i18n="sidebar.disconnect"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg><span data-i18n="sidebar.disconnect">断开连接</span></button>
             </div>
           </div>
           <div id="source-list-wrap" hidden>
@@ -193,6 +196,347 @@
         </section>
       </div>
     </div>
+
+    <!-- ── Skills 独立面板 ─────────────────────────────────────────── -->
+    <div class="sb-panel collapsed" id="sb-panel-skills" data-panel="skills">
+      <header class="sb-drawer-head">
+        <button class="sb-drawer-collapse" data-action="closePanel:skills" title="收回">‹</button>
+        <div class="sb-drawer-title">
+          <strong><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> Skills</strong>
+          <span>选择技能后发送消息</span>
+        </div>
+      </header>
+      <div class="sb-panel-search">
+        <input id="skill-picker-search" class="sb-panel-search-input" type="search"
+               data-i18n-ph="skills.search" placeholder="搜索技能名称或描述"
+               autocomplete="off">
+        <button class="sb-panel-search-btn" id="skill-new-btn" type="button" title="新建自定义 Skill">＋</button>
+      </div>
+      <div class="sb-drawer-body">
+        <div class="skill-picker-list" id="skill-picker-list"></div>
+      </div>
+    </div>
+
+    <!-- ── Skill detail / editor — right drawer ─────────────────────── -->
+    <div class="skill-drawer hidden" id="skill-modal-overlay">
+      <div class="skill-drawer-card">
+        <div class="skill-drawer-head">
+          <strong id="skill-modal-title">Skill 详情</strong>
+          <button class="skill-drawer-close" data-action="closeSkillModal">×</button>
+        </div>
+        <div class="skill-drawer-body" id="skill-modal-body">
+          <!-- 分组：基本信息 -->
+          <div class="skill-form-section">
+            <div class="skill-form-section-title">基本信息</div>
+            <div class="skill-form-row">
+              <label for="skill-form-name" class="skill-form-label">名称</label>
+              <input id="skill-form-name" type="text" placeholder="my-skill" class="skill-form-input" maxlength="64">
+              <span class="skill-form-hint">仅限小写字母、数字和连字符</span>
+            </div>
+            <div class="skill-form-row">
+              <label for="skill-form-desc" class="skill-form-label">描述</label>
+              <input id="skill-form-desc" type="text" placeholder="简短描述" class="skill-form-input" maxlength="240">
+              <span class="skill-form-counter" data-counter-for="skill-form-desc">0 / 240</span>
+            </div>
+            <div class="skill-form-row-two">
+              <div class="skill-form-col">
+                <label for="skill-form-icon" class="skill-form-label">图标</label>
+                <input id="skill-form-icon" type="text" placeholder="🧩" class="skill-form-input skill-form-icon" maxlength="8">
+                <span class="skill-form-hint">输入一个 Emoji</span>
+              </div>
+              <div class="skill-form-col">
+                <label class="skill-form-label">允许工具</label>
+                <div class="skill-tools-multiselect" id="skill-form-tools-wrapper">
+                  <div class="skill-tools-trigger" id="skill-form-tools-trigger" tabindex="0">
+                    <span class="skill-tools-trigger-label" id="skill-form-tools-label">全部允许</span>
+                    <svg class="skill-tools-trigger-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </div>
+                  <div class="skill-tools-dropdown hidden" id="skill-form-tools-dropdown">
+                    <div class="skill-tools-search-wrap">
+                      <input type="text" class="skill-tools-search" id="skill-form-tools-search" placeholder="搜索工具...">
+                    </div>
+                    <div class="skill-tools-options" id="skill-form-tools-options"></div>
+                  </div>
+                  <input type="hidden" id="skill-form-tools">
+                </div>
+                <span class="skill-form-hint">不选则允许全部工具</span>
+              </div>
+            </div>
+          </div>
+          <!-- 分组：提示词 -->
+          <div class="skill-form-section">
+            <div class="skill-form-section-title">
+              提示词
+              <span class="skill-form-section-badge">Markdown</span>
+            </div>
+            <div class="skill-form-row skill-form-row-prompt">
+              <textarea id="skill-form-prompt" class="skill-form-textarea" placeholder="# My Skill&#10;&#10;详细提示词内容..."></textarea>
+              <span class="skill-form-counter" data-counter-for="skill-form-prompt">0 字</span>
+            </div>
+          </div>
+          <div id="skill-form-raw-view" class="skill-raw-view hidden"></div>
+          <div id="skill-form-msg" class="skill-form-msg"></div>
+        </div>
+        <div class="skill-drawer-foot" id="skill-modal-footer">
+          <button class="btn-sm btn-sm-ghost" data-action="closeSkillModal">取消</button>
+          <button class="btn-sm btn-sm-danger hidden" id="skill-delete-btn">删除</button>
+          <button class="btn-sm btn-sm-primary" id="skill-save-btn">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Knowledge 独立面板 ──────────────────────────────────────── -->
+    <div class="sb-panel collapsed" id="sb-panel-knowledge" data-panel="knowledge">
+      <header class="sb-drawer-head">
+        <button class="sb-drawer-collapse" data-action="closePanel:knowledge" title="收回">‹</button>
+        <div class="sb-drawer-title">
+          <strong><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h6v17H6a2 2 0 0 1-2-2V5z"/><path d="M20 5a2 2 0 0 0-2-2h-6v17h6a2 2 0 0 0 2-2V5z"/></svg> 业务知识库</strong>
+          <span>指标定义、业务规则和背景知识</span>
+        </div>
+      </header>
+      <div class="sb-drawer-body" id="sb-knowledge-body">
+        <!-- Tab bar — Vue island 接管 #kb-tabs -->
+        <div class="kb-tabs-shell" id="kb-tabs">
+          <div class="kb-scope-tools">
+            <div class="kb-scope-head">
+              <span class="kb-scope-title">业务分类</span>
+              <div class="kb-scope-actions">
+                <div class="kb-category-filter">
+                  <button class="kb-category-select" type="button" disabled>
+                    <span class="kb-category-select-label">默认业务</span>
+                    <span class="kb-category-caret">▾</span>
+                  </button>
+                </div>
+                <button class="btn-sm btn-sm-primary kb-upload-parse-btn" data-action="kbOpenImport">上传文档解析</button>
+              </div>
+            </div>
+          </div>
+          <div class="kb-tabs">
+            <button class="kb-tab active" data-action="kbSwitchTab:metrics"><svg viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg> <span data-i18n="kb.tab.metrics">指标定义</span></button>
+            <button class="kb-tab"        data-action="kbSwitchTab:rules"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> <span data-i18n="kb.tab.rules">业务规则</span></button>
+            <button class="kb-tab"        data-action="kbSwitchTab:notes"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg> <span data-i18n="kb.tab.notes">背景知识</span></button>
+          </div>
+        </div>
+
+        <!-- ── Tab: metrics ── -->
+        <div class="kb-panel" id="kb-panel-metrics">
+          <div class="kb-toolbar">
+            <span class="kb-count" id="kb-metrics-count">—</span>
+            <div class="f-row-gap6">
+              <button class="btn-sm btn-sm-ghost"   data-action="kbRefresh:metrics"  title="刷新列表"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg> 刷新</button>
+              <button class="btn-sm btn-sm-primary" data-action="kbOpenForm:metrics"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> 新增指标</button>
+            </div>
+          </div>
+          <div class="kb-list" id="kb-list-metrics">
+            <div class="kb-empty">暂无指标定义</div>
+          </div>
+        </div>
+
+        <!-- ── Tab: rules ── -->
+        <div class="kb-panel hidden" id="kb-panel-rules">
+          <div class="kb-toolbar">
+            <span class="kb-count" id="kb-rules-count">—</span>
+            <div class="f-row-gap6">
+              <button class="btn-sm btn-sm-ghost"   data-action="kbRefresh:rules"  title="刷新列表"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg> 刷新</button>
+              <button class="btn-sm btn-sm-primary" data-action="kbOpenForm:rules"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> 新增规则</button>
+            </div>
+          </div>
+          <div class="kb-list" id="kb-list-rules">
+            <div class="kb-empty">暂无业务规则</div>
+          </div>
+        </div>
+
+        <!-- ── Tab: notes ── -->
+        <div class="kb-panel hidden" id="kb-panel-notes">
+          <div class="kb-toolbar">
+            <span class="kb-count" id="kb-notes-count">—</span>
+            <div class="f-row-gap6">
+              <button class="btn-sm btn-sm-ghost"   data-action="kbRefresh:notes"  title="刷新列表"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg> 刷新</button>
+              <button class="btn-sm btn-sm-primary" data-action="kbOpenForm:notes"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> 新增背景知识</button>
+            </div>
+          </div>
+          <div class="kb-list" id="kb-list-notes">
+            <div class="kb-empty">暂无背景知识</div>
+          </div>
+        </div>
+
+        <!-- ── Tab: import ── -->
+        <div class="kb-panel hidden" id="kb-panel-import">
+          <div class="kb-import-zone" id="kb-drop-zone">
+            <div class="kb-import-icon"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg></div>
+            <div class="kb-import-hint">拖拽文件到此处，或点击选择</div>
+            <div class="kb-import-sub">支持 .xlsx / .xls / .docx</div>
+            <input type="file" id="kb-file-input" accept=".xlsx,.xls,.docx" class="hidden" data-change="kbOnFileSelect">
+            <button class="btn-sm btn-sm-primary f-mt10" data-action="kbPickFile">选择文件</button>
+          </div>
+
+          <div class="ds-loading hidden" id="kb-parsing">
+            <div class="ds-spinner"></div>
+            <span>正在解析文件，请稍候…</span>
+          </div>
+          <div id="kb-preview-area" class="kb-preview-area hidden">
+            <div class="kb-preview-header">
+              <div class="kb-preview-heading">
+                <div class="kb-preview-title" id="kb-preview-title">解析结果预览</div>
+                <div class="kb-preview-sub" id="kb-preview-sub"></div>
+              </div>
+              <div class="f-kb-preview-btns">
+                <button type="button" class="btn-sm btn-sm-ghost" data-action="kbCancelImport">重新选择</button>
+                <button type="button" class="btn-sm btn-sm-primary" data-action="kbConfirmImport"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg> 全部入库</button>
+              </div>
+            </div>
+            <div class="kb-preview-list" id="kb-preview-list"></div>
+          </div>
+          <div class="msg-err f-kb-import-err" id="kb-import-err"></div>
+          <div class="msg-ok  f-kb-import-ok"  id="kb-import-ok"></div>
+          <section id="kb-files-section" class="kb-import-section">
+            <div class="kb-import-section-head">
+              <span class="f-section-title">已上传的源文件</span>
+              <button type="button" class="kb-import-refresh" data-action="kbLoadFiles" title="刷新源文件">
+                <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>
+                <span>刷新</span>
+              </button>
+            </div>
+            <div id="kb-files-list">
+              <div class="kb-empty kb-loading-text">加载中…</div>
+            </div>
+          </section>
+        </div>
+
+        <!-- ── 内联表单（替代 ov-kb-form overlay）── -->
+        <div class="kb-inline-form collapsed" id="kb-inline-form">
+          <div class="kb-inline-form-head">
+            <strong id="kb-form-title">新增指标</strong>
+            <button class="kb-inline-form-close" data-action="kbCancelForm" title="取消"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+          </div>
+          <!-- Vue knowledge island 接管：首次打开时按需挂载并渲染 #kb-form-body -->
+          <div id="kb-form-body"></div>
+          <div class="kb-inline-form-actions">
+            <button class="btn-sm btn-sm-ghost" data-action="kbCancelForm">取消</button>
+            <button class="btn-sm btn-sm-primary" id="kb-submit-btn" data-action="kbSubmitForm">保存</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── MCP 独立面板 ────────────────────────────────────────────── -->
+    <div class="sb-panel collapsed" id="sb-panel-mcp" data-panel="mcp">
+      <header class="sb-drawer-head">
+        <button class="sb-drawer-collapse" data-action="closePanel:mcp" title="收回">‹</button>
+        <div class="sb-drawer-title">
+          <strong><svg viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M9 18v4M15 18v4M5 8h14v5a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4V8z"/></svg> MCP 工具服务器</strong>
+          <span>配置外部工具服务</span>
+        </div>
+      </header>
+      <div class="sb-drawer-body">
+        <!-- Server list — Vue island 接管 #mcp-server-list -->
+        <div class="settings-sec">
+          <div class="f-mcp-refresh-row settings-sec-title">
+            <span>已配置的服务器</span>
+            <span class="f-mcp-refresh-link" data-action="loadMcpServers"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg> 刷新</span>
+          </div>
+          <div id="mcp-server-list" class="f-mcp-server-list">
+            <div class="f-loading-text">加载中…</div>
+          </div>
+        </div>
+
+        <!-- Add server form — Vue island 接管 #mcp-form-fields -->
+        <div class="settings-sec">
+          <div class="add-custom-toggle" id="mcp-add-toggle" data-action="toggleMcpAddForm"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> 添加 MCP 服务器</div>
+          <div class="add-custom-form" id="mcp-add-form">
+            <div class="f-form-title" id="mcp-form-title">添加服务器</div>
+
+            <!-- Unified smart-fill area -->
+            <div class="mcp-smart-area">
+              <div class="mcp-smart-label"><svg viewBox="0 0 24 24"><path d="M12 3l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z"/></svg> 智能填充</div>
+
+              <!-- Tab bar -->
+              <div class="mcp-fill-tabs">
+                <button class="mcp-fill-tab active" id="mcp-tab-local"  data-action="switchMcpTab:local"><svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> 本地包目录</button>
+                <button class="mcp-fill-tab"        id="mcp-tab-paste"  data-action="switchMcpTab:paste"><svg viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg> 粘贴内容</button>
+              </div>
+
+              <!-- Tab: local path -->
+              <div id="mcp-panel-local" class="mcp-fill-panel">
+                <div class="mcp-smart-hint">输入已安装 MCP 包目录路径，自动提取 package.json 的配置。</div>
+                <div class="f-mcp-scan-row">
+                  <input type="text" id="mcp-scan-path" class="f-item-flex"
+                    placeholder="例如：C:\Users\you\MCP\playwright">
+                  <button class="btn-sm btn-sm-primary" id="mcp-scan-btn" data-action="scanLocalMcp">扫描</button>
+                </div>
+                <span id="mcp-scan-status"   class="f-scan-status"></span>
+                <div  id="mcp-scan-warnings" class="hidden f-warn-chip"></div>
+              </div>
+
+              <!-- Tab: paste -->
+              <div id="mcp-panel-paste" class="mcp-fill-panel hidden">
+                <div class="mcp-smart-hint">粘贴安装命令、JSON 配置或文档片段，LLM 自动识别并填写</div>
+                <textarea id="mcp-smart-input" class="mcp-smart-input"
+                  placeholder="例如：npx -y @modelcontextprotocol/server-filesystem /your/path&#10;或粘贴 JSON 配置、README 片段、curl 示例…"></textarea>
+                <div class="f-smart-hint-row">
+                  <button class="btn-sm btn-sm-primary" id="mcp-smart-btn" data-action="parseMcpConfig">智能填充</button>
+                  <span id="mcp-smart-status" class="f-smart-status"></span>
+                </div>
+                <div id="mcp-smart-warnings" class="hidden f-warn-chip"></div>
+                <div id="mcp-smart-llm-hint" class="hidden f-smart-llm-hint"></div>
+              </div>
+            </div>
+            <div class="mcp-smart-divider"><span>或手动填写</span></div>
+
+            <div id="mcp-form-fields">
+            <div class="f-form-title" id="mcp-form-title2">添加服务器</div>
+
+            <input type="text" id="mcp-label"   placeholder="服务器名称（显示用）">
+            <div id="mcp-id-row">
+            <input type="text" id="mcp-id"    placeholder="服务器 ID（字母/数字/下划线，唯一）" class="input-fill">
+            </div>
+            <input type="text" id="mcp-desc"    placeholder="描述（可选）">
+
+            <!-- Transport selector -->
+            <div class="f-row-gap16">
+              <label class="f-label-inline">
+                <input type="radio" name="mcp-transport" value="stdio" checked> stdio（本地命令）
+              </label>
+              <label class="f-label-inline">
+                <input type="radio" name="mcp-transport" value="sse"> SSE（远程 HTTP）
+              </label>
+            </div>
+
+            <!-- stdio fields -->
+            <div id="mcp-stdio-fields" class="f-flex-col-gap8">
+              <div class="f-warn-chip">
+                ⚠️ 安全提示：仅允许运行 uvx / uv / npx / node / python / python3 / deno 命令。args 和 env 中不得含有 Shell 元字符或危险环境变量。
+              </div>
+              <input type="text" id="mcp-command" placeholder="命令，例如 npx 或 uvx" data-input="updateMcpCmdPreview">
+              <input type="text" id="mcp-args"    placeholder="参数（空格分隔），例如 -y @modelcontextprotocol/server-filesystem /tmp" data-input="updateMcpCmdPreview">
+              <input type="text" id="mcp-env"     placeholder="环境变量（变量名=值，逗号分隔），例如：ATLASCLOUD_API_KEY=apikey-xxx, OTHER_KEY=yyy">
+              <div id="mcp-cmd-preview" class="mcp-cmd-preview hidden">
+                <div class="cmd-label">命令预览</div>
+                <span id="mcp-cmd-preview-text"></span>
+              </div>
+            </div>
+
+            <!-- SSE fields -->
+            <div id="mcp-sse-fields" class="hidden f-flex-col-gap8">
+              <input type="text" id="mcp-url"     placeholder="SSE 端点 URL，例如 http://localhost:8000/sse">
+              <input type="text" id="mcp-headers" placeholder="HTTP 头（KEY:VALUE，逗号分隔，可选）">
+              <div class="f-hint f-hint-neg">
+                示例：Authorization:Bearer sk-xxx, X-Custom:value
+              </div>
+            </div>
+
+            <div class="msg-err" id="mcp-add-err"></div>
+            <div class="msg-ok"  id="mcp-add-ok"></div>
+            </div><!-- /#mcp-form-fields -->
+            <div class="f-row-gap7">
+              <button class="btn-sm btn-sm-ghost"   data-action="toggleMcpAddForm">取消</button>
+              <button class="btn-sm btn-sm-primary" data-action="addMcpServer">保存并连接</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </aside>
 
   <!-- ── Main ───────────────────────────────────────────────────── -->
@@ -218,16 +562,16 @@
         <p data-i18n-html="welcome.desc">连接数据库或上传 Excel，用自然语言提问，AI 会自动查询、分析并生成图表。<br>
            输入 <strong>/</strong> 可快速选择专属命令。</p>
         <div class="hint-chips">
-          <div class="hint-chip" data-action="fillHint">各品类的销售额是多少？</div>
-          <div class="hint-chip" data-action="fillHint">近12个月的销售趋势如何？</div>
-          <div class="hint-chip" data-action="fillHint">哪些客户贡献了最多收入？</div>
-          <div class="hint-chip" data-action="fillHint">生成各地区业绩对比柱状图</div>
-          <div class="hint-chip" data-action="fillHint">/decile 对销售额做十分位分析</div>
-          <div class="hint-chip" data-action="fillHint">/tree 用 C4.5 决策树预测客户流失</div>
-          <div class="hint-chip" data-action="fillHint">/kmeans 对客户做聚类分析，K=3</div>
-          <div class="hint-chip" data-action="fillHint">/data 查看数据概况和分布</div>
-          <div class="hint-chip" data-action="fillHint">/ppt 生成销售业绩分析演示文稿</div>
-          <div class="hint-chip" data-action="fillHint">/dashboard 生成可交互销售分析看板</div>
+          <div class="hint-chip" data-action="fillHint" data-i18n="hint.sales_category">各品类的销售额是多少？</div>
+          <div class="hint-chip" data-action="fillHint" data-i18n="hint.sales_trend">近12个月的销售趋势如何？</div>
+          <div class="hint-chip" data-action="fillHint" data-i18n="hint.top_customers">哪些客户贡献了最多收入？</div>
+          <div class="hint-chip" data-action="fillHint" data-i18n="hint.region_chart">生成各地区业绩对比柱状图</div>
+          <div class="hint-chip" data-action="fillHint" data-i18n="hint.decile">/decile 对销售额做十分位分析</div>
+          <div class="hint-chip" data-action="fillHint" data-i18n="hint.tree">/tree 用 C4.5 决策树预测客户流失</div>
+          <div class="hint-chip" data-action="fillHint" data-i18n="hint.kmeans">/kmeans 对客户做聚类分析，K=3</div>
+          <div class="hint-chip" data-action="fillHint" data-i18n="hint.data">/data 查看数据概况和分布</div>
+          <div class="hint-chip" data-action="fillHint" data-i18n="hint.ppt">/ppt 生成销售业绩分析演示文稿</div>
+          <div class="hint-chip" data-action="fillHint" data-i18n="hint.dashboard">/dashboard 生成可交互销售分析看板</div>
         </div>
       </div>
       <div id="chat-vue-root" class="chat-vue-root"></div>
@@ -301,27 +645,48 @@
               </select>
 
               <button class="composer-tool" type="button" data-action="openSkillPicker">
-                <span aria-hidden="true">🛠</span><span data-i18n="composer.skills">技能</span><span class="composer-chev">⌄</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z"/></svg>
+                <span data-i18n="composer.skills">技能</span><span class="composer-chev">⌄</span>
               </button>
-              <button class="composer-icon-tool" type="button" data-action="openDataSource"
-                      data-i18n-title="composer.datasource" title="数据源">＋</button>
-              <button class="composer-icon-tool composer-mcp" type="button" data-action="openMcpSettings" title="MCP">MCP</button>
+              <button class="composer-tool" type="button" data-action="openDataSource"
+                      data-i18n-title="composer.datasource" title="数据源">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5M3 12a9 3 0 0 0 18 0"/></svg>
+                <span data-i18n="sidebar.datasource">数据源</span>
+              </button>
+              <button class="composer-tool composer-mcp" type="button" data-action="openMcpSettings" title="MCP">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 2v6M15 2v6M9 18v4M15 18v4M5 8h14v5a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4V8z"/></svg>
+                <span>MCP</span>
+              </button>
 
               <button class="composer-tool composer-workspace" type="button" data-action="openWorkspace"
                       data-i18n-title="sidebar.workspace" title="工作目录">
-                <span aria-hidden="true">📁</span><span data-i18n="sidebar.workspace">工作目录</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                <span data-i18n="sidebar.workspace">工作目录</span>
               </button>
               <button class="composer-tool composer-teams" type="button" data-action="openTeams"
                       title="团队">
-                <span aria-hidden="true">👥</span><span>团队</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M18 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0M12 11a4 4 0 0 1 4 4v2"/></svg>
+                <span data-i18n="composer.teams">团队</span>
               </button>
-              <label class="composer-permission" data-i18n-title="workspace.permission_hint" title="连接工作目录后可调整权限">
-                <span aria-hidden="true">🛡</span>
-                <select id="workspace-permission-select" aria-label="Workspace permission">
+              <div class="composer-tool composer-permission dropdown" id="composer-permission-wrap" data-i18n-title="workspace.permission_hint" title="连接工作目录后可调整权限">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                <button class="composer-permission-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" disabled>
+                  <span id="composer-permission-label">只读</span>
+                  <span class="composer-chev">⌄</span>
+                </button>
+                <div class="composer-permission-menu" role="menu">
+                  <button class="composer-permission-option" type="button" data-value="read_only" role="menuitem">
+                    <span data-i18n="workspace.permission.read_only">只读</span>
+                  </button>
+                  <button class="composer-permission-option" type="button" data-value="read_write" role="menuitem">
+                    <span data-i18n="workspace.permission.read_write">可读和编辑</span>
+                  </button>
+                </div>
+                <select id="workspace-permission-select" aria-label="Workspace permission" hidden>
                   <option value="read_only" data-i18n="workspace.permission.read_only">只读</option>
                   <option value="read_write" data-i18n="workspace.permission.read_write">可读和编辑</option>
                 </select>
-              </label>
+              </div>
 
             </div>
 
@@ -537,10 +902,10 @@
       <div class="add-custom-toggle" data-action="toggleAddCustom" data-i18n="modal.settings.add_custom">＋ 添加自定义模型</div>
 
       <div class="add-custom-form" id="add-custom-form">
-        <input type="text"     id="ac-name"   data-i18n-ph="add_custom.name_ph"  placeholder="供应商名称（显示用），例如 DeepSeek">
-        <input type="text"     id="ac-url"    data-i18n-ph="add_custom.url_ph"   placeholder="API Base URL，例如 https://api.deepseek.com">
-        <input type="text"     id="ac-model"  data-i18n-ph="add_custom.model_ph" placeholder="Model ID（传入 API 的模型名），例如 deepseek-chat">
-        <input type="password" id="ac-key"    data-i18n-ph="add_custom.key_ph"   placeholder="API Key">
+        <input type="text"     id="ac-name"   autocomplete="off" data-i18n-ph="add_custom.name_ph"  placeholder="供应商名称（显示用），例如 DeepSeek">
+        <input type="text"     id="ac-url"    autocomplete="off" data-i18n-ph="add_custom.url_ph"   placeholder="API Base URL，例如 https://api.deepseek.com">
+        <input type="text"     id="ac-model"  autocomplete="off" data-i18n-ph="add_custom.model_ph" placeholder="Model ID（传入 API 的模型名），例如 deepseek-chat">
+        <input type="password" id="ac-key"    autocomplete="off" data-lpignore="true" data-i18n-ph="add_custom.key_ph"   placeholder="API Key">
         <div class="f-ac-custom-row">
           <input type="number" id="ac-ctx"    data-i18n-ph="add_custom.ctx_ph"   placeholder="上下文窗口（默认 1000000）" class="f-item-flex">
           <input type="number" id="ac-output" data-i18n-ph="add_custom.out_ph"   placeholder="最大输出（默认 384000）"   class="f-item-flex">
@@ -658,125 +1023,6 @@
   </div>
 </div>
 
-<!-- MCP Settings modal -->
-<div class="overlay" id="ov-mcp">
-  <div class="modal mcp-modal">
-    <div class="modal-title">🔌 MCP 工具服务器</div>
-
-    <div class="mcp-body">
-    <!-- Server list -->
-    <div class="settings-sec">
-      <div class="f-mcp-refresh-row settings-sec-title">
-        <span>已配置的服务器</span>
-        <span class="f-mcp-refresh-link" data-action="loadMcpServers">↻ 刷新</span>
-      </div>
-      <div id="mcp-server-list" class="f-mcp-server-list">
-        <div class="f-loading-text">加载中…</div>
-      </div>
-    </div>
-
-    <!-- Add server form -->
-    <div class="settings-sec">
-      <div class="add-custom-toggle" id="mcp-add-toggle" data-action="toggleMcpAddForm">＋ 添加 MCP 服务器</div>
-      <div class="add-custom-form hidden" id="mcp-add-form">
-        <div class="f-form-title" id="mcp-form-title">添加服务器</div>
-
-        <!-- Unified smart-fill area -->
-        <div class="mcp-smart-area">
-          <div class="mcp-smart-label">✨ 智能填充</div>
-
-          <!-- Tab bar -->
-          <div class="mcp-fill-tabs">
-            <button class="mcp-fill-tab active" id="mcp-tab-local"  data-action="switchMcpTab:local">📁 本地包目录</button>
-            <button class="mcp-fill-tab"        id="mcp-tab-paste"  data-action="switchMcpTab:paste">📋 粘贴内容</button>
-          </div>
-
-          <!-- Tab: local path -->
-          <div id="mcp-panel-local" class="mcp-fill-panel">
-            <div class="mcp-smart-hint">填入已安装的 MCP 包目录路径，自动读取 package.json 并配置</div>
-            <div class="f-mcp-scan-row">
-              <input type="text" id="mcp-scan-path" class="f-item-flex"
-                placeholder="例如：C:\Users\you\MCP\playwright">
-              <button class="btn-sm btn-sm-primary" id="mcp-scan-btn" data-action="scanLocalMcp">扫描</button>
-            </div>
-            <span id="mcp-scan-status"   class="f-scan-status"></span>
-            <div  id="mcp-scan-warnings" class="hidden f-warn-chip"></div>
-          </div>
-
-          <!-- Tab: paste -->
-          <div id="mcp-panel-paste" class="mcp-fill-panel hidden">
-            <div class="mcp-smart-hint">粘贴安装命令、JSON 配置或文档片段，LLM 自动识别并填写</div>
-            <textarea id="mcp-smart-input" class="mcp-smart-input"
-              placeholder="例如：npx -y @modelcontextprotocol/server-filesystem /your/path&#10;或粘贴 JSON 配置、README 片段、curl 示例…"></textarea>
-            <div class="f-smart-hint-row">
-              <button class="btn-sm btn-sm-primary" id="mcp-smart-btn" data-action="parseMcpConfig">解析并填充</button>
-              <span id="mcp-smart-status" class="f-smart-status"></span>
-            </div>
-            <div id="mcp-smart-warnings" class="hidden f-warn-chip"></div>
-            <div id="mcp-smart-llm-hint" class="hidden f-smart-llm-hint"></div>
-          </div>
-        </div>
-        <div class="mcp-smart-divider"><span>或手动填写</span></div>
-
-        <div id="mcp-form-fields">
-        <div class="f-form-title" id="mcp-form-title">添加服务器</div>
-
-        <input type="text" id="mcp-label"   placeholder="服务器名称（显示用）">
-        <div id="mcp-id-row">
-        <input type="text" id="mcp-id"    placeholder="服务器 ID（字母/数字/下划线，唯一）" class="input-fill">
-        </div>
-        <input type="text" id="mcp-desc"    placeholder="描述（可选）">
-
-        <!-- Transport selector -->
-        <div class="f-row-gap16">
-          <label class="f-label-inline">
-            <input type="radio" name="mcp-transport" value="stdio" checked> stdio（本地命令）
-          </label>
-          <label class="f-label-inline">
-            <input type="radio" name="mcp-transport" value="sse"> SSE（远程 HTTP）
-          </label>
-        </div>
-
-        <!-- stdio fields -->
-        <div id="mcp-stdio-fields" class="f-flex-col-gap8">
-          <div class="f-warn-chip">
-            ⚠️ 安全提示：仅允许运行 uvx / uv / npx / node / python / python3 / deno 命令。args 和 env 中不得含有 Shell 元字符或危险环境变量。
-          </div>
-          <input type="text" id="mcp-command" placeholder="命令，例如 npx 或 uvx" data-input="updateMcpCmdPreview">
-          <input type="text" id="mcp-args"    placeholder="参数（空格分隔），例如 -y @modelcontextprotocol/server-filesystem /tmp" data-input="updateMcpCmdPreview">
-          <input type="text" id="mcp-env"     placeholder="环境变量（变量名=值，逗号分隔），例如：ATLASCLOUD_API_KEY=apikey-xxx, OTHER_KEY=yyy">
-          <div id="mcp-cmd-preview" class="mcp-cmd-preview hidden">
-            <div class="cmd-label">命令预览</div>
-            <span id="mcp-cmd-preview-text"></span>
-          </div>
-        </div>
-
-        <!-- SSE fields -->
-        <div id="mcp-sse-fields" class="hidden f-flex-col-gap8">
-          <input type="text" id="mcp-url"     placeholder="SSE 端点 URL，例如 http://localhost:8000/sse">
-          <input type="text" id="mcp-headers" placeholder="HTTP 头（KEY:VALUE，逗号分隔，可选）">
-          <div class="f-hint f-hint-neg">
-            示例：Authorization:Bearer sk-xxx, X-Custom:value
-          </div>
-        </div>
-
-        <div class="msg-err" id="mcp-add-err"></div>
-        <div class="msg-ok"  id="mcp-add-ok"></div>
-        </div><!-- /#mcp-form-fields -->
-        <div class="f-row-gap7">
-          <button class="btn-sm btn-sm-ghost"   data-action="toggleMcpAddForm">取消</button>
-          <button class="btn-sm btn-sm-primary" data-action="addMcpServer">保存并连接</button>
-        </div>
-      </div>
-    </div>
-    </div>
-
-    <div class="modal-footer">
-      <button class="btn-sm btn-sm-ghost" data-action="closeOverlay:ov-mcp">关闭</button>
-    </div>
-  </div>
-</div>
-
 <!-- Update modal -->
 <div class="overlay" id="ov-app-settings">
   <div class="modal app-settings-modal">
@@ -864,113 +1110,6 @@
     </div>
     <div class="modal-footer">
       <button class="btn-sm btn-sm-ghost" data-action="closeOverlay:ov-instruction" data-i18n="modal.close">关闭</button>
-    </div>
-  </div>
-</div>
-
-<!-- ══ Knowledge Base Modal ══════════════════════════════════════════ -->
-<div class="overlay" id="ov-knowledge">
-  <div class="modal kb-modal">
-    <div class="modal-title">🧠 业务知识库</div>
-
-    <!-- Tab bar -->
-    <div class="kb-tabs" id="kb-tabs">
-      <button class="kb-tab active"     data-action="kbSwitchTab:metrics">📐 指标定义</button>
-      <button class="kb-tab"             data-action="kbSwitchTab:rules">🛡 业务规则</button>
-      <button class="kb-tab"             data-action="kbSwitchTab:notes">📝 背景知识</button>
-      <button class="kb-tab kb-tab-import" data-action="kbSwitchTab:import">⬆ 导入文件</button>
-    </div>
-
-    <!-- ── Tab: metrics ── -->
-    <div class="kb-panel" id="kb-panel-metrics">
-      <div class="kb-toolbar">
-        <span class="kb-count" id="kb-metrics-count">—</span>
-        <div class="f-row-gap6">
-          <button class="btn-sm btn-sm-ghost"   data-action="kbRefresh:metrics"  title="刷新列表">↻ 刷新</button>
-          <button class="btn-sm btn-sm-primary" data-action="kbOpenForm:metrics">＋ 新增指标</button>
-        </div>
-      </div>
-      <div class="kb-list" id="kb-list-metrics">
-        <div class="kb-empty">暂无指标定义</div>
-      </div>
-    </div>
-
-    <!-- ── Tab: rules ── -->
-    <div class="kb-panel hidden" id="kb-panel-rules">
-      <div class="kb-toolbar">
-        <span class="kb-count" id="kb-rules-count">—</span>
-        <div class="f-row-gap6">
-          <button class="btn-sm btn-sm-ghost"   data-action="kbRefresh:rules"  title="刷新列表">↻ 刷新</button>
-          <button class="btn-sm btn-sm-primary" data-action="kbOpenForm:rules">＋ 新增规则</button>
-        </div>
-      </div>
-      <div class="kb-list" id="kb-list-rules">
-        <div class="kb-empty">暂无业务规则</div>
-      </div>
-    </div>
-
-    <!-- ── Tab: notes ── -->
-    <div class="kb-panel hidden" id="kb-panel-notes">
-      <div class="kb-toolbar">
-        <span class="kb-count" id="kb-notes-count">—</span>
-        <div class="f-row-gap6">
-          <button class="btn-sm btn-sm-ghost"   data-action="kbRefresh:notes"  title="刷新列表">↻ 刷新</button>
-          <button class="btn-sm btn-sm-primary" data-action="kbOpenForm:notes">＋ 新增背景知识</button>
-        </div>
-      </div>
-      <div class="kb-list" id="kb-list-notes">
-        <div class="kb-empty">暂无背景知识</div>
-      </div>
-    </div>
-
-    <!-- ── Tab: import ── -->
-    <div class="kb-panel hidden" id="kb-panel-import">
-      <div class="kb-import-zone" id="kb-drop-zone">
-        <div class="kb-import-icon">📄</div>
-        <div class="kb-import-hint">拖拽文件到此处，或点击选择</div>
-        <div class="kb-import-sub">支持 .xlsx / .xls / .docx</div>
-        <input type="file" id="kb-file-input" accept=".xlsx,.xls,.docx" class="hidden">
-        <button class="btn-sm btn-sm-primary f-mt10" data-action="kbPickFile">选择文件</button>
-      </div>
-
-      <!-- Historical uploaded files -->
-      <div id="kb-files-section" class="f-mt14">
-        <div class="f-flex-between f-mb8">
-          <span class="f-section-title">已上传的源文件</span>
-          <span class="f-refresh-link" data-action="kbLoadFiles">↻ 刷新</span>
-        </div>
-        <div id="kb-files-list">
-          <div class="kb-empty kb-loading-text">加载中…</div>
-        </div>
-      </div>
-
-      <!-- Parsing spinner -->
-      <div class="ds-loading hidden" id="kb-parsing">
-        <div class="ds-spinner"></div>
-        <span>正在解析文件，请稍候…</span>
-      </div>
-
-      <!-- Preview cards -->
-      <div id="kb-preview-area" class="hidden">
-        <div class="kb-preview-header">
-          <div>
-            <div class="kb-preview-title" id="kb-preview-title">解析结果预览</div>
-            <div class="kb-preview-sub" id="kb-preview-sub"></div>
-          </div>
-          <div class="f-kb-preview-btns">
-            <button class="btn-sm btn-sm-ghost"   data-action="kbCancelImport">重新选择</button>
-            <button class="btn-sm btn-sm-primary" data-action="kbConfirmImport">✓ 全部入库</button>
-          </div>
-        </div>
-        <div class="kb-preview-list" id="kb-preview-list"></div>
-      </div>
-
-      <div class="msg-err f-kb-import-err" id="kb-import-err"></div>
-      <div class="msg-ok  f-kb-import-ok"  id="kb-import-ok"></div>
-    </div>
-
-    <div class="modal-footer">
-      <button class="btn-sm btn-sm-ghost" data-action="closeOverlay:ov-knowledge">关闭</button>
     </div>
   </div>
 </div>
@@ -1072,86 +1211,8 @@
   </div>
 </div>
 
-<!-- ── Inline edit form (shared, floats over modal) ── -->
-<div class="overlay" id="ov-kb-form">
-  <div class="modal modal--w520">
-    <div class="modal-title" id="kb-form-title">新增指标</div>
 
-    <!-- Vue knowledge island 接管：首次打开时按需挂载并渲染 #kb-form-body -->
-    <div id="kb-form-body">
-    <!-- metrics fields -->
-    <div id="kb-fields-metrics">
-      <div class="f-row">
-        <label>指标名称 <span class="required-mark">*</span></label>
-        <input type="text" id="kbf-name" placeholder="例如：DAU">
-      </div>
-      <div class="f-row">
-        <label>别名（逗号分隔）</label>
-        <input type="text" id="kbf-alias" placeholder="日活, 日活跃用户">
-      </div>
-      <div class="f-row">
-        <label>业务定义</label>
-        <textarea id="kbf-definition" rows="2" placeholder="当日启动游戏一次及以上的独立设备数"></textarea>
-      </div>
-      <div class="f-row">
-        <label>SQL 模板</label>
-        <textarea id="kbf-sql" rows="3" placeholder="SELECT COUNT(DISTINCT device_id) FROM events WHERE date='{date}'"></textarea>
-      </div>
-      <div class="f-row">
-        <label>口径备注</label>
-        <textarea id="kbf-notes" rows="2" placeholder="剔除机器人流量；iOS/Android 分开统计"></textarea>
-      </div>
-    </div>
-
-    <!-- rules fields -->
-    <div id="kb-fields-rules" class="hidden">
-      <div class="f-row">
-        <label>规则 ID <span class="required-mark">*</span></label>
-        <input type="text" id="kbf-rule-id" placeholder="例如：retention_sanity">
-      </div>
-      <div class="f-row">
-        <label>描述</label>
-        <input type="text" id="kbf-rule-desc" placeholder="次日留存不能超过首日 DAU">
-      </div>
-      <div class="f-row">
-        <label>违反条件</label>
-        <textarea id="kbf-rule-cond" rows="2" placeholder="day2_retention > day1_dau"></textarea>
-      </div>
-      <div class="f-row">
-        <label>严重程度</label>
-        <select id="kbf-rule-sev">
-          <option value="warning">warning</option>
-          <option value="error">error</option>
-        </select>
-      </div>
-    </div>
-
-    <!-- notes fields -->
-    <div id="kb-fields-notes" class="hidden">
-      <div class="f-row">
-        <label>主题 <span class="required-mark">*</span></label>
-        <input type="text" id="kbf-topic" placeholder="例如：流失分析">
-      </div>
-      <div class="f-row">
-        <label>内容</label>
-        <textarea id="kbf-content" rows="4" placeholder="分析流失时需检查：版本更新、服务器波动、竞品上线…"></textarea>
-      </div>
-      <div class="f-row">
-        <label>标签（逗号分隔）</label>
-        <input type="text" id="kbf-tags" placeholder="流失, churn, 留存">
-      </div>
-    </div>
-
-    <div class="msg-err" id="kb-form-err"></div>
-    </div><!-- /#kb-form-body -->
-
-    <div class="modal-footer">
-      <button class="btn-sm btn-sm-ghost"   data-action="closeOverlay:ov-kb-form">取消</button>
-      <button class="btn-sm btn-sm-primary" data-action="kbSubmitForm">保存</button>
-    </div>
-  </div>
-</div>
-
+<div id="business-canvas-root"></div>
 <div id="global-ui-root"></div>
 <div id="job-history-root"></div>
 <div id="checkpoint-root"></div>
@@ -1163,6 +1224,6 @@
 <script src="{{ url_for('static', filename='vendor/vue.global.prod.js') }}"></script>
 
 <!-- ── ES module entry; non-critical UI islands load from dist/chunks on demand ── -->
-<script type="module" src="{{ url_for('static', filename='dist/chat-app.js', v='fe1-chat-app-4') }}"></script>
+<script type="module" src="{{ url_for('static', filename='dist/chat-app.js', v='fe1-chat-app-81') }}"></script>
 </body>
 </html>

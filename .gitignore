@@ -38,7 +38,9 @@ static/dist/*
 
 # ---- Runtime / cache ----
 .deps_installed
+.session_tmps/
 outputs/
+tmp/
 uploads/
 *.log
 .cache/
@@ -49,9 +51,23 @@ uploads/
 # ---- Local-only tests ----
 # Keep the tests already tracked by Git for GitHub Actions, but do not add
 # newly created local tests to the repository.
-Test/
+Test/*
+!Test/test_workflow_contracts.py
+!Test/test_workflows.py
+!Test/test_workflow_scheduler.py
+!Test/test_job_terminal_listeners.py
+!Test/test_workflow_runtime.py
+!Test/test_workspace_storage_workflow_refs.py
+!Test/test_workflow_frontend_panel.py
+!Test/test_workflow_sqlite_locking.py
+!Test/fixtures/
+!Test/fixtures/workflows/
+!Test/fixtures/workflows/operating_analysis_v1.json
 Test/local_*.py
 Test/test_workspace_storage_cleanup.py
+
+# Keep all development tests local.
+Test/
 
 # ---- IDE / editor ----
 .idea/
@@ -71,12 +87,14 @@ desktop.ini
 *.local
 LLM/llm_config.json
 LLM/mcp_config.json
+LLM/embedding_config.json
 data/datasource_config.json
 .playwright-mcp
 docs/*
-!docs/frontend-optimization-plan.md
+!docs/10-ai-team-workflow-optimization-plan.md
+!docs/11-ai-team-workflow-wf0-decisions.md
 test.bat
-Notes for development.md
+01-notes-for-development.md
 
 
 # ---- Large assets that should not be tracked ----
@@ -96,3 +114,4 @@ RAILWAY_DEPLOY.md
 config/hooks.json
 frontend/README.md
 package-lock.json
+.claude

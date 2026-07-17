@@ -1,7 +1,6 @@
-# Copyright 2024-2026 Kaku Li (https://github.com/likaku)
-# Licensed under the Apache License, Version 2.0 — see LICENSE and NOTICE.
-# Part of "Mck-ppt-design-skill" (McKinsey PPT Design Framework).
-# NOTICE: This file must be retained in all copies or substantial portions.
+# Copyright 2026 Zafer-Liu
+# 自然语言交互式经营数据分析软件 V1.0
+# Licensed under CC BY-NC 4.0 — see LICENSE.
 #
 """MckEngine — The presentation engine that wraps python-pptx with high-level layout methods.
 

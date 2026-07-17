@@ -61,3 +61,9 @@ sqlglot>=23.0.0
 # External data sources
 gspread>=6.0.0
 google-auth>=2.0.0
+
+# Semantic embedding (neural_embedder — BGE-small-zh)
+# CPU-only torch to avoid pulling CUDA wheels (~2 GB).
+# Pin tokenizers for compatibility with the Rust-backed tokenizer load path.
+torch>=2.1.0
+tokenizers>=0.15.0

@@ -8,6 +8,15 @@ import { getUiIsland } from "../core/ui-registry.js";
 import { onSourcesUpdated, resetSourceState } from "../legacy/datasource.js";
 import { sysMsg } from "../legacy/msg.js";
 
+  // ── Generation guard ──────────────────────────────────────────────
+  // Prevents stale loadStatus() responses from overwriting newer state set
+  // by doMount/doUnmount. openModal() fires loadStatus() as fire-and-forget;
+  // if the user mounts a workspace while that GET is in flight, the response
+  // (which saw the pre-mount state) would clobber permTrigger.disabled back
+  // to true. Each mount/unmount bumps the generation; loadStatus snapshots
+  // the generation before awaiting and discards its result if it changed.
+  let _wsGeneration = 0;
+
   // ── Sidebar status row sync ───────────────────────────────────────
   function _setSidebarState(mounted, workdir, name = "") {
     const dot = $("ws-dot");
@@ -174,6 +183,17 @@ import { sysMsg } from "../legacy/msg.js";
       composerPermission.value = permission;
       composerPermission.disabled = false;
       composerPermission.dataset.mounted = mounted ? "1" : "0";
+      // UI-only sync event — distinct from "change" so onPermissionChange is NOT triggered.
+      composerPermission.dispatchEvent(new CustomEvent("perm:sync", { bubbles: true, detail: { permission } }));
+    }
+    // Sync disabled state to custom dropdown trigger.
+    // Only enable the permission selector when a workspace is mounted.
+    const permTrigger = document.querySelector(".composer-permission-trigger");
+    if (permTrigger) {
+      permTrigger.disabled = !mounted;
+      permTrigger.title = mounted
+        ? (window.t?.("workspace.permission_hint") || "连接工作目录后可调整权限")
+        : (window.t?.("workspace.permission_disabled") || "请先挂载工作目录");
     }
     const modalPermission = $("ws-permission");
     if (modalPermission) modalPermission.value = permission;
@@ -181,17 +201,22 @@ import { sysMsg } from "../legacy/msg.js";
 
   // ── Public actions ────────────────────────────────────────────────
   async function loadStatus() {
+    const gen = _wsGeneration;
     try {
       const d = await _fetchStatus();
+      if (gen !== _wsGeneration) return;  // stale — a mount/unmount happened
       _syncFromWorkspace(d.workspace);
     } catch (e) {
+      if (gen !== _wsGeneration) return;
       _setSidebarState(false, "");
       console.warn("[workspace] loadStatus failed:", e);
     }
+    if (gen !== _wsGeneration) return;
     await _refreshKnownWorkspaces();
   }
 
   async function doMount(options = {}) {
+    _wsGeneration++;  // invalidate any in-flight loadStatus
     const input = $("ws-path-input");
     const errEl = $("ws-err");
     const okEl = $("ws-ok");
@@ -335,6 +360,9 @@ import { sysMsg } from "../legacy/msg.js";
         }
       }
       if (input) input.value = "";
+      // Refresh knowledge panel if open — workspace switch changes the
+      // knowledge scope, so the panel needs to reload for the new workspace.
+      window.BAA?.knowledge?.kbOnWorkspaceChanged?.();
       return true;
     } catch (e) {
       if (errEl) errEl.textContent = window.t("workspace.mount_fail", { err: String(e.message || e) });
@@ -353,6 +381,8 @@ import { sysMsg } from "../legacy/msg.js";
       return;
     }
     if (select) select.disabled = true;
+    const trigger = document.querySelector(".composer-permission-trigger");
+    if (trigger) trigger.disabled = true;
     try {
       const d = await _setPermission(permission);
       _syncFromWorkspace({ mounted: true, ...d.workspace });
@@ -360,10 +390,19 @@ import { sysMsg } from "../legacy/msg.js";
     } catch (error) {
       await loadStatus();
       window.BAA.overlay?.toast?.(String(error.message || error), "err");
+    } finally {
+      // Ensure the permission controls are re-enabled regardless of success/failure.
+      // _syncFromWorkspace re-enables them on the happy path; we guard the error path
+      // where loadStatus() itself may also fail and skip _syncFromWorkspace.
+      const sel = $("workspace-permission-select");
+      if (sel) sel.disabled = false;
+      const trg = document.querySelector(".composer-permission-trigger");
+      if (trg) trg.disabled = !!(sel?.dataset.mounted !== "1");
     }
   }
 
   async function doUnmount() {
+    _wsGeneration++;  // invalidate any in-flight loadStatus
     const errEl = $("ws-err");
     const okEl = $("ws-ok");
     if (errEl) errEl.textContent = "";
@@ -402,6 +441,8 @@ import { sysMsg } from "../legacy/msg.js";
       if (window.BAA.overlay && window.BAA.overlay.toast) {
         window.BAA.overlay.toast("工作目录已卸载", "ok");
       }
+      // Refresh knowledge panel if open — unmount changes the knowledge scope.
+      window.BAA?.knowledge?.kbOnWorkspaceChanged?.();
     } catch (e) {
       if (errEl) errEl.textContent = window.t("workspace.unmount_fail", { err: String(e.message || e) });
     } finally {
@@ -447,23 +488,30 @@ import { sysMsg } from "../legacy/msg.js";
   }
 
   // ── Open modal: refresh state on every open ───────────────────────
+  let _openModalInFlight = false;
   async function openModal(preferredPermission) {
-    await window.openOverlay("ov-workspace");
-    // Reset hint color/text on open.
-    const hint = $("ws-path-hint");
-    if (hint) {
-      hint.textContent = window.t("modal.workspace.hint");
-      hint.style.color = "";
-    }
-    const errEl = $("ws-err");
-    const okEl = $("ws-ok");
-    if (errEl) errEl.textContent = "";
-    if (okEl) okEl.textContent = "";
-    loadStatus().finally(() => {
-      if (preferredPermission && $("ws-permission")) {
-        $("ws-permission").value = preferredPermission;
+    if (_openModalInFlight) return;
+    _openModalInFlight = true;
+    try {
+      await window.openOverlay("ov-workspace");
+      // Reset hint color/text on open.
+      const hint = $("ws-path-hint");
+      if (hint) {
+        hint.textContent = window.t("modal.workspace.hint");
+        hint.style.color = "";
       }
-    });
+      const errEl = $("ws-err");
+      const okEl = $("ws-ok");
+      if (errEl) errEl.textContent = "";
+      if (okEl) okEl.textContent = "";
+      loadStatus().finally(() => {
+        if (preferredPermission && $("ws-permission")) {
+          $("ws-permission").value = preferredPermission;
+        }
+      });
+    } finally {
+      _openModalInFlight = false;
+    }
   }
 
   function selectKnownWorkspace(workspace) {

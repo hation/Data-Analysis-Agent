@@ -434,3 +434,21 @@ def refresh_widget(dashboard_id: str, widget_id: str):
         widget["error"] = error
         _save_dashboard(dashboard, dashboard_id)
         return jsonify({"ok": True, "id": widget_id, "chart_id": chart_id, "error": error})
+
+
+# -- API: export HTML ----------------------------------------------------------
+
+@bp.get("/api/dashboard/<dashboard_id>/export-html")
+def export_html(dashboard_id: str):
+    from .state import chart_store
+    from .dashboard_html_export import build_export_html
+    from flask import Response
+
+    dashboard = _load_dashboard(dashboard_id)
+    html = build_export_html(dashboard, chart_store)
+    safe_name = re.sub(r"[^\w\-]", "_", dashboard.get("name", "dashboard"))
+    return Response(
+        html,
+        mimetype="text/html",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.html"'},
+    )

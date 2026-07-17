@@ -17,6 +17,8 @@ export function mountKnowledgeUi() {
 
   // 清空 5 个挂载点的静态 HTML（#kb-panel-import 不清空，保留旧 DOM）
   root1.innerHTML = "";
+  root1.classList.remove("kb-tabs");
+  root1.classList.add("kb-tabs-shell");
   root2.innerHTML = "";
   root3.innerHTML = "";
   root4.innerHTML = "";
@@ -37,6 +39,11 @@ export function mountKnowledgeUi() {
 
   const state = reactive({
     tab: "metrics",
+    categories: [],
+    activeCategoryId: 1,
+    categoryDraft: "",
+    categoryErr: "",
+    categoryMenuOpen: false,
     lists: {
       metrics: { items: [], count: "—", loading: false, err: "" },
       rules:   { items: [], count: "—", loading: false, err: "" },
@@ -57,8 +64,25 @@ export function mountKnowledgeUi() {
 
   let callbacks = {};  // { onSwitchTab, onToggle, onOpenForm, onSubmitForm, onCancelForm, onDelete }
 
+  const closeCategoryMenu = () => {
+    if (!state.categoryMenuOpen) return;
+    state.categoryMenuOpen = false;
+    _renderTabs();
+  };
+  document.addEventListener("click", closeCategoryMenu);
+
+  function _activeCategory() {
+    return state.categories.find(c => Number(c.id) === Number(state.activeCategoryId)) || null;
+  }
+
+  function _activeCategoryEnabled() {
+    const cat = _activeCategory();
+    return !cat || !!cat.enabled;
+  }
+
   // ── 渲染分发 ───────────────────────────────────────────────────
   function renderAll() {
+    _recalcAllCounts();
     _renderTabs();
     _renderPanel("metrics");
     _renderPanel("rules");
@@ -70,16 +94,105 @@ export function mountKnowledgeUi() {
   }
 
   function _renderTabs() {
-    render(h("div", { class: "kb-tabs" }, TABS.map(tb => {
+    const activeCategory = _activeCategory();
+    const categoryBar = h("div", { class: "kb-scope-tools" }, [
+      h("div", { class: "kb-scope-head" }, [
+        h("span", { class: "kb-scope-title" }, "业务分类"),
+        h("div", { class: "kb-scope-actions" }, [
+          h("div", { class: "kb-category-filter" }, [
+            h("button", {
+              class: ["kb-category-select", state.categoryMenuOpen ? "open" : ""],
+              title: "选择业务分类",
+              onClick: e => {
+                e.stopPropagation();
+                state.categoryMenuOpen = !state.categoryMenuOpen;
+                _renderTabs();
+              },
+            }, [
+              h("span", { class: "kb-category-select-label" }, activeCategory ? activeCategory.name : "请选择业务分类"),
+              activeCategory && !activeCategory.enabled ? h("span", { class: "kb-category-select-off" }, "停用") : null,
+              h("span", { class: "kb-category-caret" }, "▾"),
+            ]),
+            state.categoryMenuOpen ? _renderCategoryMenu() : null,
+          ]),
+          h("button", {
+            class: "btn-sm btn-sm-primary kb-upload-parse-btn",
+            onClick: () => callbacks.onOpenImport && callbacks.onOpenImport(),
+          }, "上传文档解析"),
+        ]),
+      ]),
+      state.categoryErr ? h("div", { class: "kb-category-err" }, state.categoryErr) : null,
+    ]);
+
+    const tabs = h("div", { class: "kb-tabs" }, TABS.filter(tb => !tb.importTab).map(tb => {
       const active = state.tab === tb.key;
       const cls = ["kb-tab"];
       if (active) cls.push("active");
-      if (tb.importTab) cls.push("kb-tab-import");
       return h("button", {
         class: cls,
         onClick: () => callbacks.onSwitchTab && callbacks.onSwitchTab(tb.key),
       }, `${tb.icon} ${tb.label}`);
-    })), root1);
+    }));
+    render(h(Fragment, null, [categoryBar, tabs]), root1);
+  }
+
+  function _renderCategoryMenu() {
+    const submitCategory = () => {
+      const name = state.categoryDraft;
+      state.categoryDraft = "";
+      callbacks.onAddCategory && callbacks.onAddCategory(name);
+    };
+    return h("div", {
+      class: "kb-category-menu",
+      onClick: e => e.stopPropagation(),
+    }, [
+      h("div", { class: "kb-category-menu-list" }, state.categories.map(cat => {
+        const active = Number(cat.id) === Number(state.activeCategoryId);
+        const enabled = !!cat.enabled;
+        return h("div", {
+          class: ["kb-category-option", active ? "active" : "", enabled ? "" : "disabled"],
+          onClick: () => {
+            state.categoryMenuOpen = false;
+            callbacks.onSelectCategory && callbacks.onSelectCategory(cat.id);
+          },
+        }, [
+          h("span", { class: "kb-category-check" }, active ? "✓" : ""),
+          h("span", { class: "kb-category-option-name" }, cat.name),
+          h("button", {
+            class: ["kb-category-toggle", enabled ? "on" : "off"],
+            title: enabled ? "停用该业务知识库" : "启用该业务知识库",
+            onClick: e => {
+              e.stopPropagation();
+              callbacks.onToggleCategory && callbacks.onToggleCategory(cat.id);
+            },
+          }, enabled ? "启用" : "停用"),
+          h("button", {
+            class: "kb-category-delete",
+            title: `删除业务分类“${cat.name}”`,
+            "aria-label": `删除业务分类“${cat.name}”`,
+            onClick: e => {
+              e.stopPropagation();
+              callbacks.onDeleteCategory && callbacks.onDeleteCategory(cat.id);
+            },
+          }, "×"),
+        ]);
+      })),
+      h("div", { class: "kb-category-menu-add" }, [
+        h("input", {
+          value: state.categoryDraft,
+          placeholder: "新增业务，如外卖业务",
+          onInput: e => { state.categoryDraft = e.target.value; },
+          onKeydown: e => {
+            if (e.key === "Enter") submitCategory();
+          },
+        }),
+        h("button", {
+          class: "kb-category-add-btn",
+          onClick: submitCategory,
+        }, "新增分类"),
+      ]),
+      state.categoryErr ? h("div", { class: "kb-category-err" }, state.categoryErr) : null,
+    ]);
   }
 
   function _renderPanel(type) {
@@ -91,7 +204,7 @@ export function mountKnowledgeUi() {
 
     const toolbar = h("div", { class: "kb-toolbar" }, [
       h("span", { class: "kb-count" }, L.count),
-      h("div", { style: "display:flex;gap:6px" }, [
+      h("div", { class: "kb-toolbar-actions" }, [
         h("button", {
           class: "btn-sm btn-sm-ghost",
           title: "刷新列表",
@@ -121,9 +234,12 @@ export function mountKnowledgeUi() {
   }
 
   function _renderCard(type, item) {
-    const cardStyle = item.enabled ? {} : { style: "opacity:.45" };
+    const categoryEnabled = _activeCategoryEnabled();
+    const effectiveEnabled = categoryEnabled && !!item.enabled;
+    const cardStyle = effectiveEnabled ? {} : { style: "opacity:.45" };
+    // Actions row: placed at the bottom so the name row has full width (no squeeze)
     const actions = h("div", { class: "kb-card-actions" }, [
-      _renderToggle(item.enabled, () => callbacks.onToggle && callbacks.onToggle(type, item.id)),
+      _renderToggle(effectiveEnabled, () => callbacks.onToggle && callbacks.onToggle(type, item.id), { disabled: !categoryEnabled }),
       h("button", {
         class: "kb-act-btn",
         onClick: () => callbacks.onOpenForm && callbacks.onOpenForm(type, item.id),
@@ -136,54 +252,50 @@ export function mountKnowledgeUi() {
 
     if (type === "metrics") {
       return h("div", Object.assign({ class: "kb-card", id: `kbc-metrics-${item.id}` }, cardStyle), [
-        h("div", { class: "kb-card-head" }, [
-          h("div", { class: "kb-card-name" }, [
-            h("span", { class: "kb-badge kb-badge-metric" }, "指标"),
-            ` ${item.name || ""}`,
-            item.alias ? h("span", { style: "font-size:12px;color:#94a3b8;font-weight:400" }, ` · ${item.alias}`) : null,
-          ]),
-          actions,
+        // Name row: badge + name on one line, no actions competing for space
+        h("div", { class: "kb-card-name" }, [
+          h("span", { class: "kb-badge kb-badge-metric" }, "指标"),
+          h("span", { class: "kb-card-name-text" }, item.name || ""),
+          item.alias ? h("span", { class: "kb-card-alias" }, ` · ${item.alias}`) : null,
         ]),
         item.definition ? h("div", { class: "kb-card-meta" }, item.definition) : null,
         item.sql_template ? h("div", { class: "kb-card-sql" }, item.sql_template) : null,
         item.notes ? h("div", { class: "kb-card-meta", style: "color:#94a3b8;font-size:11px" }, `备注：${item.notes}`) : null,
+        actions,
       ]);
     }
 
     if (type === "rules") {
       const badgeCls = item.severity === "error" ? "kb-badge kb-badge-rule-error" : "kb-badge kb-badge-rule-warning";
       return h("div", Object.assign({ class: "kb-card", id: `kbc-rules-${item.id}` }, cardStyle), [
-        h("div", { class: "kb-card-head" }, [
-          h("div", { class: "kb-card-name" }, [
-            h("span", { class: badgeCls }, item.severity || "warning"),
-            ` ${item.rule_id || ""}`,
-          ]),
-          actions,
+        h("div", { class: "kb-card-name" }, [
+          h("span", { class: badgeCls }, item.severity || "warning"),
+          h("span", { class: "kb-card-name-text" }, item.rule_id || ""),
         ]),
         item.description ? h("div", { class: "kb-card-meta" }, item.description) : null,
         item.condition ? h("div", { class: "kb-card-sql" }, item.condition) : null,
+        actions,
       ]);
     }
 
     // notes
     return h("div", Object.assign({ class: "kb-card", id: `kbc-notes-${item.id}` }, cardStyle), [
-      h("div", { class: "kb-card-head" }, [
-        h("div", { class: "kb-card-name" }, [
-          h("span", { class: "kb-badge kb-badge-note" }, "背景"),
-          ` ${item.topic || ""}`,
-          item.tags ? h("span", { style: "font-size:11px;color:#94a3b8;font-weight:400" }, ` ${item.tags}`) : null,
-        ]),
-        actions,
+      h("div", { class: "kb-card-name" }, [
+        h("span", { class: "kb-badge kb-badge-note" }, "背景"),
+        h("span", { class: "kb-card-name-text" }, item.topic || ""),
+        item.tags ? h("span", { class: "kb-card-alias" }, ` ${item.tags}`) : null,
       ]),
       item.content ? h("div", { class: "kb-card-meta" }, item.content) : null,
+      actions,
     ]);
   }
 
-  function _renderToggle(enabled, onClick) {
+  function _renderToggle(enabled, onClick, opts = {}) {
+    const disabled = !!opts.disabled;
     return h("div", {
-      class: `kb-toggle ${enabled ? "on" : ""}`,
-      title: enabled ? "已启用，点击禁用" : "已禁用，点击启用",
-      onClick,
+      class: ["kb-toggle", enabled ? "on" : "", disabled ? "disabled" : ""],
+      title: disabled ? "当前业务分类已停用，启用业务后此条才生效" : (enabled ? "已启用，点击禁用" : "已禁用，点击启用"),
+      onClick: disabled ? undefined : onClick,
     }, [h("div", { class: "kb-toggle-knob" })]);
   }
 
@@ -251,6 +363,28 @@ export function mountKnowledgeUi() {
     callbacks.onSwitchTab && callbacks.onSwitchTab(state.tab);
   }
 
+
+  function setCategories(categories, activeId) {
+    state.categories = Array.isArray(categories) ? categories : [];
+    state.activeCategoryId = Number(activeId || state.activeCategoryId || state.categories[0]?.id || 1);
+    state.categoryErr = "";
+    renderAll();
+  }
+
+  function setActiveCategory(id) {
+    state.activeCategoryId = Number(id) || 1;
+    renderAll();
+  }
+
+  function getActiveCategoryId() {
+    return state.activeCategoryId || 1;
+  }
+
+  function setCategoryErr(msg) {
+    state.categoryErr = msg || "";
+    _renderTabs();
+  }
+
   function setTab(tab) {
     state.tab = tab;
     renderAll();
@@ -263,8 +397,16 @@ export function mountKnowledgeUi() {
   function _recalcCount(type) {
     const L = state.lists[type];
     if (!L) return;
-    const enabled = L.items.filter(r => r.enabled).length;
+    const enabled = _activeCategoryEnabled()
+      ? L.items.filter(r => r.enabled).length
+      : 0;
     L.count = `共 ${L.items.length} 条 · ${enabled} 条已启用`;
+  }
+
+  function _recalcAllCounts() {
+    _recalcCount("metrics");
+    _recalcCount("rules");
+    _recalcCount("notes");
   }
 
   function setItems(type, items) {
@@ -421,6 +563,10 @@ export function mountKnowledgeUi() {
     onOpen,
     setTab,
     getTab,
+    setCategories,
+    setActiveCategory,
+    getActiveCategoryId,
+    setCategoryErr,
     setItems,
     setListStatus,
     getItem,

@@ -40,6 +40,7 @@ DuckDB connection-level lockdown (second layer, in _utils.py, post-A4):
 """
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
@@ -396,6 +397,14 @@ def _default_allowed_roots() -> List[Path]:
     return [data_path("uploads"), resource_path("Information")]
 
 
+def _strip_sql_comments_for_prefix(sql: str) -> str:
+    """Remove SQL comments before heuristic prefix/keyword checks."""
+    text = str(sql or "")
+    text = re.sub(r"/\*[\s\S]*?\*/", " ", text)
+    text = re.sub(r"(?m)^\s*--.*$", " ", text)
+    return text
+
+
 def _validate_sql_heuristic(sql: str) -> Optional[str]:
     """Lightweight keyword-based fallback used when sqlglot is unavailable.
 
@@ -406,9 +415,8 @@ def _validate_sql_heuristic(sql: str) -> Optional[str]:
     注意：heuristic 模式下无法做路径白名单（拿不到 AST 节点），所以一律拒绝
     file-read 函数（保守策略，回到 A4 之前的行为）。
     """
-    import re
-
-    sql_stripped = sql.strip()
+    sql_for_checks = _strip_sql_comments_for_prefix(sql)
+    sql_stripped = sql_for_checks.strip()
     sql_lower = sql_stripped.lower()
 
     if not sql_lower:

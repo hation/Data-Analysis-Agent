@@ -2,11 +2,11 @@
    Design tokens
    ──────────────────────────────────────────────────────────────── */
 :root {
-  /* Brand */
-  --color-primary:        #3b82f6;
-  --color-primary-hover:  #2563eb;
-  --color-primary-soft:   #eff6ff;
-  --color-primary-tint:   #dbeafe;
+  /* Brand — Klein blue #002FA7 (single anchor color) */
+  --color-primary:        #002FA7;
+  --color-primary-hover:  #001F7A;
+  --color-primary-soft:   #eef1f8;
+  --color-primary-tint:   #d4dbef;
 
   /* Neutrals (light surface) */
   --color-bg:             #f4f6fa;       /* app background */
@@ -61,17 +61,17 @@
   --color-user-bubble-bg: #2e6df0;       /* slightly deeper than primary for AA contrast */
   --color-user-bubble-fg: #ffffff;
 
-  /* Send button gradient (primary action) */
-  --send-btn-grad-from:   #3b82f6;
-  --send-btn-grad-to:     #2563eb;
-  --send-btn-grad-hover-from: #4f8df8;
-  --send-btn-grad-hover-to:   #3b82f6;
-  --send-btn-dark-from:   #3b82f6;
-  --send-btn-dark-to:     #6366f1;
-  --send-btn-dark-hover-from: #60a5fa;
-  --send-btn-dark-hover-to:   #818cf8;
-  --send-btn-glow:        rgba(37, 99, 235, .4);
-  --send-btn-ring:        rgba(59, 130, 246, .15);
+  /* Send button gradient (primary action) — Klein blue, no purple */
+  --send-btn-grad-from:   #002FA7;
+  --send-btn-grad-to:     #001F7A;
+  --send-btn-grad-hover-from: #1a4fc4;
+  --send-btn-grad-hover-to:   #002FA7;
+  --send-btn-dark-from:   #1a4fc4;
+  --send-btn-dark-to:     #002FA7;
+  --send-btn-dark-hover-from: #3a6fd8;
+  --send-btn-dark-hover-to:   #1a4fc4;
+  --send-btn-glow:        rgba(0, 47, 167, .4);
+  --send-btn-ring:        rgba(0, 47, 167, .15);
 
   /* Radius (4-tier system) */
   --radius-sm: 6px;
@@ -110,9 +110,9 @@
    Token-driven: only the variables here change; selectors stay shared.
    ──────────────────────────────────────────────────────────────── */
 [data-theme="dark"] {
-  /* Brand */
-  --color-primary:        #60a5fa;
-  --color-primary-hover:  #3b82f6;
+  /* Brand — Klein blue, brightened for dark bg */
+  --color-primary:        #4a7ad8;
+  --color-primary-hover:  #6a94e6;
   --color-primary-soft:   #172a47;
   --color-primary-tint:   #1e3a6d;
 
@@ -185,14 +185,14 @@
 [data-theme="dark"] .reasoning-toggle:hover { background: #281947; }
 [data-theme="dark"] .sb-status-dot { background: #475569; }
 [data-theme="dark"] .send-btn:disabled { background: #2d3252; }
-[data-theme="dark"] .kb-badge-metric        { background: #1e3a6d; color: #93c5fd; }
+[data-theme="dark"] .kb-badge-metric        { background: #1e3a6d; color: var(--color-primary); }
 [data-theme="dark"] .kb-badge-rule-warning  { background: #3a2a08; color: #fcd34d; }
 [data-theme="dark"] .kb-badge-rule-error    { background: #3a1717; color: #fca5a5; }
 [data-theme="dark"] .kb-badge-note          { background: #261942; color: #c4b5fd; }
 [data-theme="dark"] .slash-name mark        { background: #4a3a08; color: #fcd34d; }
 [data-theme="dark"] .kb-import-zone         { border-color: #1e3a6d; }
 [data-theme="dark"] .kb-import-zone.drag-over { background: #1e3a6d; }
-[data-theme="dark"] .kb-import-hint         { color: #93c5fd; }
+[data-theme="dark"] .kb-import-hint         { color: var(--color-primary); }
 [data-theme="dark"] .kb-card:hover          { border-color: #1e3a6d; }
 [data-theme="dark"] .slash-popup-scroll::-webkit-scrollbar-thumb:hover { background: var(--color-text-dim); }
 [data-theme="dark"] .ppt-btn-revise         { background: var(--color-surface-3);

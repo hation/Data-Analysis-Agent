@@ -6,6 +6,40 @@ import pandas as pd
 from typing import List, Optional, Tuple
 
 
+_PSEUDO_NULL_VALUES = {"", "null", "none", "nan", "n/a", "na", "-"}
+_DATE_NAME_RE = ("date", "time", "日期", "时间", "dt")
+
+
+def _pseudo_null_count(series: pd.Series) -> int:
+    values = series.dropna().astype(str).str.strip().str.lower()
+    if values.empty:
+        return 0
+    return int(values.isin(_PSEUDO_NULL_VALUES).sum())
+
+
+def _looks_date_like(name: str, series: pd.Series) -> bool:
+    lowered = str(name or "").lower()
+    if any(token in lowered for token in _DATE_NAME_RE):
+        return True
+    sample = series.dropna().astype(str).str.strip().head(50)
+    if sample.empty:
+        return False
+    return bool(sample.str.fullmatch(r"\d{8}").mean() >= 0.8)
+
+
+def _date_parse_rate(series: pd.Series) -> float | None:
+    sample = series.dropna().astype(str).str.strip()
+    sample = sample[~sample.str.lower().isin(_PSEUDO_NULL_VALUES)]
+    if sample.empty:
+        return None
+    compact = sample.str.replace(r"\.0$", "", regex=True)
+    if compact.str.fullmatch(r"\d{8}").mean() >= 0.8:
+        parsed = pd.to_datetime(compact, format="%Y%m%d", errors="coerce")
+    else:
+        parsed = pd.to_datetime(sample, errors="coerce")
+    return round(float(parsed.notna().mean() * 100), 2)
+
+
 def profile(
     df: pd.DataFrame,
     columns: Optional[List[str]] = None,
@@ -26,6 +60,13 @@ def profile(
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     missing = df.isnull().sum()
     missing_pct = (missing / n_rows * 100).round(2) if n_rows > 0 else missing * 0
+    pseudo_missing = {col: _pseudo_null_count(df[col]) for col in df.columns}
+    pseudo_missing_cols = [col for col, count in pseudo_missing.items() if count > 0]
+    date_parse_rates = {
+        col: _date_parse_rate(df[col])
+        for col in df.columns
+        if _looks_date_like(col, df[col])
+    }
 
     # ── Overview ───────────────────────────────────────────────────
     lines = [
@@ -34,8 +75,27 @@ def profile(
         f"- 总列数：**{n_cols}**",
         f"- 数值列：**{len(numeric_cols)}** 个",
         f"- 含缺失值的列：**{int((missing > 0).sum())}** 个",
+        f"- 含伪缺失字符串的列：**{len(pseudo_missing_cols)}** 个",
         "",
     ]
+
+    quality_warnings = []
+    if pseudo_missing_cols:
+        quality_warnings.append(
+            "检测到字符串型伪缺失值，建分析样本前必须先清洗或确认导入规则。"
+        )
+    for col, rate in date_parse_rates.items():
+        if rate is not None and rate < 95:
+            quality_warnings.append(f"日期字段 `{col}` 可解析率仅 {rate}%，需先检查格式。")
+    if quality_warnings:
+        lines += [
+            "## 数据质量闸口",
+            "| 风险 | 处理要求 |",
+            "|------|----------|",
+        ]
+        for warning in quality_warnings:
+            lines.append(f"| {warning} | 修复后再计算关键指标 |")
+        lines.append("")
 
     # ── Missing value table ────────────────────────────────────────
     lines += [
@@ -46,6 +106,28 @@ def profile(
     for col in df.columns:
         dtype = str(df[col].dtype)
         lines.append(f"| {col} | {dtype} | {missing[col]} | {missing_pct[col]}% |")
+
+    if pseudo_missing_cols:
+        lines += [
+            "",
+            "## 伪缺失字符串统计",
+            "| 列名 | 伪缺失数 | 伪缺失占比 |",
+            "|------|----------|------------|",
+        ]
+        for col in pseudo_missing_cols:
+            pct = round(pseudo_missing[col] / n_rows * 100, 2) if n_rows > 0 else 0
+            lines.append(f"| {col} | {pseudo_missing[col]} | {pct}% |")
+
+    if date_parse_rates:
+        lines += [
+            "",
+            "## 日期字段可解析率",
+            "| 列名 | 可解析率 |",
+            "|------|----------|",
+        ]
+        for col, rate in date_parse_rates.items():
+            shown = "—" if rate is None else f"{rate}%"
+            lines.append(f"| {col} | {shown} |")
 
     # ── Numeric stats ──────────────────────────────────────────────
     if numeric_cols:

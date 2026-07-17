@@ -35,10 +35,15 @@ export function mountMcpUi() {
   });
   let callbacks = {};
 
+  // ── 初始化：一次性清空静态占位 HTML，让 Vue 接管 ────────────────
+  // 注意：这里只在 mountMcpUi() 首次执行时清空一次。
+  // 后续 renderAll() 不再使用 innerHTML=""，避免销毁 Vue 已管理的真实 DOM
+  // 节点后 Vue _vnode 缓存失效，导致 patch 时 nextSibling 读到 null 崩溃。
+  root1.innerHTML = "";
+  root2.innerHTML = "";
+
   // ── 渲染分发 ───────────────────────────────────────────────────
   function renderAll() {
-    root1.innerHTML = "";
-    root2.innerHTML = "";  // 清空静态 HTML（Vue 接管 #mcp-form-fields）
     _renderList();
     _renderForm();
   }
@@ -47,11 +52,11 @@ export function mountMcpUi() {
     const L = state.listStatus;
     let content;
     if (L.loading) {
-      content = h("div", { style: "font-size:12px;color:#64748b;padding:4px 0" }, "加载中…");
+      content = h("div", { style: "font-size:12px;color:var(--color-text-mute);padding:4px 0" }, "加载中…");
     } else if (L.err) {
-      content = h("div", { style: "font-size:12px;color:#ef4444;padding:4px 0" }, `加载失败: ${L.err}`);
+      content = h("div", { style: "font-size:12px;color:#dc2626;padding:4px 0" }, `加载失败: ${L.err}`);
     } else if (!state.servers.length) {
-      content = h("div", { style: "font-size:12px;color:#94a3b8;padding:4px 0" }, "暂无配置的服务器");
+      content = h("div", { style: "font-size:12px;color:var(--color-sidebar-fg-dim);padding:4px 0" }, "暂无配置的服务器");
     } else {
       content = h(Fragment, null, state.servers.map(s => _renderServerCard(s)));
     }
@@ -64,29 +69,30 @@ export function mountMcpUi() {
     const canShowTools = s.status === "connected" && s.tool_count > 0;
     const showConnect = s.status !== "connected" && s.status !== "connecting";
 
-    const headerChildren = [
-      h("span", { style: "font-size:14px" }, icon),
-      h("strong", { style: "font-size:13px" }, s.label || ""),
-      h("code", { style: "font-size:11px;color:#64748b;background:#f1f5f9;padding:1px 5px;border-radius:4px" }, s.server_id || ""),
-      h("span", { style: "font-size:11px;color:#94a3b8" }, s.transport || ""),
-    ];
-    if (toolCount) {
-      headerChildren.push(h("span", { style: "font-size:11px;color:#10b981" }, toolCount));
-    }
+    // ── Row 1: icon + name + id badge + transport ──────────────────
+    const metaRow = h("div", { style: "display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0" }, [
+      h("span", { style: "font-size:16px;flex-shrink:0" }, icon),
+      h("strong", { style: "font-size:13px;min-width:0;word-break:break-all" }, s.label || ""),
+      h("code", { style: "font-size:10px;padding:1px 5px;border-radius:4px;flex-shrink:0" }, s.server_id || ""),
+      h("span", { style: "font-size:11px;color:var(--color-text-mute);flex-shrink:0" }, s.transport || ""),
+      toolCount
+        ? h("span", { style: "font-size:11px;color:#059669;flex-shrink:0" }, toolCount)
+        : null,
+    ].filter(Boolean));
 
-    const leftChildren = [
-      h("div", { style: "display:flex;align-items:center;gap:6px;flex-wrap:wrap" }, headerChildren),
-    ];
+    // ── Row 2 (optional): description / error ─────────────────────
+    const extras = [];
     if (s.description) {
-      leftChildren.push(h("div", { style: "font-size:12px;color:#64748b;margin-top:2px" }, s.description));
+      extras.push(h("div", { style: "font-size:12px;color:var(--color-text-mute)" }, s.description));
     }
     if (s.last_error) {
-      leftChildren.push(h("div", { style: "font-size:11px;color:#ef4444;margin-top:2px" }, s.last_error));
+      extras.push(h("div", { style: "font-size:11px;color:#dc2626" }, s.last_error));
     }
 
+    // ── Row 3: actions (all in one flex row, auto-wrap) ────────────
     const actionChildren = [
       h("label", {
-        style: "display:flex;align-items:center;gap:4px;font-size:12px;color:#475569;cursor:pointer",
+        style: "display:flex;align-items:center;gap:4px;font-size:12px;color:var(--color-text-soft);cursor:pointer;white-space:nowrap",
         title: "启用/禁用",
       }, [
         h("input", {
@@ -100,32 +106,34 @@ export function mountMcpUi() {
     if (canShowTools) {
       actionChildren.push(h("button", {
         class: "btn-sm btn-sm-ghost",
-        style: "padding:2px 8px;font-size:11px",
+        style: "padding:2px 8px;font-size:11px;white-space:nowrap",
         onClick: () => callbacks.onToggleTools && callbacks.onToggleTools(s.server_id),
       }, s.toolsOpen ? "收起工具 ▴" : "查看工具 ▾"));
     }
     actionChildren.push(h("button", {
       class: "btn-sm btn-sm-ghost",
-      style: "padding:2px 8px;font-size:11px",
+      style: "padding:2px 8px;font-size:11px;white-space:nowrap",
       onClick: () => callbacks.onOpenEdit && callbacks.onOpenEdit(s.server_id),
     }, "编辑"));
     if (showConnect) {
       actionChildren.push(h("button", {
         class: "btn-sm btn-sm-ghost",
-        style: "padding:2px 8px;font-size:11px",
+        style: "padding:2px 8px;font-size:11px;white-space:nowrap",
         onClick: () => callbacks.onConnect && callbacks.onConnect(s.server_id),
       }, "连接"));
     }
     actionChildren.push(h("button", {
-      style: "padding:2px 8px;font-size:11px;background:#fee2e2;color:#dc2626;border:none;border-radius:5px;cursor:pointer",
+      class: "btn-sm",
+      style: "padding:2px 8px;font-size:11px;white-space:nowrap;background:transparent;border:1px solid rgba(239,68,68,.45);color:#dc2626;border-radius:5px;cursor:pointer",
       onClick: () => callbacks.onRemove && callbacks.onRemove(s.server_id),
     }, "删除"));
 
     const cardChildren = [
-      h("div", { style: "display:flex;align-items:flex-start;gap:8px" }, [
-        h("div", { style: "flex:1;min-width:0" }, leftChildren),
-        h("div", { style: "display:flex;gap:6px;align-items:center;flex-shrink:0" }, actionChildren),
-      ]),
+      metaRow,
+      ...extras,
+      h("div", {
+        style: "display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid var(--color-border)",
+      }, actionChildren),
     ];
 
     // 工具展开区（嵌套）
@@ -134,7 +142,7 @@ export function mountMcpUi() {
     }
 
     return h("div", {
-      class: "custom-model-item",
+      class: "custom-model-item mcp-server-card",
       style: "display:flex;flex-direction:column;gap:0;padding:8px 10px",
     }, cardChildren);
   }
@@ -175,9 +183,14 @@ export function mountMcpUi() {
 
   function _renderForm() {
     // 控制 #mcp-add-form（父容器）和 #mcp-add-toggle（兄弟）显隐
+    // .add-custom-form 默认 display:none；展开时需加 .show（display:flex），
+    // 不能只靠移除 .hidden（移除后仍是 display:none）
     const formWrap = document.getElementById("mcp-add-form");
     const toggleEl = document.getElementById("mcp-add-toggle");
-    if (formWrap) formWrap.classList.toggle('hidden', !state.form.open);
+    if (formWrap) {
+      formWrap.classList.toggle('hidden', false);   // 始终移除 hidden 避免 !important 干扰
+      formWrap.classList.toggle('show', state.form.open);
+    }
     if (toggleEl) toggleEl.textContent = state.form.open ? "▲ 折叠" : "＋ 添加 MCP 服务器";
 
     if (!state.form.open) {
@@ -196,7 +209,7 @@ export function mountMcpUi() {
     const showPreview = F.transport === "stdio" && cmd;
 
     const children = [
-      h("div", { style: "font-size:13px;font-weight:600;color:#1e293b;margin-bottom:4px", id: "mcp-form-title" }, title),
+      h("div", { class: "f-form-title", id: "mcp-form-title" }, title),
       h("input", {
         type: "text", id: "mcp-label",
         placeholder: "服务器名称（显示用）",
@@ -226,8 +239,8 @@ export function mountMcpUi() {
         onInput: (e) => { F.desc = e.target.value; },
       }),
       // transport selector
-      h("div", { style: "display:flex;gap:16px;align-items:center;font-size:13px;color:#475569;padding:4px 0" }, [
-        h("label", { style: "display:flex;align-items:center;gap:5px;cursor:pointer" }, [
+      h("div", { class: "f-row-gap16" }, [
+        h("label", { class: "f-label-inline" }, [
           h("input", {
             type: "radio", name: "mcp-transport", value: "stdio",
             checked: F.transport === "stdio",
@@ -235,7 +248,7 @@ export function mountMcpUi() {
           }),
           "stdio（本地命令）",
         ]),
-        h("label", { style: "display:flex;align-items:center;gap:5px;cursor:pointer" }, [
+        h("label", { class: "f-label-inline" }, [
           h("input", {
             type: "radio", name: "mcp-transport", value: "sse",
             checked: F.transport === "sse",
@@ -249,7 +262,7 @@ export function mountMcpUi() {
     // stdio fields
     if (F.transport === "stdio") {
       const stdioChildren = [
-        h("div", { style: "font-size:11px;color:#f59e0b;background:#fef3c7;border-radius:6px;padding:6px 10px" },
+        h("div", { class: "f-warn-chip" },
           "⚠️ 安全提示：仅允许运行 uvx / uv / npx / node / python / python3 / deno 命令。args 和 env 中不得含有 Shell 元字符或危险环境变量。"),
         h("input", {
           type: "text", id: "mcp-command",
@@ -320,8 +333,6 @@ export function mountMcpUi() {
   function sync(cbs) {
     callbacks = cbs || {};
     renderAll();
-    // 清空静态 HTML（root1/root2 已由 renderAll 接管）
-    // 注意：smart-fill 区（.mcp-smart-area）不在 root1/root2 内，不清空
   }
 
   function onOpen() {

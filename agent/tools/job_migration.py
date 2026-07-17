@@ -229,6 +229,10 @@ TOOL_JOB_MIGRATION_PLAN: dict[str, ToolJobMigration] = {
         "aggregate result is bounded by normal tool result budget and large output persistence",
         "keep synchronous for v1 because it already has internal parallelism and per-member timeout",
     ),
+    "workflow_create": _KEEP_SYNC_INTERACTION,
+    "workflow_list": _KEEP_SYNC_READ,
+    "workflow_start": _KEEP_SYNC_INTERACTION,
+    "workflow_status": _KEEP_SYNC_READ,
     "plan_complete": _KEEP_SYNC_INTERACTION,
 }
 

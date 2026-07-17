@@ -46,7 +46,7 @@ _ANCHOR_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 _FILE_RE = re.compile(
-    r"(?<![\w.-])[\w\u4e00-\u9fff ._-]+\.(?:csv|xlsx?|xlsm|docx|pdf|pptx|json)\b",
+    r"(?<![\w.-])[\w\u4e00-\u9fff ._-]+\.(?:csv|xlsx?|xlsm|docx?|txt|md|pdf|pptx|json)\b",
     re.IGNORECASE,
 )
 

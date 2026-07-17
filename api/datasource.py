@@ -17,6 +17,7 @@ from .state import session_manager, datasource_config_manager
 from data.connector import ExcelDataSource, CSVDataSource, SQLDataSource, GoogleSheetsDataSource, HTTPAPIDataSource
 from data.sources.excel import excel_requires_job, parse_excel_job
 from data.sources.workspace_persistent import WorkspacePersistentSource
+from infrastructure.artifact_lifecycle import register_artifact
 from infrastructure.paths import data_path
 
 log = logging.getLogger(__name__)
@@ -313,6 +314,7 @@ def upload_file(sid: str):
         safe_name = safe_stem if safe_stem else f"upload_{uuid.uuid4().hex[:8]}{ext}"
         save_path = UPLOAD_DIR / f"{sid[:8]}_{uuid.uuid4().hex[:6]}_{safe_name}"
         f.save(str(save_path))
+        register_artifact(save_path, artifact_type="upload", session_id=sid)
         log.info("[upload] saved → %s  (display: %s)", save_path, display_name)
 
         try:

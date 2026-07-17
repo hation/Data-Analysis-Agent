@@ -18,6 +18,13 @@ _LOCK = threading.RLock()
 LEAD_RECIPIENT = "leader"
 LEGACY_LEAD_RECIPIENTS = {"leader", "lead"}
 VALID_MEMBER_STATUSES = {"idle", "queued", "running", "completed", "failed"}
+QUALITY_REVIEWER_NAME = "质量复核员"
+QUALITY_REVIEWER_ROLE = "quality_reviewer"
+QUALITY_REVIEWER_INSTRUCTIONS = (
+    "固定质量复核员。只读复核团队输出中的数据口径、SQL、分子分母、样本范围、"
+    "工具错误、图表失败和无证据业务归因。必须独立使用 get_schema/profile_data/query_data "
+    "等只读工具复算关键指标；把结论分为通过、需修正、不可验证，并明确证据缺口。"
+)
 
 
 class WorkspaceTeamError(ValueError):
@@ -120,6 +127,31 @@ class WorkspaceTeamStore:
                 normalized.append({"name": str(item)})
         return normalized
 
+    @staticmethod
+    def quality_reviewer_member() -> dict:
+        return {
+            "name": QUALITY_REVIEWER_NAME,
+            "agent_id": QUALITY_REVIEWER_NAME,
+            "role": QUALITY_REVIEWER_ROLE,
+            "instructions": QUALITY_REVIEWER_INSTRUCTIONS,
+            "status": "idle",
+            "last_message": "",
+            "last_active_at": "",
+        }
+
+    @staticmethod
+    def _is_quality_reviewer(member: dict) -> bool:
+        return (
+            str(member.get("name") or "") == QUALITY_REVIEWER_NAME
+            or str(member.get("role") or "") == QUALITY_REVIEWER_ROLE
+        )
+
+    @classmethod
+    def _append_quality_reviewer_if_missing(cls, members: list[dict]) -> tuple[list[dict], bool]:
+        if any(cls._is_quality_reviewer(member) for member in members):
+            return members, False
+        return [*members, cls.quality_reviewer_member()], True
+
     def create(self, name: str, description: str, members: list[dict]) -> dict:
         name = self._validate_name(name, "team")
         normalized = []
@@ -140,6 +172,7 @@ class WorkspaceTeamStore:
             })
         if not normalized:
             raise WorkspaceTeamError("at least one member is required")
+        normalized, reviewer_added = self._append_quality_reviewer_if_missing(normalized)
         with _LOCK:
             data = self._load()
             teams = data.setdefault("teams", {})
@@ -154,6 +187,7 @@ class WorkspaceTeamStore:
                     "created_at": existing.get("created_at", now),
                     "updated_at": now,
                     "reused": True,
+                    "quality_reviewer": {"name": QUALITY_REVIEWER_NAME, "auto_added": reviewer_added},
                 }
                 self._save(data)
                 return teams[name]
@@ -163,11 +197,38 @@ class WorkspaceTeamStore:
                 "created_at": now,
                 "updated_at": now,
                 "reused": False,
+                "quality_reviewer": {"name": QUALITY_REVIEWER_NAME, "auto_added": reviewer_added},
             }
             self._save(data)
             return teams[name]
 
-    def delete(self, name: str, *, require_inactive: bool = False) -> dict:
+    def ensure_quality_reviewer(self, name: str) -> dict:
+        """Ensure the fixed quality reviewer exists for an existing team."""
+        name = self._validate_name(name, "team")
+        with _LOCK:
+            data = self._load()
+            team = data.get("teams", {}).get(name)
+            if team is None:
+                raise WorkspaceTeamError(f"team not found: {name}")
+            members = list(team.get("members", []))
+            updated, added = self._append_quality_reviewer_if_missing(members)
+            if added:
+                team["members"] = updated
+                team["quality_reviewer"] = {"name": QUALITY_REVIEWER_NAME, "auto_added": True}
+                team["updated_at"] = self._now()
+                self._save(data)
+            return next(
+                member for member in team.get("members", [])
+                if self._is_quality_reviewer(member)
+            )
+
+    def delete(
+        self,
+        name: str,
+        *,
+        require_inactive: bool = False,
+        force: bool = False,
+    ) -> dict:
         name = self._validate_name(name, "team")
         if require_inactive:
             self.fail_stale_members(name)
@@ -178,20 +239,26 @@ class WorkspaceTeamStore:
             team = teams.get(name)
             if team is None:
                 raise WorkspaceTeamError(f"team not found: {name}")
-            if require_inactive:
-                active = [
-                    str(member.get("name") or "")
-                    for member in team.get("members", [])
-                    if member.get("status") in {"queued", "running"}
-                ]
-                if active:
-                    raise WorkspaceTeamError(
-                        "团队成员仍在执行或排队，暂不能解散团队："
-                        + ", ".join(active)
-                    )
+            active = [
+                str(member.get("name") or "")
+                for member in team.get("members", [])
+                if member.get("status") in {"queued", "running"}
+            ]
+            if require_inactive and active:
+                raise WorkspaceTeamError(
+                    "团队成员仍在执行或排队，暂不能解散团队："
+                    + ", ".join(active)
+                )
+            messages = team.get("messages", [])
+            if messages and not force:
+                raise WorkspaceTeamError(
+                    "团队已有委派结果、错误或质量复核记录，默认保留以便复盘；"
+                    "请先使用 team_status 查看证据。只有用户明确确认删除时，"
+                    "才可再次调用 team_delete 并传 force=true。"
+                )
             teams.pop(name, None)
             self._save(data)
-        return {"deleted": name}
+        return {"deleted": name, "force": bool(force)}
 
     def clear_messages(self, name: str) -> dict:
         """Clear one team's communication history without deleting the team."""

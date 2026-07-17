@@ -70,6 +70,8 @@ def classify_tool_error(raw: Any, tool: str = "") -> str:
         return "argument_error"
     if "sql validation failed" in lower:
         return "sql_validation_error"
+    if text.startswith("Chart failed:"):
+        return "chart_generation_error"
     if text.startswith("SQL Error:"):
         if "no such column" in lower or "column" in lower and "not found" in lower:
             return "field_not_found"
@@ -175,6 +177,65 @@ def _result_root(runtime: Any = None) -> Path:
     if runtime is not None and getattr(runtime, "cache_dir", None):
         return Path(runtime.cache_dir) / "tool_results"
     return _GLOBAL_RESULT_ROOT
+
+
+def _evidence_root(runtime: Any = None) -> Path:
+    if runtime is not None and getattr(runtime, "cache_dir", None):
+        return Path(runtime.cache_dir) / "evidence_claims"
+    return data_path("outputs", "evidence_claims")
+
+
+def _sha256_text(value: Any) -> str:
+    return hashlib.sha256(_json_text(value).encode("utf-8")).hexdigest()
+
+
+def persist_evidence_claim(
+    session_id: str,
+    tool: str,
+    raw: Any,
+    *,
+    runtime: Any = None,
+    args: dict | None = None,
+    sources: list[dict] | None = None,
+    artifacts: list[dict] | None = None,
+) -> dict | None:
+    """Persist a compact, auditable evidence record for data-derived outputs."""
+    if not session_id or tool not in {
+        "query_data", "create_analysis_table", "run_analysis", "generate_chart",
+    }:
+        return None
+    args = dict(args or {})
+    sql = str(args.get("sql") or "")
+    claim_id = f"ec_{uuid.uuid4().hex}"
+    root = _evidence_root(runtime)
+    root.mkdir(parents=True, exist_ok=True)
+    record = {
+        "version": 1,
+        "claim_id": claim_id,
+        "session_id": session_id,
+        "workspace_id": str(getattr(runtime, "workspace_id", "") or ""),
+        "tool": tool,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "sql_hash": hashlib.sha256(sql.encode("utf-8")).hexdigest() if sql else "",
+        "sql": sql[:20_000],
+        "args": {k: v for k, v in args.items() if k != "sql"},
+        "result_sha256": _sha256_text(raw),
+        "result_preview": _json_text(raw)[:2_000],
+        "sources": list(sources or []),
+        "artifacts": list(artifacts or []),
+    }
+    path = root / f"{claim_id}.json"
+    path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "type": "evidence_claim",
+        "claim_id": claim_id,
+        "name": f"{tool} evidence claim",
+        "uri": f"artifact://evidence-claim/{claim_id}",
+        "sql_hash": record["sql_hash"],
+        "result_sha256": record["result_sha256"],
+        "workspace_id": record["workspace_id"],
+        "session_id": session_id,
+    }
 
 
 def persist_large_tool_result(
@@ -428,6 +489,7 @@ def make_tool_result(
     session_id: str = "",
     runtime: Any = None,
     result_char_budget: int | None = None,
+    args: dict | None = None,
 ) -> ToolResultEnvelope:
     error = error or classify_tool_error(raw, tool=tool)
     if ok is None:
@@ -464,6 +526,18 @@ def make_tool_result(
     result_artifacts = list(artifacts or [])
     if result_artifact is not None:
         result_artifacts.append(result_artifact)
+    if ok:
+        evidence_artifact = persist_evidence_claim(
+            session_id,
+            tool,
+            raw,
+            runtime=runtime,
+            args=args,
+            sources=sources,
+            artifacts=result_artifacts,
+        )
+        if evidence_artifact is not None:
+            result_artifacts.append(evidence_artifact)
     result_debug = dict(debug or {})
     if budget_debug:
         result_debug["result_budget"] = budget_debug

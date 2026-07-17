@@ -570,6 +570,53 @@ class JobsStore:
                 result.setdefault(row["job_id"], []).append(artifact)
         return result
 
+    def purge_terminal_ids(self, session_id: str, job_ids: List[str]) -> int:
+        """Delete selected terminal jobs and events without touching other history."""
+        selected = list(dict.fromkeys(str(job_id) for job_id in job_ids if job_id))
+        if not selected:
+            return 0
+        with self._transaction():
+            pending = list(selected)
+            all_ids = set(selected)
+            while pending:
+                placeholders = ",".join("?" for _ in pending)
+                children = self._conn.execute(
+                    f"SELECT id FROM jobs WHERE session_id = ? "
+                    f"AND parent_id IN ({placeholders})",
+                    (session_id, *pending),
+                ).fetchall()
+                pending = [
+                    str(row["id"]) for row in children
+                    if str(row["id"]) not in all_ids
+                ]
+                all_ids.update(pending)
+            placeholders = ",".join("?" for _ in all_ids)
+            rows = self._conn.execute(
+                f"SELECT id, status FROM jobs WHERE session_id = ? "
+                f"AND id IN ({placeholders})",
+                (session_id, *all_ids),
+            ).fetchall()
+            active = [
+                str(row["id"]) for row in rows
+                if str(row["status"]) not in _TERMINAL
+            ]
+            if active:
+                raise RuntimeError("jobs are still active: " + ", ".join(active))
+            existing_ids = [str(row["id"]) for row in rows]
+            if not existing_ids:
+                return 0
+            placeholders = ",".join("?" for _ in existing_ids)
+            self._conn.execute(
+                f"DELETE FROM job_events WHERE session_id = ? "
+                f"AND job_id IN ({placeholders})",
+                (session_id, *existing_ids),
+            )
+            self._conn.execute(
+                f"DELETE FROM jobs WHERE session_id = ? AND id IN ({placeholders})",
+                (session_id, *existing_ids),
+            )
+        return len(existing_ids)
+
     def clear_terminal(self, session_id: str) -> int:
         """Delete completed/failed/canceled jobs and their retained events.
 

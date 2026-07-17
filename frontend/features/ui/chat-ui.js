@@ -69,6 +69,10 @@ export function mountChatUi() {
       ]),
       h("div", { class: "msg-body" }, [
         _renderTurnQueueState(msg),
+        msg.skill ? h("div", { class: "msg-skill-badge" }, [
+          h("span", { class: "msg-skill-icon" }, msg.skill.icon || "🧩"),
+          h("span", { class: "msg-skill-name" }, msg.skill.name || ""),
+        ]) : null,
         h("div", { class: "tool-steps" }),
         h("div", { class: "job-list" }),
         h("div", { class: "chart-list" }),
@@ -845,6 +849,7 @@ export function mountChatUi() {
       kind: "message",
       role,
       variant: options.variant || "",
+      skill: options.skill || null,
       text: text || "",
       reasoning: [],
       tools: [],
@@ -927,9 +932,15 @@ export function mountChatUi() {
     if (!msg || !bubble) return false;
     hideToolActivity(target);
     _removeTyping(typing);
-    const chunk = String(content || "");
-    msg.text += chunk;
-    bubble.insertAdjacentText("beforeend", chunk);
+    msg.text += String(content || "");
+    if (msg.markdownFrame) return true;
+    msg.markdownFrame = requestAnimationFrame(() => {
+      msg.markdownFrame = 0;
+      const currentBubble = _bubbleFor(msg.id);
+      if (!currentBubble) return;
+      currentBubble.innerHTML = renderMd(msg.text);
+      _bindImages(currentBubble);
+    });
     return true;
   }
 
@@ -939,6 +950,10 @@ export function mountChatUi() {
     if (!msg || !bubble) return false;
     hideToolActivity(target);
     _removeTyping(typing);
+    if (msg.markdownFrame) {
+      cancelAnimationFrame(msg.markdownFrame);
+      msg.markdownFrame = 0;
+    }
     msg.text = String(markdownText || "");
     msg.error = "";
     bubble.innerHTML = renderMd(msg.text);

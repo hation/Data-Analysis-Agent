@@ -158,7 +158,8 @@ class WorkspacePersistentSource(DataSource):
             self._conn.execute(
                 f'CREATE OR REPLACE TABLE "{table_name}" AS '
                 f"SELECT * FROM read_csv_auto('{file_path}', header=true, "
-                f"null_padding=true, ignore_errors=true)"
+                f"null_padding=true, ignore_errors=true, "
+                f"nullstr=['', 'null', 'NULL', 'Null', 'nan', 'NaN', 'N/A', 'n/a'])"
             )
             # 清理列名
             self._clean_columns(table_name)
@@ -167,7 +168,12 @@ class WorkspacePersistentSource(DataSource):
         except Exception as e:
             log.warning("[WorkspaceDS] CSV %s failed (%s), trying pandas", file_path, e)
             try:
-                df = pd.read_csv(file_path, encoding="utf-8-sig")
+                df = pd.read_csv(
+                    file_path,
+                    encoding="utf-8-sig",
+                    na_values=["", "null", "NULL", "Null", "nan", "NaN", "N/A", "n/a"],
+                    keep_default_na=True,
+                )
                 df.columns = _dedup_columns([_clean_identifier(c) for c in df.columns])
                 df = df.dropna(how="all")
                 self._conn.register("_tmp_ws_", df)
@@ -212,7 +218,10 @@ class WorkspacePersistentSource(DataSource):
                     log.warning("[WorkspaceDS] sheet %s failed: %s", sheet, e)
                     return sheet, None
 
-        with ThreadPoolExecutor(max_workers=min(4, len(sheet_names))) as pool:
+        # calamine (Rust engine) releases the GIL → real parallelism.
+        # 4 → 8 capped by sheet count; registration itself stays serialized
+        # behind the workspace db_lock, only parsing is parallel.
+        with ThreadPoolExecutor(max_workers=min(8, len(sheet_names))) as pool:
             results = list(pool.map(_parse, sheet_names))
 
         for sheet, df in results:

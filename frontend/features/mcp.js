@@ -1,6 +1,7 @@
 /* MCP Settings UI — loaded after dist/core.js (depends on window.openOverlay / closeOverlay / toast) */
 import { getUiIsland } from "../core/ui-registry.js";
 import { ensureUiIsland } from "./vue-app.js";
+import { toast } from "../core/overlay.js";
 
 let _mcpActiveTab = "local"; // "local" | "paste" — smart-fill 区用
 
@@ -12,11 +13,24 @@ function switchMcpTab(tab) {
   document.getElementById("mcp-tab-paste").classList.toggle("active", tab === "paste");
 }
 
+let _openMcpInFlight = false;
+
 async function openMcpSettings() {
-  await ensureUiIsland("mcp");
-  installMcpPanel();
-  await loadMcpServers();
-  await window.openOverlay("ov-mcp");
+  if (_openMcpInFlight) return;
+  _openMcpInFlight = true;
+  try {
+    await ensureUiIsland("mcp");
+    installMcpPanel();
+    await loadMcpServers();
+    // Open the dedicated MCP side panel
+    if (globalThis.openSidePanel) {
+      globalThis.openSidePanel("mcp");
+    } else if (window.BAA?.sidebar?.openPanel) {
+      window.BAA.sidebar.openPanel("mcp");
+    }
+  } finally {
+    _openMcpInFlight = false;
+  }
 }
 
 function toggleMcpAddForm() {
@@ -180,13 +194,13 @@ async function removeMcpServer(serverId) {
     const res = await fetch(`/api/mcp/servers/${encodeURIComponent(serverId)}`, { method: "DELETE" });
     if (!res.ok) {
       const data = await res.json();
-      showToast(data.error || "删除失败", "error");
+      toast(data.error || "删除失败", "error");
       loadMcpServers(); // 回滚
       return;
     }
     loadMcpServers(); // 刷新 sidebar 状态
   } catch (e) {
-    showToast("请求失败: " + e.message, "error");
+    toast("请求失败: " + e.message, "error");
     loadMcpServers(); // 回滚
   }
 }
@@ -197,10 +211,10 @@ async function connectMcpServer(serverId) {
   if (window.BAA && getUiIsland("mcp")) getUiIsland("mcp").updateServer(serverId, { busy: true });
   try {
     await fetch(`/api/mcp/servers/${encodeURIComponent(serverId)}/connect`, { method: "POST" });
-    showToast("正在连接…", "info");
+    toast("正在连接…", "info");
     setTimeout(loadMcpServers, 1500);
   } catch (e) {
-    showToast("连接请求失败: " + e.message, "error");
+    toast("连接请求失败: " + e.message, "error");
     if (window.BAA && getUiIsland("mcp")) getUiIsland("mcp").updateServer(serverId, { busy: false });
   }
 }
@@ -219,7 +233,7 @@ async function toggleMcpEnabled(serverId, enabled) {
   } catch (e) {
     // 回滚
     vueMcp.updateServer(serverId, { enabled: !enabled });
-    showToast("操作失败: " + e.message, "error");
+    toast("操作失败: " + e.message, "error");
   }
 }
 
@@ -446,6 +460,28 @@ async function parseMcpConfig() {
 
 // ── Vue island callbacks 注入 ──────────────────────────────────
 export function installMcpPanel() {
+  // Install the panel-open observer unconditionally so it fires even on first
+  // open (before the island was mounted). The observer re-syncs callbacks each
+  // time the panel becomes visible, guaranteeing they are always current.
+  const panelEl = document.getElementById("sb-panel-mcp");
+  if (panelEl && !panelEl.__mcpPanelObserved) {
+    panelEl.__mcpPanelObserved = true;
+    const obs = new MutationObserver(() => {
+      if (!panelEl.classList.contains("collapsed")) {
+        // Re-inject callbacks every time the panel opens so they are always
+        // fresh regardless of which code path triggered the open.
+        _syncMcpCallbacks();
+        loadMcpServers();
+      }
+    });
+    obs.observe(panelEl, { attributes: true, attributeFilter: ["class"] });
+  }
+
+  // Sync callbacks immediately if the island is already mounted.
+  _syncMcpCallbacks();
+}
+
+function _syncMcpCallbacks() {
   if (!window.BAA || !getUiIsland("mcp")) return;
   getUiIsland("mcp").sync({
     onToggleEnabled: (id, enabled) => toggleMcpEnabled(id, enabled),

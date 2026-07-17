@@ -25,8 +25,20 @@ function onUserScroll() {
   userScrolledUp = !isNearBottom();
 }
 
+function onUserWheel(event) {
+  if (event.deltaY < 0) {
+    userScrolledUp = true;
+    return;
+  }
+  requestAnimationFrame(() => {
+    userScrolledUp = !isNearBottom();
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
-  messagesElement()?.addEventListener("scroll", onUserScroll, { passive: true });
+  const messages = messagesElement();
+  messages?.addEventListener("scroll", onUserScroll, { passive: true });
+  messages?.addEventListener("wheel", onUserWheel, { passive: true });
 });
 
 export function scrollBottom(force = false) {

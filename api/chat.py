@@ -114,6 +114,8 @@ def _build_team_context(sid: str, workspace_id: str = "", *, max_teams: int = 6,
         "For a fresh user request, do not synthesize old member results as if they were new work. "
         "If prior team messages are from an earlier turn or may be stale, create/recreate the team "
         "or call team_delegate again for the required members before producing the final answer.",
+        "Never invent a Dynamic Plan ID or describe a plan as created unless team_plan_create returned it. "
+        "When the user asks to create or preview a plan without executing it, call team_plan_create before replying.",
     ]
     for team in teams[:max_teams]:
         name = str(team.get("name") or "")
@@ -148,6 +150,39 @@ def _build_team_context(sid: str, workspace_id: str = "", *, max_teams: int = 6,
                 lines.append(
                     f"  Message {message.get('sender', '?')} -> {message.get('recipient', '?')}: {body}"
                 )
+    try:
+        from agent.teams.dynamic_plans import DynamicTeamPlanStore
+
+        dynamic_plans = DynamicTeamPlanStore(
+            sid, workspace_id=workspace_id
+        ).list()
+        for plan in dynamic_plans[:8]:
+            if plan.get("status") == "needs_review":
+                task_ids = ", ".join(str(task.get("id")) for task in plan.get("tasks") or [])
+                lines.append(
+                    "  Dynamic Plan " + str(plan.get("id") or "")
+                    + " requires revision: " + str(plan.get("review_summary") or "quality review blocked it")
+                    + ". Select affected ids from [" + task_ids + "] and call team_delegate with team_name, review_plan_id and review_task_ids; downstream tasks are included automatically."
+                )
+            if plan.get("status") == "planned":
+                lines.append(
+                    "  Dynamic Plan " + str(plan.get("id") or "")
+                    + " is planned but not running. When the user confirms execution, call team_delegate with team_name and plan_id only."
+                )
+            failed = [
+                task for task in plan.get("tasks") or []
+                if task.get("status") == "failed"
+            ]
+            if failed:
+                lines.append(
+                    "  Dynamic Plan "
+                    f"{plan['id']} has retryable failed tasks: "
+                    + ", ".join(str(task.get("id")) for task in failed)
+                    + ". To retry, call team_delegate with team_name, "
+                    "retry_plan_id and retry_task_ids; do not supply new prompts."
+                )
+    except Exception as exc:
+        log.debug("[teams] dynamic plan context unavailable sid=%s error=%s", sid, exc)
     return "\n".join(lines)[:5000]
 
 
@@ -162,6 +197,13 @@ def _resolve_activation(sess, payload: dict):
     skill_name = str(payload.get("skill") or "").strip()
     command_name = str(payload.get("command") or "").strip().lstrip("/").lower()
     internal_action = str(payload.get("internal_action") or "").strip().lower()
+    # Fallback: if the LLM auto-loaded a skill via load_analysis_skill in a
+    # previous turn (e.g. dashboard), keep it active for subsequent turns
+    # so guard/nudge logic works (e.g. after ask_user user-reply).
+    if not skill_name and not command_name and not internal_action:
+        auto = getattr(sess, "auto_loaded_skill", "") or ""
+        if auto:
+            skill_name = auto
 
     # Compatibility window for S3: current confirmation cards still send
     # internal actions through `command`. S4 will emit `internal_action`.
@@ -192,6 +234,9 @@ def _resolve_activation(sess, payload: dict):
             workspace_dir=(workspace_root / ".baa" / "skills") if workspace_root else None,
         )
         skill_def = loader.load_all().get(skill_name)
+        if skill_def is None:
+            from agent.workflows.skills import get_session_workflow_skill
+            skill_def = get_session_workflow_skill(sess.session_id, skill_name)
         if skill_def is None:
             raise ActivationRequestError(
                 f"未知技能：{skill_name}", "unknown_skill",
@@ -685,6 +730,12 @@ def chat_stream(sid: str):
         return f"data: {json.dumps(serialize_event(obj), ensure_ascii=False)}\n\n"
 
     def generate():
+        # Yield immediately so Flask flushes response headers before any blocking
+        # setup work (agent build, hook loading, schema snapshot). Without this,
+        # the frontend `await fetch()` blocks until the first real event arrives,
+        # keeping the typing-dots invisible for the entire setup phase.
+        yield _sse({"type": "agent_activity", "message": ""})
+
         runner = sess.job_runner
         command_metric_recorded = False
 
@@ -791,6 +842,7 @@ def chat_stream(sid: str):
                 "workspace_delete_file", "workspace_move_file", "workspace_bash",
                 "workspace_command", "task_create", "task_update", "team_create",
                 "team_delete", "team_list", "team_status", "send_message", "agent_delegate",
+                "workflow_create", "workflow_list", "workflow_start", "workflow_status",
             }
             if tool not in result_tools:
                 return
@@ -901,6 +953,7 @@ def chat_stream(sid: str):
         )
         recovery_context = sess.build_recovery_context(workspace_status)
         teams_enabled = bool(d.get("teams_enabled"))
+        auto_match_skill = d.get("auto_match_skill", True)
         team_context = _build_team_context(sid, fixed_workspace_id) if teams_enabled else ""
 
         conversation_scope = runner.conversation_scope(conversation_job_id)
@@ -920,6 +973,7 @@ def chat_stream(sid: str):
                 recovery_context=recovery_context,
                 team_context=team_context,
                 teams_enabled=teams_enabled,
+                auto_match_skill=auto_match_skill,
                 discovered_tools=frozenset(getattr(sess, "discovered_tools", []) or []),
                 discovered_mcp_tools=list(
                     getattr(sess, "discovered_mcp_tools", []) or []
@@ -958,6 +1012,8 @@ def chat_stream(sid: str):
                     _finish_step(str(event.get("tool") or "unknown"))
                 elif etype == "artifact_created" and event.get("artifact"):
                     _append_parent_artifact(event["artifact"])
+                elif etype == "skill_activated":
+                    sess.auto_loaded_skill = event.get("name", "")
                 elif etype == "error":
                     stream_error = str(event.get("message") or "Conversation failed")
                 elif etype == "hook_event":
@@ -985,6 +1041,10 @@ def chat_stream(sid: str):
                 if etype == "chart_html":
                     cid = uuid.uuid4().hex
                     chart_store[cid] = event["html"]
+                    register_artifact(
+                        chart_store.path_for(cid),
+                        artifact_type="chart", session_id=sid, artifact_id=f"chart:{cid}",
+                    )
                     if not hasattr(sess, "chart_ids"):
                         sess.chart_ids = []
                     sess.chart_ids.append(cid)

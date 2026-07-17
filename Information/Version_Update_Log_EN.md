@@ -1,9 +1,43 @@
 # Version Development Log
 
+## v1.2.0 LTS
+**July 17, 2026**
+
+This Long-Term Support release focuses on **smoother collaborative analysis, editable business diagrams, and a more dependable data experience**.
+
+### 1. Upgraded AI Team Collaboration
+- Break complex goals into trackable collaborative tasks, with clear progress, results, and next steps
+- Confirm a plan before work begins and follow task dependencies; decisions that need your input are clearly surfaced
+- Review quality and retry only the parts that need attention instead of starting over
+
+### 2. New Business Canvas
+- Create Business Model Canvases, BCG matrices, SWOT analyses, or a blank canvas to turn insights into diagrams
+- Edit diagrams in the app, save and rename projects, revisit them later, and export images or `.drawio` files
+
+### 3. An Assistant That Better Fits Your Work
+- Skills can be matched to your question automatically, and you can create or edit your own analysis workflows
+- Create interactive business dashboards that can be opened and shared offline
+- Better file handling and analysis guidance reduce friction from mismatched fields, definitions, and charts
+
+### 4. A More Dependable, Efficient Experience
+- Large or multi-step work stays smoother, with clearer progress while you wait
+- Common documents and folders in your workspace are easier to read and use
+- Clearer data-quality guidance and verifiable support help you assess whether conclusions are reliable
+
+### 5. Interface and Usability Improvements
+- Storage settings and narrow-window layouts are clearer and less crowded
+- After checking for updates, you can go straight to GitHub Releases to choose the installer you need
+### 6. Safer Local Data Cleanup
+- Use **Settings → Storage** to review local storage, cleanup candidates, and Recycle Bin contents
+- Move unneeded uploads and historical outputs to the Recycle Bin first; restoring or permanently deleting items always requires confirmation
+- Workspaces, knowledge-base data, and files still referenced by conversations stay protected from cleanup
+
 ## v1.1.0 LTS
+
 **July 2, 2026**
 
 This release introduces the **Slash Command System, File Timeline Rewind, Hooks Automation, and AI Prompt Suggestions**, while significantly improving the chat interface and Dashboard experience. It is the next Long-Term Support (LTS) version following v1.0 LTS.
+
 
 ### 1. All-New Slash Command System
 - Rebuilt slash commands with new system commands: `/new` (new session), `/stop` (stop response), `/data` (data preview), `/jobs` (task history), `/compact` (compress context), and more
@@ -367,11 +401,11 @@ This update focuses on **front-end architecture modernization**, progressively m
 - Stage 7 split into 7A (ov-settings, completed) / 7B (ov-knowledge, completed) / 7C (ov-mcp, completed), each executed independently; Vue progressive integration **concluded**
 
 ### 11. Documentation and Testing
-- `docs/conventions.md`: added Vue progressive integration stage plan, per-stage acceptance status, and constraints (5B callback injection, 7A three-mount-point shared state, 7B five-mount-point + import-not-migrated + optimistic update, 7C two-mount-point + smart-fill-not-migrated + bridge, tech debt cleanup conservative strategy, etc.)
-- `docs/architecture.md`: added Vue island architecture description, key constraints 13/14/15/16, responsibility boundary table (including knowledge_panel.js / mcp_settings.js); updated post-cleanup to remove _legacy fallback references
+- `docs/03-conventions.md`: added Vue progressive integration stage plan, per-stage acceptance status, and constraints (5B callback injection, 7A three-mount-point shared state, 7B five-mount-point + import-not-migrated + optimistic update, 7C two-mount-point + smart-fill-not-migrated + bridge, tech debt cleanup conservative strategy, etc.)
+- `docs/02-architecture.md`: added Vue island architecture description, key constraints 13/14/15/16, responsibility boundary table (including knowledge_panel.js / mcp_settings.js); updated post-cleanup to remove _legacy fallback references
 - `docs/step7_plan.md`: Stage 7 split planning and 7A/7B/7C implementation records, Vue progressive integration conclusion reference
-- `docs/changelog.md`: independent entries per sub-step
-- `Notes for development.md`: added "Current Progress Overview" table (including tech debt cleanup); main index now includes `step7_plan.md`
+- `docs/08-changelog.md`: independent entries per sub-step
+- `01-notes-for-development.md`: added "Current Progress Overview" table (including tech debt cleanup); main index now includes `step7_plan.md`
 - `Test/test_api_smoke.py`: all 21 tests pass, including `vue_app.js` static resource check and `test_no_inline_handlers_remain` inline handler check
 
 ### 12. Vue Conclusion Constraint: New Features Must Not Use createElement
@@ -380,9 +414,9 @@ This update focuses on **front-end architecture modernization**, progressively m
 - Only exception: purely static content (no interaction, no dynamic state) may be written directly in HTML templates
 - Existing `innerHTML` in old code is historical legacy and must NOT be used as a pattern for new code
 - When adding a new Vue island, `renderAll()` must clear root static HTML at the beginning (prevent double-form bug)
-- `docs/conventions.md` updates: overall principles changed from "Vue only as fallback island" to "Vue is core rendering path"; added Principle 9 + Prohibition 1 + 3 new checklist items; "Adding Frontend Features" flow rewritten with Vue-first + island checklist; data flow changed from "transitional" to "current stable state"; "not yet migrated" section notes old code is not a pattern reference
-- `docs/architecture.md` updates: responsibility boundary table "future migration direction" column changed to "notes"; added key constraints 17/18 (createElement prohibition + renderAll root clearing)
-- `Notes for development.md` updates: progress overview title changed to "concluded"; added "standards" row; document maintenance rules updated
+- `docs/03-conventions.md` updates: overall principles changed from "Vue only as fallback island" to "Vue is core rendering path"; added Principle 9 + Prohibition 1 + 3 new checklist items; "Adding Frontend Features" flow rewritten with Vue-first + island checklist; data flow changed from "transitional" to "current stable state"; "not yet migrated" section notes old code is not a pattern reference
+- `docs/02-architecture.md` updates: responsibility boundary table "future migration direction" column changed to "notes"; added key constraints 17/18 (createElement prohibition + renderAll root clearing)
+- `01-notes-for-development.md` updates: progress overview title changed to "concluded"; added "standards" row; document maintenance rules updated
 
 ---
 

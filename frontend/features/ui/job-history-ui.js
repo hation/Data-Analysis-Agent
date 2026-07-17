@@ -11,7 +11,9 @@ export function mountJobHistoryUi() {
   }
 
   const { h, render, reactive } = Vue;
-  const state = reactive({ open: false, loading: false, error: "", jobs: [] });
+  const state = reactive({
+    open: false, loading: false, error: "", jobs: [], focusJobId: "",
+  });
   let callbacks = {};
 
   function text(key, fallback, params) {
@@ -254,7 +256,11 @@ export function mountJobHistoryUi() {
         },
       }, text("job.cancel", "Cancel")));
     }
-    return h("article", { class: `job-history-card job-history-card-${job.status}`, key: job.id }, children);
+    return h("article", {
+      class: `job-history-card job-history-card-${job.status}${state.focusJobId === job.id ? " focused" : ""}`,
+      key: job.id,
+      "data-job-id": job.id,
+    }, children);
   }
 
   function draw() {
@@ -295,13 +301,34 @@ export function mountJobHistoryUi() {
     ])]), root);
   }
 
-  function setOpen(open) { state.open = Boolean(open); draw(); }
+  function focus(jobId) {
+    state.focusJobId = String(jobId || "");
+    const job = findJob(state.focusJobId);
+    if (job) job.expanded = true;
+    state.open = true;
+    draw();
+    requestAnimationFrame(() => {
+      const escaped = globalThis.CSS?.escape
+        ? globalThis.CSS.escape(state.focusJobId)
+        : state.focusJobId.replace(/["\\]/g, "\\  function setOpen(open) { state.open = Boolean(open); draw(); }");
+      root.querySelector(`[data-job-id="${escaped}"]`)?.scrollIntoView({
+        block: "center",
+        behavior: "smooth",
+      });
+    });
+  }
+
+  function setOpen(open) {
+    state.open = Boolean(open);
+    if (!state.open) state.focusJobId = "";
+    draw();
+  }
   function setLoading(loading) { state.loading = Boolean(loading); draw(); }
   function setError(error) { state.error = error || ""; draw(); }
   function reset() { state.jobs = []; state.error = ""; state.loading = false; draw(); }
 
   registerUiIsland("jobHistory", {
-    setOpen, setLoading, setError, setJobs, applyEvent, reset,
+    setOpen, setLoading, setError, setJobs, applyEvent, reset, focus,
     isOpen: () => state.open,
   });
 }

@@ -5,49 +5,23 @@ import * as appSettings from "./app_settings.js";
 import * as autosave from "./autosave.js";
 import * as datasource from "./datasource.js";
 import * as jobHistory from "./job_history.js";
+import { sidebar } from "../features/sidebar.js";
 import { renderMd } from "./markdown.js";
 import * as preview from "./preview.js";
 import * as sessions from "./sessions.js";
 import { runUpdate } from "./update.js";
 
+// If a second stale chat-app.js copy is somehow running, skip all listener
+// registration here so there are no duplicate event handlers. This guard must
+// be local to app.js because ES module imports run before chat-app.js body code.
+if (globalThis.__baaAppDelegationRegistered) {
+  console.warn("[app.js] duplicate registration skipped");
+} else {
+  globalThis.__baaAppDelegationRegistered = true;
+
 (function () {
   const { $ } = window.BAA.dom;
   const state = window.BAA.state;
-
-  function setSidebarNav(nav = "agent") {
-    document.querySelectorAll(".sb-nav-item").forEach(btn => {
-      btn.classList.toggle("active", btn.dataset.sidebarNav === nav);
-    });
-  }
-
-  function setDrawerTab(tab = "sessions") {
-    const drawer = $("sb-drawer");
-    if (!drawer) return;
-    drawer.dataset.drawerPanel = tab;
-    const title = $("sb-drawer-title");
-    if (title) title.textContent = tab === "sources" ? "数据链接" : "会话文件";
-    document.querySelectorAll(".sb-drawer-tab").forEach(btn => {
-      btn.classList.toggle("active", btn.dataset.drawerTab === tab);
-    });
-    document.querySelectorAll(".sb-drawer-page").forEach(page => {
-      page.classList.toggle("active", page.dataset.drawerPage === tab);
-    });
-    if (tab === "sources") datasource.loadWarehouseList();
-  }
-
-  function openSidebarDrawer(tab = "sessions") {
-    const drawer = $("sb-drawer");
-    if (!drawer) return;
-    setDrawerTab(tab);
-    drawer.classList.remove("collapsed");
-    if (tab === "sessions") setSidebarNav("history");
-  }
-
-  function closeSidebarDrawer() {
-    const drawer = $("sb-drawer");
-    if (!drawer) return;
-    drawer.classList.add("collapsed");
-  }
 
   function syncSessionStatus() {
     const el = $("session-status-text");
@@ -61,18 +35,7 @@ import { runUpdate } from "./update.js";
     syncSessionStatus();
   }
 
-  function toggleFocusMode() {
-    const enabled = !document.body.classList.contains("focus-mode");
-    document.body.classList.toggle("focus-mode", enabled);
-    const btn = $("btn-focus-mode");
-    if (btn) {
-      btn.classList.toggle("active", enabled);
-      btn.textContent = enabled ? "↩ 退出专注" : "⛶ 专注对话";
-      btn.title = enabled ? "恢复完整界面" : "隐藏左侧面板，专注对话";
-    }
-  }
-
-  window.BAA.sidebar = { setSessionName, syncSessionStatus };
+  window.BAA.sidebar = { ...sidebar, setSessionName, syncSessionStatus };
 
   // ── Action registry (data-action="name[:arg]") ─────────────────────
   // Resolved at click time so modules registered after app.js still work.
@@ -81,8 +44,8 @@ import { runUpdate } from "./update.js";
     onSendOrStop: ()    => window.BAA.chatStream.onSendOrStop(),
     clearCmd:     ()    => window.BAA.slash.clearCmd(),
     clearSkill:   ()    => window.BAA.skills.clearSkill(),
-    openSkillPicker: () => window.BAA.skills.open(),
-    closeSkillPicker: () => window.BAA.skills.close(),
+    openSkillPicker: () => sidebar.openPanel("skills"),
+    closeSkillPicker: () => sidebar.closePanel("skills"),
     openModelPicker: (el) => window.BAA.models.openModelPicker(el),
     closeModelPicker: () => window.BAA.models.closeModelPicker(),
     fillHint:     (el)  => window.BAA.slash.fillHint(el),
@@ -101,6 +64,18 @@ import { runUpdate } from "./update.js";
     newChat:      ()    => window.BAA.chatStream.newChat(),
     retryStream:  ()    => window.BAA.chatStream.retryLast?.(),
 
+    // Independent side panels (skills / knowledge / mcp) — island loading via openSidePanel
+    openPanel:  (_el, name) => {
+      if (name === "skills") {
+        window.BAA.skills.open();
+      } else {
+        globalThis.openSidePanel?.(name);
+      }
+    },
+    closePanel: (_el, name) => sidebar.closePanel(name),
+    // KB inline form
+    kbCancelForm: () => { window.BAA.knowledge?.kbCancelForm?.(); sidebar.closeKbInlineForm(); },
+
     // Overlay
     openOverlay:  (_el, id) => window.openOverlay(id),
     closeOverlay: (_el, id) => window.BAA.overlay.closeOverlay(id),
@@ -117,13 +92,14 @@ import { runUpdate } from "./update.js";
     },
     openSchemaView:    () => preview.openSchemaView(),
     openJobHistory:    () => jobHistory.open(),
-    toggleFocusMode:   () => toggleFocusMode(),
+    openBusinessCanvas: () => window.BAA.businessCanvas.open(),
+    toggleFocusMode:   () => sidebar.toggleFocusMode(),
     openSaveDialog:    () => sessions.openSaveDialog(),
     loadSavedList:     () => sessions.loadSavedList(),
-    setSidebarNav:     (_el, nav) => setSidebarNav(nav || "agent"),
-    openSidebarDrawer: (_el, tab) => openSidebarDrawer(tab || "sessions"),
-    closeSidebarDrawer: () => closeSidebarDrawer(),
-    setDrawerTab:      (_el, tab) => setDrawerTab(tab || "sessions"),
+    setSidebarNav:     (_el, nav) => sidebar.setSidebarNav(nav || "agent"),
+    openSidebarDrawer: (_el, tab) => sidebar.openSidebarDrawer(tab || "sessions"),
+    closeSidebarDrawer: () => sidebar.closeSidebarDrawer(),
+    setDrawerTab:      (_el, tab) => sidebar.setDrawerTab(tab || "sessions"),
     openMcpSettings:   () => window.BAA.mcp.openMcpSettings(),
     loadMcpServers:    () => window.BAA.mcp.loadMcpServers(),
     toggleLang:        () => window.BAA.i18n.setLang(window.BAA.i18n.getLang() === 'zh' ? 'en' : 'zh'),
@@ -178,14 +154,20 @@ import { runUpdate } from "./update.js";
     updateMcpCmdPreview: () => window.BAA.mcp.updateMcpCmdPreview(),
 
     // Knowledge base
-    kbOpenForm:      (_el, type) => window.BAA.knowledge.kbOpenForm(type),
+    kbOpenForm:      (_el, type) => { window.BAA.knowledge.kbOpenForm(type); sidebar.openKbInlineForm(); },
     kbRefresh:       (_el, type) => window.BAA.knowledge.kbRefresh(type),
     kbSwitchTab:     (el, tab)   => window.BAA.knowledge.kbSwitchTab(tab, el),
+    kbOpenImport:    () => window.BAA.knowledge.kbOpenImport(),
     kbLoadFiles:     () => window.BAA.knowledge.kbLoadFiles(),
     kbCancelImport:  () => window.BAA.knowledge.kbCancelImport(),
     kbConfirmImport: () => window.BAA.knowledge.kbConfirmImport(),
     kbSubmitForm:    () => window.BAA.knowledge.kbSubmitForm(),
+    kbCancelForm:    () => { window.BAA.knowledge?.kbCancelForm?.(); sidebar.closeKbInlineForm(); },
     kbPickFile:      () => $("kb-file-input").click(),
+    kbOnFileSelect:  (el, event) => window.BAA.knowledge?.kbOnFileSelect?.(event || { target: el }),
+    kbDeleteFile:    (el) => window.BAA.knowledge?.kbDeleteFile?.(el.dataset.filename || ""),
+    kbPreviewRemove: (el) => window.BAA.knowledge?.kbPreviewRemove?.(Number(el.dataset.idx)),
+    kbPreviewUpdate: (el) => window.BAA.knowledge?.kbPreviewUpdate?.(el),
 
     // Temporary per-session prompt
     tpSaveRaw:    () => window.BAA.tempPrompt.tpSave(false),
@@ -203,9 +185,21 @@ import { runUpdate } from "./update.js";
       const body = $("instruction-body");
       window.openOverlay("ov-instruction");
       // Fetch on every open so doc edits show up without a page reload.
+      // The desktop build serves this from a local server that may have just
+      // resumed from a backgrounded tab, so retry once before surfacing an
+      // error and keep the message actionable instead of a raw TypeError.
+      const loadOnce = async () => {
+        const r = await fetch("/api/instruction", { cache: "no-store" });
+        return r.json();
+      };
       try {
-        const r = await fetch("/api/instruction");
-        const d = await r.json();
+        let d;
+        try {
+          d = await loadOnce();
+        } catch (_firstError) {
+          await new Promise(resolve => setTimeout(resolve, 400));
+          d = await loadOnce();
+        }
         if (d.ok && d.markdown) {
           body.innerHTML = renderMd(d.markdown);
         } else {
@@ -214,70 +208,56 @@ import { runUpdate } from "./update.js";
           }</div>`;
         }
       } catch (e) {
-        body.innerHTML = `<div class="instruction-loading">${
-          window.BAA.dom.esc(String(e))
-        }</div>`;
+        body.innerHTML = `<div class="instruction-loading">`
+          + `${window.BAA.dom.esc(t("modal.instruction.load_fail") || "文档加载失败，请稍后重试。")}`
+          + `<br><small>${window.BAA.dom.esc(String(e))}</small></div>`;
       }
     },
 
     // Sidebar — "Add data source" dropdown
-    toggleAddSrc: () => {
-      const dd  = $("sb-add-src");
-      if (!dd) return;
-      const btn = dd.querySelector(".sb-btn-primary");
-      const open = dd.classList.toggle("open");
-      if (btn) btn.setAttribute("aria-expanded", String(open));
-    },
+    toggleAddSrc: () => sidebar.toggleAddSrc(),
 
     // Sidebar — datasource row click. Behaviour depends on connection state:
     //   connected    → open data preview modal
     //   disconnected → open the "Add data source" dropdown
-    openDataSource: () => {
-      openSidebarDrawer("sources");
-      if (!window.BAA.state.srcConnected) {
-        const dd = $("sb-add-src");
-        if (dd && !dd.classList.contains("open")) {
-          dd.classList.add("open");
-          const btn = dd.querySelector(".sb-btn-primary");
-          if (btn) btn.setAttribute("aria-expanded", "true");
-        }
-      }
-    },
+    openDataSource: () => sidebar.openDataSource(),
   };
 
-  // "Add data source" dropdown — close on outside click, Esc, or menu-item pick.
-  function _closeAddSrcDropdown() {
-    const dd = $("sb-add-src");
-    if (!dd) return;
-    dd.classList.remove("open");
-    const btn = dd.querySelector(".sb-btn-primary");
-    if (btn) btn.setAttribute("aria-expanded", "false");
-  }
-  document.addEventListener("click", e => {
-    const dd = $("sb-add-src");
-    if (!dd || !dd.classList.contains("open")) return;
-    // Click on a menu item — close the menu after letting the action fire.
-    if (e.target.closest(".sb-dropdown-item")) {
-      setTimeout(_closeAddSrcDropdown, 0);
-      return;
-    }
-    // Click anywhere outside the dropdown — close.
-    if (!dd.contains(e.target)) _closeAddSrcDropdown();
-  });
-  document.addEventListener("keydown", e => {
-    if (e.key === "Escape") _closeAddSrcDropdown();
-  });
+  sidebar.initAddSourceDropdown();
+  sidebar.initPanelKeyClose();
 
   // Click delegation
   document.addEventListener("click", e => {
     const el = e.target.closest("[data-action]");
     if (!el) return;
-    if (el.dataset.sidebarNav) setSidebarNav(el.dataset.sidebarNav);
+    if (el.dataset.sidebarNav) sidebar.setSidebarNav(el.dataset.sidebarNav);
     const [name, ...args] = el.dataset.action.split(":");
     const fn = ACTIONS[name];
     if (!fn) { console.warn("[BAA] unknown action:", name); return; }
     fn(el, ...args, e);
   });
+
+  // Direct fallback for "添加自定义模型" toggle — some users report event delegation not firing
+  // for this element, so attach a direct listener as well.
+  const _directToggle = () => {
+    const el = document.querySelector(".add-custom-toggle[data-action='toggleAddCustom']");
+    if (!el || el.dataset._baaDirectToggleBound) return;
+    el.dataset._baaDirectToggleBound = "1";
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      try {
+        window.BAA.models.toggleAddCustom();
+      } catch (err) {
+        console.error("[BAA] direct toggleAddCustom error:", err);
+      }
+    });
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", _directToggle);
+  } else {
+    _directToggle();
+  }
 
   // Change delegation (selects / checkboxes / file inputs)
   document.addEventListener("change", e => {
@@ -299,13 +279,6 @@ import { runUpdate } from "./update.js";
     fn(el, ...args);
   });
 
-  // Overlay backdrop click → close
-  document.addEventListener("click", e => {
-    const ov = e.target.closest(".overlay");
-    if (!ov || e.target !== ov) return;
-    window.BAA.overlay.closeOutside(e, ov.id);
-  }, true);
-
   // Drag & drop on knowledge base import zone
   const dropZone = document.getElementById("kb-drop-zone");
   if (dropZone) {
@@ -313,7 +286,7 @@ import { runUpdate } from "./update.js";
     dropZone.addEventListener("drop",     e => window.BAA.knowledge.kbOnDrop && window.BAA.knowledge.kbOnDrop(e));
   }
   const kbFileInput = document.getElementById("kb-file-input");
-  if (kbFileInput) {
+  if (kbFileInput && !kbFileInput.dataset.change) {
     kbFileInput.addEventListener("change", e => window.BAA.knowledge.kbOnFileSelect && window.BAA.knowledge.kbOnFileSelect(e));
   }
 
@@ -348,6 +321,89 @@ import { runUpdate } from "./update.js";
     workspacePermission.addEventListener("change", e => {
       window.BAA.workspace.onPermissionChange(e.currentTarget.value);
     });
+  }
+
+  // Custom dropdown for workspace permission in composer toolbar
+  const permWrap = document.getElementById("composer-permission-wrap");
+  if (permWrap) {
+    const trigger = permWrap.querySelector(".composer-permission-trigger");
+    const menu = permWrap.querySelector(".composer-permission-menu");
+    const options = permWrap.querySelectorAll(".composer-permission-option");
+    const label = document.getElementById("composer-permission-label");
+    const nativeSelect = document.getElementById("workspace-permission-select");
+
+    const updatePermissionUI = (value) => {
+      const active = permWrap.querySelector('.composer-permission-option.active');
+      if (active) active.classList.remove('active');
+      const next = permWrap.querySelector(`.composer-permission-option[data-value="${value}"]`);
+      if (next) {
+        next.classList.add('active');
+        if (label) label.textContent = next.textContent.trim();
+      }
+      if (nativeSelect) nativeSelect.value = value;
+    };
+
+    if (trigger) {
+      trigger.addEventListener("click", (e) => {
+        e.preventDefault();
+        if (trigger.disabled) return;
+        const willOpen = !permWrap.classList.contains("open");
+        if (willOpen) {
+          // Position the fixed menu above the trigger
+          const r = trigger.getBoundingClientRect();
+          if (menu) {
+            menu.style.left = `${r.left}px`;
+            menu.style.bottom = `${window.innerHeight - r.top + 6}px`;
+          }
+        }
+        permWrap.classList.toggle("open", willOpen);
+        trigger.setAttribute("aria-expanded", String(willOpen));
+      });
+    }
+
+    options.forEach(opt => {
+      opt.addEventListener("click", () => {
+        const value = opt.dataset.value;
+        updatePermissionUI(value);
+        permWrap.classList.remove("open");
+        if (trigger) trigger.setAttribute("aria-expanded", "false");
+        if (nativeSelect) {
+          nativeSelect.value = value;
+          nativeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      });
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!permWrap.contains(e.target)) {
+        permWrap.classList.remove("open");
+        if (trigger) trigger.setAttribute("aria-expanded", "false");
+      }
+    });
+    // Close menu on scroll/resize since fixed positioning won't track the trigger
+    window.addEventListener("scroll", () => {
+      if (permWrap.classList.contains("open")) {
+        permWrap.classList.remove("open");
+        if (trigger) trigger.setAttribute("aria-expanded", "false");
+      }
+    }, { passive: true });
+    window.addEventListener("resize", () => {
+      if (permWrap.classList.contains("open")) {
+        permWrap.classList.remove("open");
+        if (trigger) trigger.setAttribute("aria-expanded", "false");
+      }
+    });
+
+    // Sync custom dropdown UI from workspace.js — listen to "perm:sync" (UI-only),
+    // NOT "change" (which triggers onPermissionChange and may open the mount modal).
+    const syncFromNative = (e) => {
+      const value = (e && e.detail && e.detail.permission) || (nativeSelect && nativeSelect.value);
+      if (value) updatePermissionUI(value);
+    };
+    if (nativeSelect) {
+      nativeSelect.addEventListener("perm:sync", syncFromNative);
+      syncFromNative();
+    }
   }
 
   // Excel file picker change
@@ -475,3 +531,4 @@ import { runUpdate } from "./update.js";
     autosave.checkAutosaveOnLoad();
   })();
 })();
+}

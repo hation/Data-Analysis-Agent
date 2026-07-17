@@ -27,6 +27,7 @@ ALLOWED_ROOT_DIRS = (
 KNOWN_LOCAL_ONLY = frozenset({
     "llm/llm_config.json",
     "llm/mcp_config.json",
+    "llm/embedding_config.json",
     "data/datasource_config.json",
 })
 

@@ -36,11 +36,18 @@ _ALWAYS_AVAILABLE = frozenset({
     "send_message",
     "agent_delegate",
     "team_delegate",
+    "workflow_list",
+    "workflow_start",
+    "workflow_status",
     "task_create",
     "task_get",
     "task_list",
     "task_update",
     "plan_complete",
+    "display_diagram",
+    "edit_diagram",
+    "get_diagram",
+    "get_shape_library",
 })
 
 _INSPECT_TOOLS = frozenset({

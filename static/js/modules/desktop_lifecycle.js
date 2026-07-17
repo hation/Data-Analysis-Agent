@@ -38,6 +38,13 @@
 
   heartbeat();
   timer = window.setInterval(heartbeat, 3000);
+  // Foreground/visibility changes fire an immediate heartbeat so a page that
+  // was backgrounded (and had its timers throttled to ~1/min) refreshes its
+  // lease the moment the user returns, before they can click anything.
   window.addEventListener("pageshow", heartbeat);
+  window.addEventListener("focus", heartbeat);
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") heartbeat();
+  });
   window.addEventListener("pagehide", disconnect);
 }());

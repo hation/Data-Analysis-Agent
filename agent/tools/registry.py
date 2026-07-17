@@ -270,8 +270,12 @@ BUILTIN_TOOL_REGISTRY = ToolRegistry([
     ),
     _spec(
         "workspace_read_file", "read", default_exposed=False, discoverable=True,
-        discovery_keywords=("读取文件", "打开文件", "read file", "查看文件", "文件内容"),
-        discovery_summary="Read a bounded workspace file.",
+        discovery_keywords=(
+            "读取", "读取文件", "打开", "打开文件", "查看文件", "说明文件", "说明文档",
+            "文档内容", "文件内容", "读一下", "看一下", "看下",
+            "read", "read file", "open file", "view file", ".txt", ".doc", ".docx", "word 文档", "Word 文档",
+        ),
+        discovery_summary="Read a bounded workspace text, Word or spreadsheet file.",
         requires_runtime=True,
     ),
     _spec(
@@ -312,7 +316,7 @@ BUILTIN_TOOL_REGISTRY = ToolRegistry([
     ),
     _spec("structured_output", "interaction", default_exposed=False),
     _spec(
-        "load_analysis_skill", "read", default_exposed=False, discoverable=True,
+        "load_analysis_skill", "read", default_exposed=True,
         discovery_keywords=("分析技能", "load skill", "analysis skill", "sop", "流程"),
         discovery_summary="Load a project analysis skill SOP body.",
     ),
@@ -342,7 +346,7 @@ BUILTIN_TOOL_REGISTRY = ToolRegistry([
     ),
     _spec(
         "team_create", "write", default_exposed=False, discoverable=True,
-        discovery_keywords=("团队", "team", "agent team", "创建团队"),
+        discovery_keywords=("团队", "team", "agent team", "创建团队", "团队协作"),
         discovery_summary="Create a persistent workspace analyst team.",
         requires_runtime=True, requires_workspace=True,
     ),
@@ -360,7 +364,7 @@ BUILTIN_TOOL_REGISTRY = ToolRegistry([
     ),
     _spec(
         "team_status", "read", default_exposed=False, discoverable=True,
-        discovery_keywords=("团队", "team", "团队状态", "成员状态", "mailbox"),
+        discovery_keywords=("团队", "team", "团队状态", "成员状态", "团队里", "mailbox"),
         discovery_summary="Read one workspace analyst team status and recent mailbox.",
         requires_runtime=True, requires_workspace=True,
     ),
@@ -372,17 +376,96 @@ BUILTIN_TOOL_REGISTRY = ToolRegistry([
     ),
     _spec(
         "agent_delegate", "analysis", default_exposed=False, discoverable=True,
-        discovery_keywords=("delegate", "委派", "子任务", "团队分析", "agent delegate"),
+        discovery_keywords=("delegate", "委派", "子任务", "团队分析", "团队协作", "agent delegate"),
         discovery_summary="Delegate a bounded reasoning task to a workspace team member.",
         requires_runtime=True, requires_workspace=True,
     ),
     _spec(
+        "team_plan_create", "write", default_exposed=False, discoverable=True,
+        discovery_keywords=("团队计划", "动态计划", "创建团队计划", "创建动态计划", "先建计划", "预览计划", "暂不执行", "不要执行", "dynamic plan"),
+        discovery_summary="Create a bounded dynamic team plan without executing members.",
+        requires_runtime=True, requires_workspace=True,
+    ),
+    _spec(
         "team_delegate", "analysis", default_exposed=False, discoverable=True,
-        discovery_keywords=("parallel team", "并行团队", "并发团队", "批量委派", "team delegate"),
+        discovery_keywords=("parallel team", "并行团队", "并发团队", "批量委派", "切换到团队", "team delegate"),
         discovery_summary="Delegate multiple bounded teammate tasks in parallel.",
         requires_runtime=True, requires_workspace=True,
     ),
     _spec("plan_complete", "interaction", default_exposed=False),
+    _spec(
+        "workflow_create", "write", default_exposed=False, discoverable=True,
+        discovery_keywords=(
+            "workflow", "工作流", "创建workflow", "创建 workflow", "创建工作流",
+            "新建workflow", "新建 workflow", "新建工作流", "创建流程", "新建流程",
+        ),
+        discovery_summary="Create and publish a standard AI-team analysis Workflow template.",
+        requires_runtime=True, requires_workspace=True,
+    ),
+    _spec(
+        "workflow_list", "read", default_exposed=False, discoverable=True,
+        discovery_keywords=("workflow", "工作流", "流程", "场景", "可用流程"),
+        discovery_summary="List published Workflows in the mounted workspace.",
+        requires_runtime=True, requires_workspace=True,
+    ),
+    _spec(
+        "workflow_start", "analysis", default_exposed=False, discoverable=True,
+        discovery_keywords=(
+            "run workflow", "start workflow", "运行工作流", "启动工作流",
+            "运行流程", "启动流程", "执行场景",
+        ),
+        discovery_summary="Start a published Workflow and return its durable Run status.",
+        skills=("workflow",),
+        requires_runtime=True, requires_workspace=True,
+    ),
+    _spec(
+        "workflow_status", "read", default_exposed=False, discoverable=True,
+        discovery_keywords=(
+            "workflow status", "run status", "工作流状态", "流程状态", "运行状态",
+        ),
+        discovery_summary="Read and reconcile a durable Workflow Run.",
+        requires_runtime=True, requires_workspace=True,
+    ),
+    # ── Diagram / Canvas tools ──
+    # Exposed via skills, but also discoverable so the agent can use them
+    # when the user mentions canvas/diagram keywords without manually
+    # selecting a skill.
+    _spec(
+        "display_diagram", "output", default_exposed=False, discoverable=True,
+        skills=("business-model-canvas", "bcg-matrix", "swot-analysis", "value-proposition"),
+        discovery_keywords=(
+            "商业模式画布", "价值主张", "bcg", "swot", "画布", "canvas",
+            "diagram", "图表", "矩阵", "四象限", "画图", "绘制",
+        ),
+        discovery_summary="Render a draw.io diagram (business model canvas, BCG, SWOT, value proposition) to the canvas drawer.",
+        concurrency_safe=False,
+    ),
+    _spec(
+        "edit_diagram", "write", default_exposed=False, discoverable=True,
+        skills=("business-model-canvas", "bcg-matrix", "swot-analysis", "value-proposition"),
+        discovery_keywords=(
+            "商业模式画布", "价值主张", "bcg", "swot", "画布", "canvas",
+            "diagram", "图表", "矩阵", "四象限", "修改图",
+        ),
+        discovery_summary="Edit an existing draw.io diagram in the canvas drawer.",
+    ),
+    _spec(
+        "get_diagram", "read", default_exposed=False, discoverable=True,
+        skills=("business-model-canvas", "bcg-matrix", "swot-analysis", "value-proposition"),
+        discovery_keywords=(
+            "商业模式画布", "价值主张", "bcg", "swot", "画布", "canvas",
+            "diagram", "查看图",
+        ),
+        discovery_summary="Retrieve the current draw.io XML from the canvas drawer.",
+    ),
+    _spec(
+        "get_shape_library", "read", default_exposed=False, discoverable=True,
+        discovery_keywords=(
+            "shape", "icon", "AWS", "Azure", "GCP", "图标", "形状库",
+            "draw.io", "diagram", "图表", "画图",
+        ),
+        discovery_summary="Discover available draw.io shape/icon libraries before creating diagrams.",
+    ),
 ])
 
 

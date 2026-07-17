@@ -71,7 +71,11 @@ def create_app() -> Flask:
     from .commands        import bp as commands_bp
     from .desktop         import bp as desktop_bp
     from .hooks           import bp as hooks_bp
+    from .lifecycle       import bp as lifecycle_bp
     from .teams           import bp as teams_bp
+    from .business_canvas import bp as business_canvas_bp
+    from .workflows       import bp as workflows_bp
+    from .workflow_runs   import bp as workflow_runs_bp
 
     app.register_blueprint(models_bp)
     app.register_blueprint(datasource_bp)
@@ -88,7 +92,11 @@ def create_app() -> Flask:
     app.register_blueprint(commands_bp)
     app.register_blueprint(desktop_bp)
     app.register_blueprint(hooks_bp)
+    app.register_blueprint(lifecycle_bp)
     app.register_blueprint(teams_bp)
+    app.register_blueprint(business_canvas_bp)
+    app.register_blueprint(workflows_bp)
+    app.register_blueprint(workflow_runs_bp)
     _run_startup_hooks()
 
     @app.before_request
@@ -111,10 +119,18 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index():
-        return render_template(
+        resp = render_template(
             "agent_chat.html",
             desktop_lifecycle_enabled=os.environ.get("BAA_DESKTOP_LIFECYCLE") == "1",
         )
+        from flask import make_response
+        resp = make_response(resp)
+        # Always revalidate the HTML entry page so the browser picks up the
+        # latest versioned JS/CSS references instead of serving a stale copy
+        # that points to an older (unversioned) chat-app.js bundle.
+        resp.headers["Cache-Control"] = "no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        return resp
 
     @app.get("/api/health")
     def health():
@@ -129,6 +145,7 @@ def create_app() -> Flask:
     def add_security_headers(response):
         """Apply a restrictive browser baseline while allowing generated charts."""
         is_chart = request.path.startswith("/api/chart/")
+        is_drawio = request.path.startswith("/static/drawio/")
         if is_chart:
             response.headers["Content-Security-Policy"] = (
                 "default-src 'none'; "
@@ -141,6 +158,26 @@ def create_app() -> Flask:
                 "form-action 'none'; "
                 "frame-ancestors 'self'"
             )
+        elif is_drawio:
+            # Self-hosted draw.io editor must be frameable by the chat page
+            # (same origin) and needs worker/wasm for deflate + inline styles.
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; "
+                "worker-src 'self' blob:; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: blob: https:; "
+                "font-src 'self' data:; "
+                "connect-src 'self'; "
+                "frame-src 'self'; "
+                "object-src 'none'; "
+                "base-uri 'self'; "
+                "form-action 'self'; "
+                "frame-ancestors 'self'"
+            )
+            response.headers["Cache-Control"] = "no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
         else:
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "

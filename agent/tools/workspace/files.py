@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import zipfile
 from xml.etree import ElementTree
@@ -32,16 +33,140 @@ MAX_RESULTS = 100
 MAX_SEARCH_FILES = 200
 MAX_SEARCH_FILE_CHARS = 200_000
 MAX_COMMAND_OUTPUT = 20_000
+TEXT_READ_ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "cp1252")
+UTF16_READ_ENCODINGS = ("utf-16", "utf-16-le", "utf-16-be")
 TEXT_SUFFIXES = {
     ".txt", ".md", ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml",
     ".sql", ".py", ".js", ".css", ".html", ".xml", ".toml", ".ini",
 }
+DOCUMENT_SUFFIXES = {".doc", ".docx", ".txt", ".md"}
 SKIP_DIRS = {".git", ".zhixi", ".baa_cache", "node_modules", "__pycache__", ".venv"}
 SPREADSHEET_SUFFIXES = {".xlsx", ".xls", ".xlsm", ".xlsb", ".ods"}
 
 
 class WorkspaceToolError(ValueError):
     pass
+
+
+def _decode_text_bytes(data: bytes, *, context: str) -> str:
+    """Decode common plain-text encodings used by workspace documents."""
+    errors: list[str] = []
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")) or (
+        data and data[:4096].count(b"\x00") / min(len(data), 4096) > 0.1
+    ):
+        for encoding in UTF16_READ_ENCODINGS:
+            try:
+                return data.decode(encoding)
+            except UnicodeDecodeError as exc:
+                errors.append(f"{encoding}: {exc.reason}")
+    for encoding in TEXT_READ_ENCODINGS:
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError as exc:
+            errors.append(f"{encoding}: {exc.reason}")
+    raise WorkspaceToolError(f"{context} is not decodable text: {'; '.join(errors[:3])}")
+
+
+def _read_plain_text(path: Path) -> str:
+    try:
+        return _decode_text_bytes(path.read_bytes(), context="file")
+    except OSError as exc:
+        raise WorkspaceToolError(f"file cannot be opened: {exc}") from exc
+
+
+def _normalize_extracted_text(text: str) -> str:
+    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "")
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = "".join(ch if ch == "\t" or ch >= " " else " " for ch in raw_line)
+        line = re.sub(r"[ \t]+", " ", line).strip()
+        if line:
+            lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _run_document_text_command(command: list[str], *, timeout: int = 20) -> str:
+    completed = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+        check=False,
+    )
+    if completed.returncode != 0:
+        stderr = _decode_text_bytes(completed.stderr[:4000], context="command stderr") if completed.stderr else ""
+        raise WorkspaceToolError(stderr.strip() or f"command exited with {completed.returncode}")
+    return _decode_text_bytes(completed.stdout, context="command stdout")
+
+
+def _extract_printable_doc_strings(path: Path) -> str:
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise WorkspaceToolError(f"DOC cannot be opened: {exc}") from exc
+
+    fragments: list[str] = []
+    for match in re.finditer(rb"[\x09\x0a\x0d\x20-\x7e]{4,}", data):
+        fragments.append(match.group(0).decode("cp1252", errors="replace"))
+    for match in re.finditer(rb"(?:(?:[\x09\x0a\x0d\x20-\x7e])\x00){4,}", data):
+        fragments.append(match.group(0).decode("utf-16le", errors="replace"))
+
+    normalized = _normalize_extracted_text("\n".join(fragments))
+    if len(normalized) < 8:
+        raise WorkspaceToolError("no readable text was found in legacy DOC binary streams")
+    return normalized
+
+
+def _read_legacy_doc_text(path: Path) -> str:
+    """Best-effort text extraction for legacy .doc files.
+
+    Modern DOCX is parsed in-process. Legacy binary DOC has no small safe parser in
+    the standard library, so use common local converters when present and fall back
+    to conservative string extraction from the binary streams.
+    """
+    if zipfile.is_zipfile(path):
+        return _read_docx_text(path)
+
+    errors: list[str] = []
+    for executable in ("antiword", "catdoc"):
+        binary = shutil.which(executable)
+        if not binary:
+            continue
+        try:
+            text = _run_document_text_command([binary, str(path)])
+            normalized = _normalize_extracted_text(text)
+            if normalized:
+                return normalized
+        except (OSError, subprocess.TimeoutExpired, WorkspaceToolError) as exc:
+            errors.append(f"{executable}: {exc}")
+
+    office = shutil.which("soffice") or shutil.which("libreoffice")
+    if office:
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                subprocess.run(
+                    [office, "--headless", "--convert-to", "txt:Text", "--outdir", tmp, str(path)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=30,
+                    check=False,
+                )
+                converted = Path(tmp) / f"{path.stem}.txt"
+                if converted.is_file():
+                    normalized = _normalize_extracted_text(_read_plain_text(converted))
+                    if normalized:
+                        return normalized
+                errors.append("libreoffice: conversion produced no text file")
+        except (OSError, subprocess.TimeoutExpired, WorkspaceToolError) as exc:
+            errors.append(f"libreoffice: {exc}")
+
+    try:
+        return _extract_printable_doc_strings(path)
+    except WorkspaceToolError as exc:
+        detail = "; ".join(errors[-3:])
+        if detail:
+            raise WorkspaceToolError(f"legacy DOC text extraction failed: {detail}; {exc}") from exc
+        raise WorkspaceToolError(f"legacy DOC text extraction failed: {exc}") from exc
 
 
 def _read_docx_text(path: Path) -> str:
@@ -299,6 +424,59 @@ class WorkspaceToolService:
     def _skip(path: Path) -> bool:
         return any(part.lower() in SKIP_DIRS for part in path.parts)
 
+    def _document_candidates(self, *, limit: int = 5) -> list[str]:
+        runtime = workspace_manager.get_by_workspace(self.workspace_id) if self.workspace_id else None
+        if runtime is None:
+            return []
+        root = runtime.workdir.resolve()
+        candidates: list[tuple[int, str]] = []
+        scanned = 0
+        for current, dirs, filenames in os.walk(root, followlinks=False):
+            current_path = Path(current)
+            dirs[:] = sorted(
+                [name for name in dirs if not self._skip(current_path / name)],
+                key=str.lower,
+            )
+            for filename in sorted(filenames, key=str.lower):
+                scanned += 1
+                if scanned > MAX_INDEXED_FILES:
+                    break
+                item = current_path / filename
+                if self._skip(item) or item.suffix.lower() not in DOCUMENT_SUFFIXES:
+                    continue
+                try:
+                    if item.is_symlink() or not item.is_file():
+                        continue
+                    safe = item.resolve()
+                    rel = safe.relative_to(root).as_posix()
+                    score = 10 if "说明" in safe.stem else 0
+                    score += 5 if any(token in safe.stem.lower() for token in ("readme", "说明", "doc", "文档")) else 0
+                    candidates.append((score, f"user/{rel}"))
+                except (OSError, ValueError):
+                    continue
+            if scanned > MAX_INDEXED_FILES:
+                break
+        candidates.sort(key=lambda item: (-item[0], item[1].lower()))
+        return [path for _score, path in candidates[:limit]]
+
+    def _missing_file_error(self, requested: str, path: Path) -> WorkspaceToolError:
+        requested = str(requested or "").strip() or "<empty>"
+        if path.exists() and path.is_dir():
+            return WorkspaceToolError(
+                f"path is a directory, not a file: {requested}; use workspace_glob to list candidate files first"
+            )
+        candidates = self._document_candidates()
+        if candidates:
+            return WorkspaceToolError(
+                f"file not found: {requested}; do not guess file names. "
+                "Use workspace_glob to locate the exact path first. "
+                f"Document candidates include: {', '.join(candidates)}"
+            )
+        return WorkspaceToolError(
+            f"file not found: {requested}; do not guess file names. "
+            "Use workspace_glob to locate the exact path first"
+        )
+
     def glob(
         self, pattern: str, path: str = "", max_results: int = 20, cursor: int = 0,
     ) -> dict:
@@ -319,26 +497,67 @@ class WorkspaceToolService:
             raise WorkspaceToolError("search path is not a directory")
         max_results = max(1, min(int(max_results), MAX_LIST_LIMIT))
         cursor = max(0, int(cursor))
+        wanted = (pattern or "**/*").strip() or "**/*"
+        wanted_without_globstar = wanted[3:] if wanted.startswith("**/") else ""
+        match_all = wanted in {"*", "**", "**/*"}
         results = []
         scanned = 0
-        for item in base.glob(pattern or "**/*"):
-            scanned += 1
-            if scanned > MAX_INDEXED_FILES:
+        try:
+            base_resolved = base.resolve()
+            root_resolved = root.resolve()
+        except OSError as exc:
+            raise WorkspaceToolError(f"cannot resolve search path: {exc}") from exc
+        stop_scan = False
+        for current, dirs, filenames in os.walk(base_resolved, followlinks=False):
+            current_path = Path(current)
+            allowed_dirs = []
+            for dirname in dirs:
+                child = current_path / dirname
+                try:
+                    if child.is_symlink() or self._skip(child):
+                        continue
+                except OSError:
+                    continue
+                allowed_dirs.append(dirname)
+            dirs[:] = sorted(allowed_dirs, key=str.lower)
+            for filename in sorted(filenames, key=str.lower):
+                scanned += 1
+                if scanned > MAX_INDEXED_FILES:
+                    stop_scan = True
+                    break
+                item = current_path / filename
+                if self._skip(item):
+                    continue
+                try:
+                    if item.is_symlink() or not item.is_file():
+                        continue
+                    safe = item.resolve()
+                    relative_to_base = safe.relative_to(base_resolved).as_posix()
+                    relative_to_root = safe.relative_to(root_resolved).as_posix()
+                    if not (
+                        match_all
+                        or fnmatch.fnmatch(relative_to_base, wanted)
+                        or fnmatch.fnmatch(relative_to_root, wanted)
+                        or (
+                            wanted_without_globstar
+                            and (
+                                fnmatch.fnmatch(relative_to_base, wanted_without_globstar)
+                                or fnmatch.fnmatch(relative_to_root, wanted_without_globstar)
+                            )
+                        )
+                    ):
+                        continue
+                    stat = safe.stat()
+                except (ValueError, OSError):
+                    log.debug("[files] glob entry skipped: %s", item)
+                    continue
+                results.append({
+                    "path": self._display_path(safe),
+                    "size": stat.st_size,
+                    "modified_ns": stat.st_mtime_ns,
+                })
+            if stop_scan:
                 break
-            if not item.is_file() or self._skip(item):
-                continue
-            try:
-                safe = item.resolve()
-                safe.relative_to(root.resolve())
-                stat = safe.stat()
-            except (ValueError, OSError):
-                log.debug("[files] glob entry skipped: %s", item)
-                continue
-            results.append({
-                "path": self._display_path(safe),
-                "size": stat.st_size,
-                "modified_ns": stat.st_mtime_ns,
-            })
         results.sort(key=lambda item: item["modified_ns"], reverse=True)
         page = []
         rendered_chars = 0
@@ -434,7 +653,7 @@ class WorkspaceToolService:
     ) -> dict:
         path = self._path(file_path)
         if not path.is_file():
-            raise WorkspaceToolError("file not found")
+            raise self._missing_file_error(file_path, path)
         size = path.stat().st_size
         suffix = path.suffix.lower()
         size_limit = (
@@ -457,12 +676,11 @@ class WorkspaceToolService:
         if suffix == ".docx":
             text = _read_docx_text(path)
             content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        elif suffix == ".doc":
+            text = _read_legacy_doc_text(path)
+            content_type = "application/msword"
         else:
-            try:
-                text = path.read_text(encoding="utf-8")
-            except UnicodeDecodeError as exc:
-                log.debug("[files] file not UTF-8: %s", file_path)
-                raise WorkspaceToolError("file is not UTF-8 text or a supported DOCX document") from exc
+            text = _read_plain_text(path)
             content_type = "text/plain; charset=utf-8"
         lines = text.splitlines()
         self._file_state().record(path)

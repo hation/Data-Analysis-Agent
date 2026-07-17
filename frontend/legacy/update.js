@@ -1,12 +1,6 @@
 // Check for updates via GitHub Releases.
 import { $, esc } from "../core/dom.js";
 
-function _fmtSize(bytes) {
-  if (!bytes) return "";
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 export async function runUpdate() {
   const btn       = $("update-btn");
   const stateEl   = $("update-state");
@@ -29,9 +23,14 @@ export async function runUpdate() {
 
     if (!d.ok) {
       stateEl.className = "update-state update-err";
-      stateEl.innerHTML = `<span class="update-state-icon">❌</span><span class="update-state-text">${t("update.check_fail")}</span>`;
-      outEl.textContent = d.error || "";
+      stateEl.innerHTML = `<span class="update-state-icon">❌</span><span class="update-state-text">${esc(d.error || t("update.check_fail"))}</span>`;
+      outEl.textContent = d.code === "github_rate_limited"
+        ? "GitHub 匿名 API 有访问次数限制。稍后重试，或直接打开 Releases 页面查看最新版本。"
+        : (d.error || "");
       outEl.classList.remove("hidden");
+      dlBtn.href = d.release_url || "https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest";
+      dlBtn.textContent = "前往 GitHub 查看最新版";
+      dlBtn.classList.remove("hidden");
       return;
     }
 
@@ -40,6 +39,11 @@ export async function runUpdate() {
       + `<div class="update-ver-row"><span>${t("update.latest")}</span><strong>${esc(d.latest_version)}</strong></div>`;
     versionEl.classList.remove("hidden");
 
+    if (d.warning) {
+      outEl.textContent = d.warning;
+      outEl.classList.remove("hidden");
+    }
+
     if (!d.has_update) {
       stateEl.className = "update-state update-ok";
       stateEl.innerHTML = `<span class="update-state-icon">✅</span><span class="update-state-text">${t("update.ok_latest")}</span>`;
@@ -47,24 +51,13 @@ export async function runUpdate() {
       stateEl.className = "update-state update-ok";
       stateEl.innerHTML = `<span class="update-state-icon">🆕</span><span class="update-state-text">${t("update.new_version")}</span>`;
 
-      // Show download assets
-      if (d.assets && d.assets.length) {
-        assetsEl.innerHTML = d.assets.map(a =>
-          `<a class="update-asset-card" href="${esc(a.download_url)}" target="_blank" rel="noopener">`
-          + `<span class="update-asset-name">📦 ${esc(a.name)}</span>`
-          + `<span class="update-asset-size">${_fmtSize(a.size)}</span></a>`
-        ).join("");
-        assetsEl.classList.remove("hidden");
-      }
-
-      // Show release notes
+      // Keep downloads on GitHub so users can review the release and choose an installer.
       if (d.release_notes) {
         outEl.textContent = d.release_notes;
         outEl.classList.remove("hidden");
       }
-
-      // Show "Go to Releases" button
-      dlBtn.href = d.release_url || "";
+      dlBtn.href = d.release_url || "https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest";
+      dlBtn.textContent = "前往 GitHub 下载最新版";
       dlBtn.classList.remove("hidden");
     }
   } catch (e) {

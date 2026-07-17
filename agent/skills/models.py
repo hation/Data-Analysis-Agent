@@ -8,7 +8,7 @@ from typing import Literal
 
 
 SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
-SkillSource = Literal["builtin", "user", "workspace"]
+SkillSource = Literal["builtin", "user", "workspace", "workflow"]
 
 
 @dataclass(frozen=True)
@@ -29,9 +29,10 @@ class SkillDef:
     allowed_tools: tuple[str, ...] = ()
     source: SkillSource = "builtin"
     resources: tuple[SkillResource, ...] = ()
+    display_name: str = ""
 
     def __post_init__(self) -> None:
-        if self.source not in {"builtin", "user", "workspace"}:
+        if self.source not in {"builtin", "user", "workspace", "workflow"}:
             raise ValueError(f"invalid skill source: {self.source!r}")
         if not SKILL_NAME_RE.fullmatch(self.name):
             raise ValueError(f"invalid skill name: {self.name!r}")
@@ -45,6 +46,7 @@ class SkillDef:
     def to_public_dict(self) -> dict[str, object]:
         return {
             "name": self.name,
+            "display_name": self.display_name or self.name,
             "description": self.description,
             "icon": self.icon,
             "source": self.source,

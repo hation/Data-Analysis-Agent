@@ -344,9 +344,11 @@ def mount_workspace(sid: str):
             "active_job_ids": [job["id"] for job in active_jobs],
             "active_job_count": len(active_jobs),
         }
+    ws_dict = runtime.to_dict()
+    ws_dict["mounted"] = True
     return jsonify({
         "ok": True,
-        "workspace": runtime.to_dict(),
+        "workspace": ws_dict,
         "added": reg["added"],
         "errors": reg["errors"],
         "reused": reg.get("reused", 0),
@@ -746,9 +748,11 @@ def list_workspace_checkpoints(sid: str):
     if runtime is None:
         return jsonify({"ok": False, "error": "请先连接工作目录。"}), 409
     from filehistory import FileHistory
+    ws_dict = runtime.to_dict()
+    ws_dict["mounted"] = True
     return jsonify({
         "ok": True,
-        "workspace": runtime.to_dict(),
+        "workspace": ws_dict,
         "snapshots": FileHistory(runtime, sid).list_snapshots(),
     })
 
@@ -827,4 +831,6 @@ def update_workspace_permission(sid: str):
     if not ok or runtime is None:
         return jsonify({"ok": False, "error": message}), 400
     log.info("[api] workspace permission updated sid=%s permission=%s", sid, permission)
-    return jsonify({"ok": True, "workspace": runtime.to_dict()})
+    ws_dict2 = runtime.to_dict()
+    ws_dict2["mounted"] = True
+    return jsonify({"ok": True, "workspace": ws_dict2})

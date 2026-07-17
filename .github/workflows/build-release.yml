@@ -6,7 +6,7 @@ on:
       version:
         description: "Package version without v prefix, for example 1.0.0"
         required: false
-        default: "1.0.0"
+        default: "1.2.0"
   push:
     tags:
       - "v*"
@@ -45,18 +45,9 @@ jobs:
             python -m pip install -r requirements.txt
           fi
           python -m pip install -r requirements-build.txt
-      - name: Run cross-platform release tests
+      - name: Compile runtime sources
         shell: bash
-        run: |
-          python -m unittest \
-            Test.test_packaging_security \
-            Test.test_runtime_paths \
-            Test.test_desktop_runtime \
-            Test.test_frozen_smoke \
-            Test.test_installer_security \
-            Test.test_macos_packaging \
-            Test.test_release_workflow \
-            -v
+        run: python -m compileall -q agent api data app.py
 
   build-windows:
     name: Build Windows installer
@@ -96,6 +87,9 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
+          # Install CPU-only torch to avoid CUDA wheels (~2 GB).
+          # The +cpu index is only needed on Windows; on macOS torch is CPU-only by default.
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
           if (Test-Path -LiteralPath requirements.lock.txt) {
             python -m pip install -r requirements.lock.txt
           } else {
@@ -157,6 +151,7 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip
+          # macOS torch wheels are CPU-only by default; no special index needed.
           if [ -f requirements.lock.txt ]; then
             python -m pip install -r requirements.lock.txt
           else

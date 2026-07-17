@@ -2,17 +2,19 @@
 import json
 import logging
 import os
+import re
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.request
 import urllib.error
 import zipfile
 from pathlib import Path
-from typing import Tuple, List
+from typing import Any, Tuple, List
 from urllib.parse import urlsplit
 
 from flask import Blueprint, jsonify, request
@@ -27,13 +29,15 @@ _directory_picker_lock = threading.Lock()
 PROJECT_ROOT = resource_root()
 
 # ── Current version (keep in sync with templates/agent_chat.html footer) ──
-CURRENT_VERSION = "v1.1.0"
+CURRENT_VERSION = "v1.2.0"
 
 # ── GitHub Releases API ──
 GITHUB_OWNER = "Zafer-Liu"
 GITHUB_REPO = "Data-Analysis-Agent"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+_UPDATE_CACHE_TTL_SECONDS = 15 * 60
+_update_check_cache: dict[str, Any] = {"ts": 0.0, "payload": None}
 
 # GitHub archive URL (no git required — works for zip installs too)
 ARCHIVE_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/archive/refs/heads/main.zip"
@@ -49,6 +53,7 @@ PROTECTED = {
     # User configuration — credentials, API keys, connection strings
     "LLM/llm_config.json",
     "LLM/mcp_config.json",
+    "LLM/embedding_config.json",
     "data/datasource_config.json",
     ".env",
     # Local compatibility patches — machine-specific, must not be overwritten.
@@ -286,54 +291,156 @@ def _apply_update(zip_path: Path) -> Tuple[List[str], List[str], List[str]]:
 
 def _parse_version(tag: str) -> tuple:
     """Parse 'v1.2.3' into (1, 2, 3) for comparison."""
-    import re
     m = re.match(r"v?(\d+)\.(\d+)\.(\d+)", str(tag or ""))
     return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
 
 
-@bp.get("/api/system/check-update")
-def check_update():
-    """Query GitHub Releases API for the latest version.
+def _github_headers(*, api: bool = True) -> dict[str, str]:
+    headers = {
+        "User-Agent": f"{GITHUB_REPO}/{CURRENT_VERSION} (+https://github.com/{GITHUB_OWNER}/{GITHUB_REPO})",
+        "Accept": "application/vnd.github+json" if api else "text/html,application/xhtml+xml",
+    }
+    if api:
+        headers["X-GitHub-Api-Version"] = "2022-11-28"
+    token = (os.environ.get("BAA_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
+    if api and token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
-    Returns JSON: { ok, current_version, latest_version, has_update,
-                    release_url, release_notes, published_at, assets }
-    """
-    try:
-        req = urllib.request.Request(RELEASES_API, headers={
-            "User-Agent": f"{GITHUB_REPO}/1.0",
-            "Accept": "application/vnd.github.v3+json",
-        })
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception as exc:
-        log.warning("[check-update] GitHub API failed: %s", exc)
-        return jsonify({
-            "ok": False,
-            "error": str(exc),
-            "current_version": CURRENT_VERSION,
-        })
 
-    latest_tag = data.get("tag_name", "")
-    has_update = _parse_version(latest_tag) > _parse_version(CURRENT_VERSION)
-
+def _release_payload_from_api(data: dict[str, Any]) -> dict[str, Any]:
+    latest_tag = str(data.get("tag_name") or "")
     assets = []
-    for a in (data.get("assets") or []):
+    for asset in (data.get("assets") or []):
         assets.append({
-            "name": a.get("name", ""),
-            "size": a.get("size", 0),
-            "download_url": a.get("browser_download_url", ""),
+            "name": asset.get("name", ""),
+            "size": asset.get("size", 0),
+            "download_url": asset.get("browser_download_url", ""),
         })
-
-    return jsonify({
+    return {
         "ok": True,
+        "source": "github_api",
         "current_version": CURRENT_VERSION,
         "latest_version": latest_tag,
-        "has_update": has_update,
+        "has_update": _parse_version(latest_tag) > _parse_version(CURRENT_VERSION),
         "release_url": data.get("html_url", RELEASES_PAGE),
         "release_notes": data.get("body", ""),
         "published_at": data.get("published_at", ""),
         "assets": assets,
-    })
+    }
+
+
+def _release_payload_from_tag(latest_tag: str, *, warning: str = "") -> dict[str, Any]:
+    latest_tag = str(latest_tag or "")
+    release_url = (
+        f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/tag/{latest_tag}"
+        if latest_tag else RELEASES_PAGE
+    )
+    payload = {
+        "ok": True,
+        "source": "github_releases_page",
+        "current_version": CURRENT_VERSION,
+        "latest_version": latest_tag or "未知",
+        "has_update": bool(latest_tag) and _parse_version(latest_tag) > _parse_version(CURRENT_VERSION),
+        "release_url": release_url,
+        "release_notes": "",
+        "published_at": "",
+        "assets": [],
+    }
+    if warning:
+        payload["warning"] = warning
+    return payload
+
+
+def _cache_update_payload(payload: dict[str, Any]) -> None:
+    _update_check_cache["ts"] = time.time()
+    _update_check_cache["payload"] = dict(payload)
+
+
+def _cached_update_payload(max_age: int = _UPDATE_CACHE_TTL_SECONDS) -> dict[str, Any] | None:
+    payload = _update_check_cache.get("payload")
+    ts = float(_update_check_cache.get("ts") or 0.0)
+    if not isinstance(payload, dict) or time.time() - ts > max_age:
+        return None
+    cached = dict(payload)
+    cached["cached"] = True
+    return cached
+
+
+def _is_github_rate_limit(exc: Exception) -> bool:
+    if not isinstance(exc, urllib.error.HTTPError):
+        return "rate limit" in str(exc).lower()
+    if exc.code not in {403, 429}:
+        return False
+    if (exc.headers.get("X-RateLimit-Remaining") or "") == "0":
+        return True
+    try:
+        body = exc.read(4096).decode("utf-8", "replace").lower()
+    except Exception:
+        body = ""
+    return "rate limit" in body or "api rate limit exceeded" in body
+
+
+def _fetch_latest_release_via_api() -> dict[str, Any]:
+    req = urllib.request.Request(RELEASES_API, headers=_github_headers(api=True))
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return _release_payload_from_api(data)
+
+
+def _fetch_latest_release_via_page(warning: str = "") -> dict[str, Any]:
+    req = urllib.request.Request(RELEASES_PAGE, headers=_github_headers(api=False))
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        final_url = resp.geturl()
+        body = resp.read(512_000).decode("utf-8", "replace")
+    match = re.search(r"/releases/tag/([^/?#\"']+)", final_url) or re.search(
+        rf"/{re.escape(GITHUB_OWNER)}/{re.escape(GITHUB_REPO)}/releases/tag/([^/?#\"']+)",
+        body,
+    )
+    latest_tag = match.group(1) if match else ""
+    return _release_payload_from_tag(latest_tag, warning=warning)
+
+
+@bp.get("/api/system/check-update")
+def check_update():
+    """Query GitHub Releases for the latest version with cache and fallback."""
+    cached = _cached_update_payload()
+    if cached is not None:
+        return jsonify(cached)
+
+    try:
+        payload = _fetch_latest_release_via_api()
+        _cache_update_payload(payload)
+        return jsonify(payload)
+    except Exception as exc:
+        rate_limited = _is_github_rate_limit(exc)
+        log.warning("[check-update] GitHub API failed: %s", exc)
+        cached = _cached_update_payload(max_age=24 * 60 * 60)
+        if cached is not None:
+            cached["stale"] = True
+            cached["warning"] = "GitHub API 暂时受限，已显示最近一次成功检查的结果。"
+            return jsonify(cached)
+        if rate_limited:
+            try:
+                payload = _fetch_latest_release_via_page(
+                    warning="GitHub API 已限流，已通过 Releases 页面确认最新版本；资产列表可能暂不可用。"
+                )
+                _cache_update_payload(payload)
+                return jsonify(payload)
+            except Exception as fallback_exc:
+                log.warning("[check-update] GitHub releases page fallback failed: %s", fallback_exc)
+        message = (
+            "GitHub API 请求次数已达上限，请稍后重试；也可以直接打开 Releases 页面查看最新版本。"
+            if rate_limited else "检查更新失败，请稍后重试。"
+        )
+        return jsonify({
+            "ok": False,
+            "code": "github_rate_limited" if rate_limited else "github_update_check_failed",
+            "error": message,
+            "current_version": CURRENT_VERSION,
+            "release_url": RELEASES_PAGE,
+            "retryable": True,
+        })
 
 
 @bp.post("/api/system/update")
@@ -506,6 +613,229 @@ def proxy_image():
     code = getattr(last_exc, "code", 502)
     return jsonify({"error": f"Remote server error: {last_exc}"}), 502
 
+
+
+# -- BGE embedding model download ---------------------------------------------
+
+_BGE_REPO = "BAAI/bge-small-zh-v1.5"
+_BGE_FILES = [
+    "config.json",
+    "pytorch_model.bin",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "vocab.txt",
+]
+_bge_download_lock = threading.Lock()
+_bge_download_state: dict[str, Any] = {"active": False}
+
+
+def _bge_model_dir() -> Path:
+    """Return the snapshot directory where BGE model files are expected."""
+    cache = Path(
+        os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
+    ) / "baa_models" / "models--BAAI--bge-small-zh-v1.5" / "snapshots"
+    if cache.exists():
+        dirs = [d for d in cache.iterdir() if d.is_dir()]
+        if dirs:
+            return dirs[0]
+    return cache / "7999e1d3359715c523056ef9478215996d"
+
+
+def _bge_files_complete() -> bool:
+    """Check whether all required BGE model files exist on disk."""
+    d = _bge_model_dir()
+    return all((d / f).exists() for f in _BGE_FILES)
+
+
+@bp.get("/api/system/bge-model/status")
+def bge_model_status():
+    """Check whether the BGE embedding model is available locally."""
+    neural = False
+    init_error = ""
+    try:
+        from Function.Knowledge.neural_embedder import is_neural, get_init_error
+        neural = is_neural()
+        if not neural:
+            init_error = get_init_error()
+    except Exception as exc:
+        init_error = str(exc)
+    return jsonify({
+        "ok": True,
+        "installed": _bge_files_complete(),
+        "neural_active": neural,
+        "init_error": init_error,
+        "model_dir": str(_bge_model_dir()),
+    })
+
+
+@bp.post("/api/system/bge-model/download")
+def bge_model_download():
+    """Download BGE-small-zh model files from HuggingFace.
+
+    Runs synchronously; the browser shows a spinner during the ~91 MB download.
+    Returns the result once all files are written to disk.
+    """
+    if not _bge_download_lock.acquire(blocking=False):
+        return jsonify({"ok": False, "error": "Download already in progress."}), 409
+
+    _bge_download_state["active"] = True
+    try:
+        target = _bge_model_dir()
+        target.mkdir(parents=True, exist_ok=True)
+
+        base = f"https://huggingface.co/{_BGE_REPO}/resolve/main"
+        errors = []
+        for fname in _BGE_FILES:
+            dst = target / fname
+            if dst.exists() and dst.stat().st_size > 0:
+                continue
+            url = f"{base}/{fname}"
+            try:
+                req = urllib.request.Request(url, headers={
+                    "User-Agent": "Data-Analysis-Agent/1.0",
+                })
+                with urllib.request.urlopen(req, timeout=300) as resp, open(dst, "wb") as f:
+                    shutil.copyfileobj(resp, f)
+                log.info("[bge-download] %s - %.1f KB", fname, dst.stat().st_size / 1024)
+            except Exception as exc:
+                log.error("[bge-download] %s failed: %s", fname, exc)
+                errors.append(f"{fname}: {exc}")
+
+        if errors:
+            return jsonify({
+                "ok": False,
+                "error": "Some files failed: " + "; ".join(errors),
+                "downloaded": [f for f in _BGE_FILES if (target / f).exists()],
+            })
+
+        # Re-init neural embedder so it picks up newly downloaded files.
+        try:
+            from Function.Knowledge.neural_embedder import reset_for_newly_installed_model
+            reset_for_newly_installed_model()
+            from Function.Knowledge.neural_embedder import is_neural
+            neural_now = is_neural()
+        except Exception:
+            neural_now = False
+
+        return jsonify({
+            "ok": True,
+            "message": "BGE-small-zh model downloaded. Neural embedding activated.",
+            "neural_active": neural_now,
+            "model_dir": str(target),
+        })
+    finally:
+        _bge_download_state["active"] = False
+        _bge_download_lock.release()
+
+
+@bp.get("/api/system/embed-mode")
+def embed_mode_get():
+    """Return current embedding mode and status info."""
+    try:
+        from Function.Knowledge.neural_embedder import get_embed_info, is_neural, get_init_error
+        info = get_embed_info()
+        return jsonify({
+            "ok": True,
+            "mode": info.get("mode", "auto"),
+            "active": info.get("active", "hash"),
+            "dim": info.get("dim", 384),
+            "model": info.get("model", ""),
+            "cloud_url": info.get("cloud_url", ""),
+            "cloud_available": info.get("cloud_available", False),
+            "cloud_configured": info.get("cloud_configured", False),
+            "cloud_status": info.get("cloud_status", "unavailable"),
+            "local_available": info.get("local_available", False),
+            "installed": _bge_files_complete(),
+            "neural_active": is_neural(),
+            "init_error": get_init_error(),
+        })
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@bp.post("/api/system/embed-mode")
+def embed_mode_set():
+    """Set the embedding mode at runtime.
+
+    Body: {"mode": "auto|cloud|local|hash"}
+    """
+    data = request.get_json(silent=True) or {}
+    mode = str(data.get("mode", "")).strip().lower()
+    if mode not in ("auto", "cloud", "local", "hash"):
+        return jsonify({"ok": False, "error": "Invalid mode. Use: auto, cloud, local, hash"}), 400
+    try:
+        from Function.Knowledge.neural_embedder import set_embed_mode, get_embed_info
+        set_embed_mode(mode)
+        info = get_embed_info()
+        return jsonify({
+            "ok": True,
+            "mode": info.get("mode", mode),
+            "active": info.get("active", ""),
+            "dim": info.get("dim", 0),
+            "model": info.get("model", ""),
+            "cloud_available": info.get("cloud_available", False),
+            "cloud_configured": info.get("cloud_configured", False),
+            "cloud_status": info.get("cloud_status", "unavailable"),
+            "local_available": info.get("local_available", False),
+        })
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@bp.get("/api/system/embed-cloud-config")
+def embed_cloud_config_get():
+    from Function.Knowledge.neural_embedder import get_cloud_config
+    return jsonify({"ok": True, **get_cloud_config()})
+
+
+@bp.put("/api/system/embed-cloud-config")
+def embed_cloud_config_set():
+    data = request.get_json(silent=True) or {}
+    try:
+        from Function.Knowledge.neural_embedder import configure_cloud
+        config = configure_cloud(
+            url=data.get("url", ""),
+            model=data.get("model", ""),
+            token=data.get("token"),
+            clear_token=bool(data.get("clear_token", False)),
+            verify=bool(data.get("test", False)),
+        )
+        tested = config.pop("test", None)
+        return jsonify({"ok": True, **config, "test": tested})
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        log.warning("[embed-cloud-config] failed: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 502
+
+
+@bp.post("/api/system/embed-rebuild")
+def embed_rebuild():
+    """Incrementally rebuild changed knowledge and Skill vectors."""
+    try:
+        from Function.Knowledge.knowledge_base import KnowledgeBase, normalize_user_id
+        from agent.skill_discovery import rebuild_skill_embeddings
+        from agent.skills import SkillLoader
+
+        uid = normalize_user_id(request.args.get("user_id", ""))
+        kb = KnowledgeBase(user_id=uid)
+        try:
+            result = kb.rebuild_all_embeddings()
+        finally:
+            kb.close()
+        skills = [skill.to_public_dict() for skill in SkillLoader().load_all().values()]
+        result.setdefault("document_chunks", result.get("rebuilt", 0))
+        result.setdefault("structured_records", 0)
+        result["skills"] = rebuild_skill_embeddings(skills)
+        result["total_rebuilt"] = (
+            result.get("document_chunks", 0)
+            + result.get("structured_records", 0)
+            + result.get("skills", 0)
+        )
+        return jsonify({"ok": True, **result})
+    except Exception as exc:
+        log.error("[embed-rebuild] failed: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 @bp.get("/api/instruction")
 def get_instruction():

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$')]
-    [string]$Version = '1.0.0',
+    [string]$Version = '1.2.0',
     [string]$WorkRoot,
     [string]$InnoCompiler,
     [switch]$PrepareOnly

@@ -7,11 +7,20 @@ import { getUiIsland } from "../core/ui-registry.js";
     deepseek:   { label: "DeepSeek",         icon: COMMON_ICON },
     openai:     { label: "OpenAI / ChatGPT", icon: COMMON_ICON },
     atlascloud: { label: "AtlasCloud",       icon: COMMON_ICON },
+    ollama:     { label: "Ollama (本地)",     icon: COMMON_ICON, local: true },
   };
   const MODEL_PICKER = {
     index: 0,
     models: [],
   };
+
+  // 判断 base_url 是否本地地址（与后端 _is_local_base_url 保持一致）
+  function _isLocalBaseUrl(url) {
+    if (!url) return false;
+    const u = String(url).toLowerCase();
+    return ["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "0:0:0:0:0:0:0:1"]
+      .some(m => u.includes(m));
+  }
 
   // 首次加载标志 — loadModels 第一次运行时为 true，此后为 false。
   // 只有首次才允许自动选中第一个模型；后续刷新（保存配置、删除模型等触发）
@@ -393,15 +402,33 @@ import { getUiIsland } from "../core/ui-registry.js";
 
   async function addCustomModel() {
     const vs = getUiIsland("settings");
-    if (!vs || !vs.isAvailable()) {
-      console.warn("[models] vueSettings unavailable, addCustomModel skipped");
-      return;
+
+    // Fallback: 从静态 DOM 读值（vueSettings 未加载时）
+    function _domValues() {
+      const _v = (id) => { const el = document.getElementById(id); return el ? el.value : ""; };
+      const _chk = (id) => { const el = document.getElementById(id); return el ? el.checked : false; };
+      return {
+        name: _v("ac-name"), url: _v("ac-url"), model: _v("ac-model"),
+        key: _v("ac-key"), ctx: _v("ac-ctx"), output: _v("ac-output"),
+        think: _chk("ac-think"), budget: _v("ac-budget"), editingKey: null,
+      };
     }
-    const f = vs.getFormValues();
+    function _setMsg(err, ok) {
+      const e = document.getElementById("ac-err");
+      const o = document.getElementById("ac-ok");
+      if (e) e.textContent = err || "";
+      if (o) o.textContent = ok || "";
+    }
+    function _closeForm() {
+      const f = document.getElementById("add-custom-form");
+      if (f) f.classList.remove("show");
+    }
+
+    const f = (!vs || !vs.isAvailable()) ? _domValues() : vs.getFormValues();
     const ctxRaw    = f.ctx.trim();
     const outRaw    = f.output.trim();
     const budgetRaw = f.budget.trim();
-    vs.setFormMsg("", "");
+    (vs ? vs.setFormMsg : _setMsg)("", "");
 
     if (f.editingKey) {
       const body = {
@@ -420,12 +447,12 @@ import { getUiIsland } from "../core/ui-registry.js";
       });
       const d = await r.json();
       if (d.error) {
-        vs.setFormMsg(d.error, "");
+        (vs ? vs.setFormMsg : _setMsg)(d.error, "");
       } else {
-        vs.setFormMsg("", d.message || t('settings.save_ok'));
+        (vs ? vs.setFormMsg : _setMsg)("", d.message || t('settings.save_ok'));
         state._editingCustomProvider = null;
         await Promise.all([loadModels(), loadBuiltinProviders()]);
-        setTimeout(() => vs.closeForm(), 1200);
+        setTimeout(() => { vs ? vs.closeForm() : _closeForm(); }, 1200);
       }
       return;
     }
@@ -446,22 +473,68 @@ import { getUiIsland } from "../core/ui-registry.js";
     });
     const d = await r.json();
     if (d.error) {
-      vs.setFormMsg(d.error, "");
+      (vs ? vs.setFormMsg : _setMsg)(d.error, "");
     } else {
-      vs.setFormMsg("", d.message);
+      (vs ? vs.setFormMsg : _setMsg)("", d.message);
       await Promise.all([loadModels(), loadBuiltinProviders()]);
-      setTimeout(() => vs.closeForm(), 1200);
+      setTimeout(() => { vs ? vs.closeForm() : _closeForm(); }, 1200);
     }
   }
 
   function toggleAddCustom() {
-    const vs = getUiIsland("settings");
-    if (!vs || !vs.isAvailable()) {
-      console.warn("[models] vueSettings unavailable, toggleAddCustom skipped");
+    console.log("[models] toggleAddCustom entered");
+    // 防抖：防止同一物理点击触发两个 listener（缓存导致旧脚本重复绑定）
+    if (state._toggleAddCustomPending) {
+      console.log("[models] toggleAddCustom debounced, ignore");
       return;
     }
-    state._editingCustomProvider = null;
-    vs.toggleForm();
+    state._toggleAddCustomPending = true;
+    setTimeout(() => { state._toggleAddCustomPending = false; }, 150);
+
+    try {
+      const vs = getUiIsland("settings");
+      console.log("[models] toggleAddCustom vs:", !!vs, "available:", vs?.isAvailable?.());
+      if (!vs || !vs.isAvailable()) {
+        console.log("[models] toggleAddCustom fallback, island available:", !!vs);
+        // Fallback: 直接操作静态 DOM（vueSettings 未加载时的降级路径）
+        state._editingCustomProvider = null;
+        const form = document.getElementById("add-custom-form");
+        console.log("[models] toggleAddCustom fallback, form found:", !!form, "classList:", form?.className);
+        if (!form) return;
+        const isOpen = form.classList.toggle("show");
+        console.log("[models] toggleAddCustom fallback, isOpen now:", isOpen, "form.display:", getComputedStyle(form).display);
+        // 清空表单值（添加模式）
+        ["ac-name","ac-url","ac-model","ac-key","ac-ctx","ac-output","ac-budget"].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) { el.value = ""; }
+        });
+        const cb = document.getElementById("ac-think");
+        if (cb) cb.checked = false;
+        const row = document.getElementById("ac-budget-row");
+        if (row) row.classList.add("hidden");
+        const errEl = document.getElementById("ac-err");
+        const okEl  = document.getElementById("ac-ok");
+        if (errEl) errEl.textContent = "";
+        if (okEl)  okEl.textContent = "";
+        if (isOpen) {
+          requestAnimationFrame(() => {
+            const modal = form.closest(".modal");
+            if (modal && modal.scrollHeight > modal.clientHeight) {
+              modal.scrollTop = modal.scrollHeight;
+            } else {
+              form.scrollIntoView({ behavior: "smooth", block: "end" });
+            }
+          });
+        }
+        return;
+      }
+      state._editingCustomProvider = null;
+      console.log("[models] toggleAddCustom calling vs.toggleForm()");
+      vs.toggleForm();
+      console.log("[models] toggleAddCustom vs.toggleForm() returned");
+    } catch (err) {
+      console.error("[models] toggleAddCustom error:", err);
+    }
   }
 
   async function saveBuiltin(key) {
@@ -480,7 +553,9 @@ import { getUiIsland } from "../core/ui-registry.js";
     const think    = f.think;
     const budgetRaw = f.budget.trim();
 
-    if (!apiKey) {
+    // 本地 provider（ollama 等）无需 API Key；其余 provider 必填
+    const isLocalProvider = key === "ollama" || _isLocalBaseUrl(baseUrl);
+    if (!apiKey && !isLocalProvider) {
       vs.setProviderStatus(key, "err", t('settings.api_key_empty'));
       return;
     }

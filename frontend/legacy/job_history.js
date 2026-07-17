@@ -165,10 +165,11 @@ import { ensureUiIsland } from "../features/vue-app.js";
     acceptEvent(event);
   }
 
-  async function open() {
+  async function open(jobId = "") {
     const vue = await ensureUiIsland("jobHistory");
     vue?.setOpen(true);
     await refresh();
+    if (jobId) vue?.focus?.(jobId);
   }
 
   export {

@@ -305,7 +305,9 @@ def _parse_sheets_parallel(
         return result
 
     results = {}
-    with ThreadPoolExecutor(max_workers=min(4, len(sheet_names))) as pool:
+    # Excel sheet parsing is IO + CPU mixed; calamine (Rust) releases the GIL,
+    # so real parallelism is possible. 4 → 8 capped by CPU count for safety.
+    with ThreadPoolExecutor(max_workers=min(8, len(sheet_names))) as pool:
         futures = {pool.submit(_work, sheet): sheet for sheet in sheet_names}
         done = 0
         for future in as_completed(futures):

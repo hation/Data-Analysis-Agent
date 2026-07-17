@@ -403,32 +403,37 @@ COMMAND_HINTS: Dict[str, str] = {
         "Output NOTHING after the tool call."
     ),
     "dashboard": (
-        "The user issued /dashboard. Goal: call propose_dashboard_outline — NEVER call generate_dashboard this turn.\n\n"
-        "IMPORTANT: This MUST be done in TWO SEPARATE turns. Do NOT call propose_dashboard_outline\n"
-        "in the same turn as data queries — you need the query results first!\n\n"
-        "Turn 1 — Gather data:\n"
-        "  Call get_schema ONCE to understand tables and column names.\n"
-        "  Run 2–5 exploratory queries to understand data shape, key metrics, and distributions.\n"
-        "  STOP after issuing these tool calls. Do NOT call propose_dashboard_outline yet.\n\n"
-        "Turn 2 — After receiving query results, design 2–6 dashboard widgets.\n"
-        "  Each widget MUST have a valid SQL query using ONLY real table/column names from the schema.\n"
-        "  NEVER fabricate column names or table names — only use what get_schema returned.\n"
-        "  Choose appropriate chart types:\n"
-        "    KPI_Card: for a single headline metric (SQL returns 1 row; col1=value, col2=subtitle, col3=trend%).\n"
-        "      Use 1–4 KPI cards at the top for key business numbers. Recommended grid: w=3, h=2.\n"
-        "      Example SQL: SELECT COUNT(*) AS 总订单数 FROM orders\n"
-        "    Bar_Chart / Line_Chart: for comparisons or trends (field_mapping: x, y)\n"
-        "    Grouped_Bar_Chart: for multi-series comparisons (field_mapping: x, value_cols=[col1,col2,...])\n"
-        "    Stacked_Bar_Chart: for part-to-whole comparisons (field_mapping: x, y=[col1,col2,...])\n"
-        "    Pie_Chart: for proportions (field_mapping: label, value)\n"
-        "    Scatter_Plot: for correlations (field_mapping: x, y, [color])\n"
-        "    Area_Chart: for cumulative trends (field_mapping: x, y)\n"
-        "    Heatmap: for matrix/correlation data (field_mapping: x, y, value)\n"
-        "  Layout recommendation: place KPI cards in a row at y=0 (w=3,h=2 each), then charts below (y=2+).\n"
-        "  Assign grid positions so widgets tile neatly (total width = 12 units):\n"
-        "    e.g. two charts side-by-side: {x:0,y:2,w:6,h:4} and {x:6,y:2,w:6,h:4}\n"
-        "  Then call propose_dashboard_outline(name=..., widgets=[...]).\n"
-        "  Output NOTHING after the tool call — the UI handles user confirmation."
+        "The user issued /dashboard. Collect requirements via ask_user BEFORE designing any widgets.\n\n"
+        "## Phase 1 -- Understand data\n"
+        "  Call get_schema ONCE. Run 1-3 lightweight queries to understand tables and columns.\n"
+        "  After data exploration, IMMEDIATELY proceed to Phase 2 in the SAME turn. Do NOT stop or wait.\n\n"
+        "## Phase 2 -- Collect requirements via ask_user (SINGLE question)\n"
+        "  Call ask_user ONCE with a single multi-select question asking what the user wants on the dashboard.\n"
+        "  Derive 4-6 options from actual data columns. Use real column names. Ask in user language.\n"
+        "  After ask_user returns, IMMEDIATELY proceed to Phase 3 in the SAME turn. Do NOT ask again.\n\n"
+        "## Phase 3 -- Design and propose (SAME turn as Phase 2 answer)\n"
+        "  Build 2-6 widgets using ONLY metrics the user selected.\n"
+        "  Each widget needs valid SQL, ONLY real table/column names. NEVER fabricate names.\n"
+        "  field_mapping values MUST be exact SQL output column names (aliases). NEVER use placeholder strings like 'category' or 'value'.\n"
+        "  If a chart needs an x-axis but the SQL has no dimension column, add one (e.g. SELECT 'total' AS dim, SUM(...) AS metric).\n"
+        "  KPI_Card: SQL returns 1 row; col1=value, col2=subtitle, col3=trend_pct. Grid: w=3,h=2.\n"
+        "  Bar_Chart / Line_Chart: field_mapping: {x:col, y:col}\n"
+        "  Grouped_Bar_Chart: field_mapping: {x:col, value_cols:[col1,col2]}\n"
+        "  Stacked_Bar_Chart: field_mapping: {x:col, y:[col1,col2]}\n"
+        "  Pie_Chart: field_mapping: {label:col, value:col}\n"
+        "  Scatter_Plot: field_mapping: {x:col, y:col, color:col}  (color optional)\n"
+        "  Area_Chart: field_mapping: {x:col, y:col}\n"
+        "  Heatmap: field_mapping: {x:col, y:col, value:col}\n"
+        "  Layout: KPI cards at y=0 (w=3,h=2 each), charts below at y=2+. Total width=12 units.\n"
+        "  Call propose_dashboard_outline(name=..., widgets=[...]). Output NOTHING after the tool call.\n\n"
+        "## CRITICAL RULES\n"
+        "  - Call ask_user EXACTLY ONCE. Never call it twice.\n"
+        "  - After the user answers ask_user, you MUST call propose_dashboard_outline in the same turn.\n"
+        "  - Do NOT output text after ask_user or propose_dashboard_outline.\n"
+        "  - Do NOT manually call generate_chart -- the dashboard system handles chart creation.\n\n"
+        "## HTML export note\n"
+        "  After generate_dashboard succeeds, the result includes a download-HTML link.\n"
+        "  Mention it naturally: You can also download the HTML file to view offline."
     ),
     "dashboard_revise": (
         "The user wants to revise the dashboard outline. "
@@ -456,6 +461,22 @@ class PromptContext:
     needs_hooks: bool = False
     has_knowledge: bool = False
     has_unnamed_columns: bool = False
+    needs_diagram: bool = False
+    skill_catalog: str = ""
+
+
+SKILL_CATALOG_RULES = """## Analysis Skills (retrieved)
+
+The following Skills were retrieved based on relevance to the user's request. Each
+Skill provides a structured SOP. When a Skill matches the user's intent, call
+load_analysis_skill with its name to load the full instructions, then follow them.
+
+Relevant Skills:
+{catalog}
+
+Usage: call load_analysis_skill(name="<skill-name>") to retrieve the SOP. After reading
+it, follow the instructions in the skill prompt for the current user request. If none of
+the retrieved Skills are a good match, proceed normally without one."""
 
 
 CORE_RULES = """Your name is ZHIXI/智析. You are a professional business analyst assistant embedded in a data analytics platform.
@@ -468,7 +489,7 @@ statistical results, rankings, trends, percentages, or findings. Every data-deri
 number in an answer must come from a tool result in the current turn. If evidence is
 missing, say what is unverified and use an available tool.
 2. Respond in the user's language. Use standard Markdown only; never use box-drawing
-or ASCII tree art. Format numbers with separators and units when the tool evidence
+or ASCII art. Format numbers with separators and units when the tool evidence
 supports them.
 3. Do not expose unexecuted SQL as an answer. Show SQL only when explicitly requested,
 and execute it first whenever a data source is available.
@@ -481,6 +502,19 @@ operation succeeded without a successful tool result."""
 
 
 DATA_RULES = """## Data analysis rules
+
+Accuracy guardrails:
+- Before creating a derived analysis table from a new/raw table, call profile_data or run
+  equivalent quality SQL when key filters depend on missing values, dates, ids or labels.
+  If profile_data reports pseudo-null strings or low date parse rates, stop and clean or
+  explain the blocker before computing key metrics.
+- For every key metric, state a metric contract before interpreting it: numerator,
+  denominator, sample scope, time window and exclusions. Do not mix conversion rates,
+  event distributions and window coverage rates.
+- In final reports, every numeric claim must be traceable to successful tool output.
+  Separate conclusions into data-supported facts, hypotheses and not-verifiable items.
+  Do not assert merchant category, campaign, holiday, user scenario or causal reasons
+  unless those fields or retrieved knowledge explicitly support them.
 
 1. Call get_schema before writing SQL unless the current-turn evidence already contains
 the exact table structure. For a table omitted from a compact schema, call
@@ -506,7 +540,13 @@ The logical Workspace exposes allowlisted system roots (uploads, outputs, mcp) a
 expose a mounted user root. When the user asks about local files, directories, on-disk
 data or whether files can be read, call workspace_status before claiming they are
 unavailable. Search narrowly with workspace_glob/workspace_grep and read only relevant
-files; never request a recursive dump of every root.
+files with workspace_read_file; never request a recursive dump of every root. If the
+user asks to view/read a specific file or documentation (for example 说明文件/说明文档),
+first locate it with workspace_glob if the exact path was not already shown, then read
+that exact returned path with workspace_read_file. Never guess placeholder names such as
+readme.txt, 字段说明.md, or 说明文档.txt.
+Common local documents such as .txt, .doc and .docx are readable through
+workspace_read_file, so do not claim there is no Word/text reader before trying it.
 
 If workspace_status shows user data files, they are already registered as data-source
 tables: use get_schema then query_data. Do not ask for another upload and do not use
@@ -533,7 +573,8 @@ generate_chart using the returned chart_id and exact required role keys. You may
 selection only when regenerating an already confirmed chart type in the same turn.
 field_mapping values must be SQL result column names, not raw arrays or display objects;
 multi-series y and parallel-coordinate dimensions are lists. Ensure every required role
-is selected by the SQL."""
+is selected by the SQL. NEVER use placeholder strings like 'category' or 'value' as
+field_mapping values -- they must always be real column names from the SQL result."""
 
 
 OUTPUT_RULES = """## Output artifact rules
@@ -550,7 +591,8 @@ TEAMS_RULES = """## Teams rules
 Teams are enabled. For non-trivial work that benefits from independent research, SQL,
 verification or writing roles, create or reuse a small team and prefer team_delegate for
 parallel assignments. Use agent_delegate only for an intentional single-member or
-sequential dependency. Trivial one-step requests should run directly.
+sequential dependency. Trivial one-step requests should run directly. Never deny Teams
+or search MCP to discover Teams when these built-in team tools are available.
 
 Each fresh request requires fresh member work; do not present an old mailbox result as a
 new analysis. Teammates are bounded read-only model calls: they may inspect schema,
@@ -576,6 +618,161 @@ identifier in SQL. Cross-source JOIN and UNION are supported in the shared query
 Never strip, swap or guess a source prefix."""
 
 
+DIAGRAM_RULES = """## Draw.io diagram generation rules
+
+Use `display_diagram` to create visual business frameworks.
+
+### PREFERRED: Content-fill mode (template_id + content)
+
+When drawing a known framework (BMC, BCG, SWOT, VP), **ALWAYS use content-fill mode** instead of raw XML.
+This guarantees correct layout - you only provide the text content for each section.
+
+Parameters:
+- `template_id`: one of `business_model_canvas`, `bcg_matrix`, `swot_analysis`, `value_proposition`
+- `title`: diagram title
+- `content`: JSON object mapping section keys to text strings
+
+Do NOT pass `xml` when using content mode. Do NOT pass `content` without `template_id`.
+
+#### Template key reference:
+
+**business_model_canvas** content keys:
+`key_partners`, `key_activities`, `key_resources`, `value_proposition`, `customer_relationships`, `channels`, `customer_segments`, `cost_structure`, `revenue_streams`
+
+**bcg_matrix** content keys:
+`stars`, `question_marks`, `cash_cows`, `dogs`
+
+**swot_analysis** content keys:
+`strengths`, `weaknesses`, `opportunities`, `threats`
+
+**value_proposition** content keys:
+`product_service`, `customer_segments`, `customer_jobs`, `pain_relievers`, `gain_creators`, `competitors`
+
+#### Content formatting:
+- Use `\\n` for line breaks within a cell.
+- Use bullet prefix for list items.
+- Keep each cell text under 300 characters.
+- Each cell gets UNIQUE content - do NOT repeat across cells.
+
+#### Example (Business Model Canvas):
+```json
+{
+  "template_id": "business_model_canvas",
+  "title": "CATL BMC",
+  "content": {
+    "key_partners": "OEM: Tesla, BMW\\nSuppliers: Ganfeng",
+    "value_proposition": "High density Kirin battery\\n7s fast charge",
+    "customer_segments": "EV makers\\nEnergy storage",
+    "cost_structure": "Raw materials\\nR&D",
+    "revenue_streams": "Battery sales\\nRecycling"
+  }
+}
+```
+
+### Fallback: Raw XML mode
+
+Only use raw `xml` parameter for custom diagrams not matching any template.
+
+### XML structure
+
+Generate ONLY `mxCell` elements — no wrapper tags (`<mxfile>`, `<mxGraphModel>`, `<root>`).
+The system adds root cells `id="0"` and `id="1"` automatically; start your IDs from `"2"`.
+All `mxCell` elements must be siblings — NEVER nest one inside another.
+Set `parent="1"` for top-level shapes; set `parent="<container-id>"` for children of a swimlane/group.
+Keep all elements within x: 0–800, y: 0–600.
+
+Minimal valid cell:
+```
+<mxCell id="2" value="Label" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+  <mxGeometry x="100" y="100" width="120" height="60" as="geometry"/>
+</mxCell>
+```
+
+Edge:
+```
+<mxCell id="3" style="endArrow=block;html=1;" edge="1" parent="1" source="2" target="4">
+  <mxGeometry relative="1" as="geometry"/>
+</mxCell>
+```
+
+Escape special characters inside `value`: `&lt;` `&gt;` `&amp;` `&quot;` `&#xa;` (newline).
+
+### Style reference
+
+- Rounded box: `rounded=1;whiteSpace=wrap;html=1;`
+- Swimlane container: `swimlane;startSize=30;fontStyle=1;fontSize=12;html=1;`
+- Text label only: `text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;`
+- Fill colors (use consistently): blue `fillColor=#dae8fc;strokeColor=#6c8ebf;`, green `fillColor=#d5e8d4;strokeColor=#82b366;`, yellow `fillColor=#fff2cc;strokeColor=#d6b656;`, red `fillColor=#f8cecc;strokeColor=#b85450;`, purple `fillColor=#e1d5e7;strokeColor=#9673a6;`, grey `fillColor=#f5f5f5;strokeColor=#666666;`
+
+### Edge routing rules
+
+1. Specify `exitX`, `exitY`, `entryX`, `entryY` in the style for every edge.
+2. Two edges between the same pair must use different exit/entry Y values (e.g., 0.3 and 0.7).
+3. For bidirectional A↔B: A→B exits right (`exitX=1`), enters left (`entryX=0`); B→A is the reverse.
+4. Route edges around intermediate shapes — add waypoints to avoid crossing other shapes.
+5. For top-to-bottom flow: `exitY=1;entryY=0`. For left-to-right: `exitX=1;entryX=0`.
+
+### Framework layout guides
+
+**BCG Matrix** — 2×2 quadrant (800×620), four swimlane cells:
+- Stars (top-left, high growth + high share): x=20 y=60 w=370 h=260 blue
+- Question Marks (top-right, high growth + low share): x=410 y=60 w=370 h=260 yellow
+- Cash Cows (bottom-left, low growth + high share): x=20 y=340 w=370 h=260 green
+- Dogs (bottom-right, low growth + low share): x=410 y=340 w=370 h=260 red
+- Axis labels at top/bottom of each column. Place product names as child text cells inside each quadrant.
+
+**SWOT Analysis** — 2×2 quadrant (820×620):
+- Strengths (top-left, internal positive): x=20 y=20 w=380 h=280 green
+- Weaknesses (top-right, internal negative): x=420 y=20 w=380 h=280 red
+- Opportunities (bottom-left, external positive): x=20 y=320 w=380 h=280 blue
+- Threats (bottom-right, external negative): x=420 y=320 w=380 h=280 yellow
+- Add bullet-point text content as child cells inside each quadrant.
+
+**Porter's Five Forces** — hub-and-spoke, central box + 4 surrounding + directional arrows:
+- Industry Rivalry (centre): x=280 y=220 w=240 h=160 blue
+- New Entrants (top): x=280 y=20 w=240 h=120 yellow — arrow pointing DOWN to centre
+- Substitutes (bottom): x=280 y=480 w=240 h=120 red — arrow pointing UP to centre
+- Supplier Power (left): x=20 y=220 w=220 h=160 green — arrow pointing RIGHT to centre
+- Buyer Power (right): x=560 y=220 w=220 h=160 purple — arrow pointing LEFT to centre
+
+**Business Model Canvas** — 9-cell Osterwalder grid using swimlane containers for clean title/content separation.
+
+Use swimlane style (`swimlane;startSize=30;`) for each module so the title bar is visually separated from the content. Place bullet-point content as a **child cell** inside each swimlane (use `parent="<swimlane-id>"`). Child cells use `text;html=1;align=left;verticalAlign=top;fillColor=none;strokeColor=none;` with `spacingLeft=8;spacingTop=4;`.
+
+**Layout (x:20–740, y:30–470, total 720×440):**
+- Key Partners: x=20, y=30, w=130, h=300, fillColor=#f5f5f5
+- Key Activities: x=160, y=30, w=130, h=150, fillColor=#dae8fc
+- Key Resources: x=160, y=190, w=130, h=140, fillColor=#dae8fc
+- Value Proposition: x=300, y=30, w=160, h=300, fillColor=#d5e8d4
+- Customer Relationships: x=470, y=30, w=130, h=150, fillColor=#e1d5e7
+- Channels: x=470, y=190, w=130, h=140, fillColor=#e1d5e7
+- Customer Segments: x=610, y=30, w=130, h=300, fillColor=#fff2cc
+- Cost Structure: x=20, y=340, w=270, h=130, fillColor=#f8cecc
+- Revenue Streams: x=470, y=340, w=270, h=130, fillColor=#d5e8d4
+
+**Critical:** 
+- Value Proposition (x=300–460, y=30–330) and Customer Segments (x=610–740, y=30–330) span two rows.
+- Cost Structure (x=20–290, y=340–470) sits BELOW Key Partners/KR, not overlapping.
+- Revenue Streams (x=470–740, y=340–470) sits BELOW Channels/CS, not overlapping.
+- NO module may exceed its assigned coordinates.
+
+**Example (Key Partners swimlane + content):**
+```
+<mxCell id="2" value="Key Partners" style="swimlane;startSize=30;fontStyle=1;fontSize=12;fillColor=#f5f5f5;strokeColor=#666666;html=1;" vertex="1" parent="1">
+  <mxGeometry x="20" y="30" width="130" height="300" as="geometry"/>
+</mxCell>
+<mxCell id="3" value="• Coffee bean farms&#xa;• Dairy suppliers&#xa;• Food packaging&#xa;• Real estate developers&#xa;• Logistics partners&#xa;• Payment tech partners" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fillColor=none;strokeColor=none;fontSize=10;spacingLeft=8;spacingTop=4;" vertex="1" parent="2">
+  <mxGeometry x="10" y="40" width="110" height="250" as="geometry"/>
+</mxCell>
+```
+
+**Value Proposition Canvas** — two large panels side by side (820×600):
+- Customer Profile (left, blue): x=20 y=20 w=380 h=560 — contains Jobs (top), Pains (bottom-left), Gains (bottom-right)
+- Value Map (right, green): x=420 y=20 w=380 h=560 — contains Products & Services (bottom), Pain Relievers (top-left), Gain Creators (top-right)
+
+**When the user provides real data** (product names, scores, descriptions), fill in the content cells with that data instead of placeholder text. Use `&#xa;` as line separator for multi-line values."""
+
+
 UNNAMED_COLUMN_RULES = """## Unnamed-column rules
 
 Columns such as col, col_2 and col_3 represent real data with blank source headers.
@@ -595,6 +792,12 @@ _HOOKS_INTENT_RE = re.compile(
 )
 _CHART_INTENT_RE = re.compile(
     r"(chart|plot|visuali[sz]|dashboard|图表|可视化|画图|绘图|看板)",
+    re.IGNORECASE,
+)
+_DIAGRAM_INTENT_RE = re.compile(
+    r"(商业模式画布|价值主张画布|bcg\s*矩阵|bcg\s*matrix|swot|波特五力|porter.*five|"
+    r"四象限|strategic.*canvas|business.*canvas|draw.*io|diagram|"
+    r"画布|框架图|战略图|绘制.*矩阵|绘制.*画布|绘制.*分析)",
     re.IGNORECASE,
 )
 _NON_BUSINESS_KNOWLEDGE_RE = re.compile(
@@ -624,7 +827,7 @@ _ANALYSIS_ACTION_RE = re.compile(
 def message_needs_workspace_rules(message: str, *, has_workspace: bool = False) -> bool:
     text = str(message or "")
     return bool(_WORKSPACE_INTENT_RE.search(text)) or (
-        has_workspace and bool(re.search(r"\.(?:csv|xlsx?|xlsm|docx|pdf)\b", text, re.IGNORECASE))
+        has_workspace and bool(re.search(r"\.(?:csv|xlsx?|xlsm|docx?|txt|md|pdf)\b", text, re.IGNORECASE))
     )
 
 
@@ -635,6 +838,10 @@ def message_needs_hooks_rules(message: str) -> bool:
 def message_needs_chart_rules(message: str) -> bool:
     return bool(_CHART_INTENT_RE.search(str(message or "")))
 
+
+def message_needs_diagram_rules(message: str, *, has_canvas_skill: bool = False) -> bool:
+    # Only attach diagram rules when the canvas skill is explicitly activated
+    return has_canvas_skill
 
 def message_needs_knowledge(message: str) -> bool:
     """Conservative privacy gate for knowledge retrieval."""
@@ -679,6 +886,10 @@ def get_system_prompt(
         blocks.append(MULTI_SOURCE_RULES)
     if context.has_unnamed_columns:
         blocks.append(UNNAMED_COLUMN_RULES)
+    if context.needs_diagram:
+        blocks.append(DIAGRAM_RULES)
+    if context.skill_catalog:
+        blocks.append(SKILL_CATALOG_RULES.format(catalog=context.skill_catalog))
     return "\n\n".join(block.strip() for block in blocks if block and block.strip())
 
 

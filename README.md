@@ -67,7 +67,7 @@
 
 # 📝 更新日志
 
-> **当前版本 [`v1.1.0 LTS`](https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest)** · 2026 年 7 月 2 日 · [📦 下载安装包](https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest)
+> **当前版本 [`v1.2.0 LTS`](https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest)** · 2026 年 7 月 17 日 · [📦 下载安装包](https://github.com/Zafer-Liu/Data-Analysis-Agent/releases/latest)
 
 本次升级新增 **斜杠命令系统、文件时光回退、Hooks 自动化、AI 预填建议** 等多项功能，同时全面提升聊天界面与 Dashboard 的交互体验。
 1. 全新斜杠命令系统
@@ -319,7 +319,7 @@ https://github.com/user-attachments/assets/4cc6f9d7-52d9-42c5-b3e7-059019f67275
 
 | 平台 | 文件 |
 |------|------|
-| Windows | `BusinessAnalyticsAgent_v1.0.0_LTS.exe` |
+| Windows | `BusinessAnalyticsAgent_v1.2.0_LTS.exe` |
 
 > **前置要求：Python 3.10+、Windows 10 / 11 64 位。**
 

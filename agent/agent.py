@@ -13,6 +13,7 @@ import logging
 import time
 import ast
 import copy
+import re
 from typing import Iterator, List, Dict, Any, Optional, Tuple
 
 from .prompts      import (
@@ -20,6 +21,7 @@ from .prompts      import (
     build_temp_prompt_section,
     get_system_prompt,
     message_needs_chart_rules,
+    message_needs_diagram_rules,
     message_needs_hooks_rules,
     message_needs_knowledge,
     message_needs_workspace_rules,
@@ -29,6 +31,7 @@ from .activation   import ActivationContext, INTERNAL_ACTIONS
 from .commands     import (
     CommandDef, CommandDispatcher, CommandLoader, CommandRegistry,
 )
+from dataclasses import replace
 from .skills       import SkillDef, SkillExecutor, SkillLoader
 from .tools.schemas import AGENT_TOOLS, get_tools_with_mcp
 from .tools.business import DataToolsMixin, ExportToolsMixin
@@ -71,6 +74,10 @@ from .mcp_discovery import (
     mcp_catalog_version,
     search_mcp_catalog,
 )
+from .skill_discovery import (
+    build_skill_catalog,
+    search_skill_catalog,
+)
 from LLM.llm_config_manager import (
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_MAX_OUTPUT_TOKENS,
@@ -92,7 +99,7 @@ log = logging.getLogger(__name__)
 
 _PROPOSE_CMDS = (
     "ppt", "ppt_revise", "export", "excel_revise",
-    "report", "report_revise", "dashboard", "dashboard_revise",
+    "report", "report_revise",
 )
 
 
@@ -105,6 +112,71 @@ def _as_bool_arg(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"true", "1", "yes"}
     return False
+
+
+def _parse_delegated_tool_args(raw_args: Any) -> Dict[str, Any]:
+    """Parse delegated tool-call arguments into a safe JSON-serializable dict."""
+    if isinstance(raw_args, dict):
+        parsed = raw_args
+    else:
+        text = str(raw_args or "{}").strip() or "{}"
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            try:
+                parsed = ast.literal_eval(text)
+            except (ValueError, SyntaxError):
+                parsed = {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _strip_delegated_tool_footer(content: str) -> str:
+    text = str(content or "").strip()
+    for marker in ("\n\n---\n工具使用：", "\n---\n工具使用："):
+        if marker in text:
+            return text.split(marker, 1)[0].strip()
+    if text.startswith("---\n工具使用：") or text.startswith("工具使用："):
+        return ""
+    return text
+
+
+def _delegated_result_invalid_reason(
+    content: str,
+    tool_events: list[dict] | None = None,
+) -> str:
+    body = _strip_delegated_tool_footer(content)
+    if not body:
+        return "delegated member produced no final Markdown result"
+    if "成员工具调用已达到上限，未能生成完整最终总结" in body:
+        return "delegated member exhausted tool rounds without a final result"
+    if len(body) < 40 and tool_events:
+        return "delegated member final result is too short to verify"
+    lines=[line.strip() for line in body.splitlines() if line.strip()]
+    last_line=lines[-1] if lines else ""
+    if body.count("```") % 2:
+        return "delegated member result has an unclosed code block"
+    if last_line.startswith("|") and last_line.count("|") < 3:
+        return "delegated member result appears truncated inside a Markdown table"
+    return ""
+
+
+def _quality_review_blocking_reason(content: str) -> str:
+    text = str(content or "")
+    blocking_markers = (
+        "严重缺失",
+        "本轮团队输出对外实质为空",
+        "无法验证",
+        "不能验证",
+        "必须重做",
+        "不建议采信",
+        "严重错误",
+        "核心口径错误",
+        "工具失败被包装成成功",
+    )
+    for marker in blocking_markers:
+        if marker in text:
+            return f"quality reviewer reported blocking issue: {marker}"
+    return ""
 
 
 def _normalize_chart_call_args(
@@ -251,6 +323,45 @@ def _decode_tool_call_args(
     return value, ""
 
 
+# Tools whose tool-call the model sometimes emits as pseudo-XML text tags
+# (e.g. MiniMax-M3 writing <display_diagram><parameter name="xml">...</parameter>).
+# When finish_reason=='stop' but such tags appear in the text, parse them back
+# into native tool calls so the dispatcher actually executes them.
+_TEXT_FALLBACK_TOOL_NAMES = {"display_diagram", "edit_diagram", "append_diagram"}
+
+_PARAM_TAG_RE = re.compile(
+    r'<parameter\s+name\s*=\s*"([^"]+)"\s*>([\s\S]*?)</parameter>',
+    re.IGNORECASE,
+)
+_TOOL_BLOCK_RE = re.compile(
+    r'<(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)\b[^>]*>(?P<body>[\s\S]*?)</(?P=name)>',
+    re.IGNORECASE,
+)
+
+
+def _parse_text_fallback_tool_calls(content: str) -> list[tuple[str, Dict[str, Any]]]:
+    """Extract pseudo-XML tool calls a model wrote into its text response.
+
+    Returns a list of (tool_name, args). Only matches names in
+    _TEXT_FALLBACK_TOOL_NAMES so stray XML in normal prose isn't misread.
+    """
+    calls: list[tuple[str, Dict[str, Any]]] = []
+    if not content or "<" not in content:
+        return calls
+    for match in _TOOL_BLOCK_RE.finditer(content):
+        name = match.group("name")
+        if name not in _TEXT_FALLBACK_TOOL_NAMES:
+            continue
+        body = match.group("body")
+        args: Dict[str, Any] = {}
+        for pm in _PARAM_TAG_RE.finditer(body):
+            args[pm.group(1)] = pm.group(2)
+        if not args:
+            continue
+        calls.append((name, args))
+    return calls
+
+
 def _sanitize_rejected_tool_call_history(
     assistant_entry: Dict[str, Any],
     tool_call_id: str,
@@ -334,7 +445,7 @@ def _format_tool_detail(
 
 class BusinessAgent(DataToolsMixin, ExportToolsMixin):
     MAX_ITERATIONS = 120
-    MAX_RUN_SECONDS = 600
+    MAX_RUN_SECONDS = 1800
     DELEGATED_MAX_TOOL_ROUNDS = 20
     DELEGATED_TIMEOUT_SECONDS = 300
 
@@ -422,6 +533,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         self._knowledge_allowed_this_turn: bool = False
         self._job_runner = job_runner
         self._active_job_id: str = ""
+        self._job_start_ts: float = 0.0
         # Cap for a single LLM response. Defaults to the common 384K output;
         # caller should pass cfg.max_output_tokens so it matches the model's limit.
         self._max_output_tokens: int = (
@@ -539,6 +651,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         inbox_context: str = "",
         timeout_seconds: int = 300,
         max_tokens: int = 1600,
+        max_tool_calls: int | None = None,
     ) -> dict:
         def _visible_text(text: str) -> str:
             visible, _reasoning = split_reasoning_tags(str(text or ""))
@@ -575,6 +688,40 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         used_tools: list[str] = []
         tool_events: list[dict] = []
         last_content = ""
+        usage_summary = {
+            "model": self.model,
+            "provider": str(getattr(self, "_provider", "") or ""),
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_input_tokens": 0,
+            "tool_calls": 0,
+        }
+
+        def _capture_usage(response_obj) -> None:
+            usage = getattr(response_obj, "usage", None)
+            if usage is None:
+                return
+            usage_summary["model"] = str(
+                getattr(response_obj, "model", "") or usage_summary["model"]
+            )
+            usage_summary["input_tokens"] += int(
+                getattr(usage, "prompt_tokens", None)
+                or getattr(usage, "input_tokens", 0)
+                or 0
+            )
+            usage_summary["output_tokens"] += int(
+                getattr(usage, "completion_tokens", None)
+                or getattr(usage, "output_tokens", 0)
+                or 0
+            )
+            details = (
+                getattr(usage, "prompt_tokens_details", None)
+                or getattr(usage, "input_tokens_details", None)
+            )
+            usage_summary["cached_input_tokens"] += int(
+                getattr(details, "cached_tokens", 0) or 0
+            )
+
         for _delegated_iteration in range(self.DELEGATED_MAX_TOOL_ROUNDS):
             kwargs = {
                 "model": self.model,
@@ -619,6 +766,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                 kwargs.pop("timeout", None)
                 response = self.client.chat.completions.create(**kwargs)
             delegated_usage = getattr(response, "usage", None)
+            _capture_usage(response)
             usage_recorder = getattr(self, "_usage_recorder", None)
             if delegated_usage is not None and usage_recorder is not None:
                 finalized = finalize_prompt_breakdown(
@@ -636,33 +784,34 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
             last_content = getattr(msg, "content", None) or ""
             tool_calls = list(getattr(msg, "tool_calls", None) or [])
             if not tool_calls:
-                return {"content": _with_tool_footer(last_content), "tool_events": tool_events}
+                candidate = _with_tool_footer(last_content)
+                if used_tools and _delegated_result_invalid_reason(candidate, tool_events):
+                    break
+                usage_summary["tool_calls"] = len(used_tools)
+                return {"content": candidate, "tool_events": tool_events, "usage": usage_summary}
+            runnable_calls = tool_calls[:4]
+            if max_tool_calls is not None:
+                remaining = max(0, int(max_tool_calls) - len(used_tools))
+                if remaining <= 0:
+                    break
+                runnable_calls = runnable_calls[:remaining]
             assistant_msg = {"role": "assistant", "content": last_content, "tool_calls": []}
-            for index, call in enumerate(tool_calls[:4]):
+            parsed_calls = []
+            for index, call in enumerate(runnable_calls):
                 fn = getattr(call, "function", None)
                 tool_name = str(getattr(fn, "name", "") or "")
                 raw_args = getattr(fn, "arguments", "{}") or "{}"
+                tool_args = _parse_delegated_tool_args(raw_args)
+                safe_args = json.dumps(tool_args, ensure_ascii=False)
                 call_id = str(getattr(call, "id", "") or f"delegate_call_{index}")
                 assistant_msg["tool_calls"].append({
                     "id": call_id,
                     "type": "function",
-                    "function": {"name": tool_name, "arguments": raw_args},
+                    "function": {"name": tool_name, "arguments": safe_args},
                 })
+                parsed_calls.append((call_id, tool_name, tool_args))
             messages.append(assistant_msg)
-            for call in tool_calls[:4]:
-                fn = getattr(call, "function", None)
-                tool_name = str(getattr(fn, "name", "") or "")
-                raw_args = getattr(fn, "arguments", "{}") or "{}"
-                call_id = str(getattr(call, "id", "") or "delegate_call")
-                try:
-                    tool_args = json.loads(raw_args)
-                except json.JSONDecodeError:
-                    try:
-                        tool_args = ast.literal_eval(raw_args)
-                    except (ValueError, SyntaxError):
-                        tool_args = {}
-                if not isinstance(tool_args, dict):
-                    tool_args = {}
+            for call_id, tool_name, tool_args in parsed_calls:
                 started = time.perf_counter()
                 created_at = time.strftime("%Y-%m-%dT%H:%M:%S")
                 try:
@@ -686,6 +835,8 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                     "tool_call_id": call_id,
                     "content": str(tool_text)[:8000],
                 })
+            if max_tool_calls is not None and len(used_tools) >= int(max_tool_calls):
+                break
         final_content = ""
         if used_tools:
             final_messages = messages + [{
@@ -722,13 +873,15 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
             except Exception as exc:
                 log.warning("[team] delegated final synthesis failed: %s", exc)
             else:
+                _capture_usage(response)
                 final_content = _visible_text(getattr(response.choices[0].message, "content", "") or "")
         if not final_content:
             final_content = (
                 "成员工具调用已达到上限，未能生成完整最终总结。"
                 "请 Leader 根据下方工具调用流程中的结果进行汇总。"
             )
-        return {"content": _with_tool_footer(final_content), "tool_events": tool_events}
+        usage_summary["tool_calls"] = len(used_tools)
+        return {"content": _with_tool_footer(final_content), "tool_events": tool_events, "usage": usage_summary}
 
     def _delegated_tool_schemas(self) -> list[dict]:
         allowed = {
@@ -828,6 +981,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
             raise RuntimeError("JobRunner is not available for this session")
         jid = self._job_runner.create(fn, job_type=job_type, label=label)
         self._active_job_id = jid
+        self._job_start_ts = time.monotonic()
         try:
             for event in self._job_runner.iter_events(jid):
                 yield event
@@ -842,6 +996,13 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                 if current["status"] not in _TERMINAL:
                     self._job_runner.cancel(jid)
             self._active_job_id = ""
+            self._job_start_ts = 0.0
+            # Reset the wall-clock guard after a job finishes so that
+            # long-running analyses (e.g. decision trees) do not trip the
+            # idle-loop timeout on the very next iteration.
+            _reset_run_start = getattr(self, "_reset_run_start", None)
+            if _reset_run_start:
+                _reset_run_start()
 
     # ── Context helpers ───────────────────────────────────────────────────────
 
@@ -961,7 +1122,11 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         loader = SkillLoader(
             workspace_dir=(runtime.workdir / ".baa" / "skills") if runtime else None,
         )
-        return loader.load_all().get(name)
+        skill = loader.load_all().get(name)
+        if skill is not None:
+            return skill
+        from agent.workflows.skills import get_session_workflow_skill
+        return get_session_workflow_skill(self._session_id, name)
 
     # ── Agent loop ────────────────────────────────────────────────────────────
 
@@ -988,6 +1153,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         recovery_context: str = "",
         team_context: str = "",
         teams_enabled: bool = False,
+        auto_match_skill: bool = True,
         discovered_tools: frozenset[str] | set[str] | None = None,
         discovered_mcp_tools: list[str] | tuple[str, ...] | None = None,
         mcp_catalog_version_seen: str = "",
@@ -1026,9 +1192,75 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         command = command_name or action_name
         _msg_preview = user_message[:120].replace("\n", " ")
         log.info(
-            "[run] activation=%s:%r  msg=%r  model=%s",
+            "[run] activation=%s:%r  msg=%r  model=%s  auto_match_skill=%s",
             activation.kind, activation.name or "(none)", _msg_preview, self.model,
+            auto_match_skill,
         )
+
+        # Explicit Workflow creation is deterministic. Letting the model choose
+        # tools here can turn a requested definition into an ad-hoc analysis.
+        if activation.kind == "none":
+            from agent.tools.workflow import (
+                execute_workflow_tool,
+                parse_workflow_create_request,
+            )
+
+            workflow_args = parse_workflow_create_request(user_message)
+            if workflow_args is not None:
+                tool_name = "workflow_create"
+                started = time.monotonic()
+                yield {
+                    "type": "tool_start",
+                    "tool": tool_name,
+                    "display": f"创建 Workflow：{workflow_args['name']}",
+                }
+                try:
+                    tool_result = execute_workflow_tool(
+                        tool_name, self._session_id, workflow_args,
+                    )
+                    envelope = make_tool_result(
+                        tool_name,
+                        tool_result,
+                        debug={
+                            "elapsed_seconds": round(time.monotonic() - started, 3),
+                            "args_preview": workflow_args,
+                        },
+                        session_id=self._session_id,
+                        runtime=self._workspace_runtime(),
+                        args=workflow_args,
+                    )
+                    yield {
+                        "type": "tool_audit",
+                        "tool": tool_name,
+                        "ok": envelope.ok,
+                        "error": envelope.error,
+                        "summary": envelope.summary,
+                        "content": str(envelope.data),
+                        "sources": envelope.sources,
+                        "artifacts": envelope.artifacts,
+                        "elapsed_seconds": envelope.debug.get("elapsed_seconds"),
+                        "args_preview": envelope.debug.get("args_preview", {}),
+                        "recovery": {},
+                    }
+                    workflow = tool_result["workflow"]
+                    version = tool_result["version"]
+                    yield {
+                        "type": "text",
+                        "content": (
+                            f"已创建并发布 Workflow「{workflow['name']}」。\n\n"
+                            f"运行模式：`{workflow['mode']}`  \n"
+                            f"版本：`v{version['version_number']}`\n\n"
+                            "可在「团队 → Workflow」中查看 DAG，或继续说“启动刚创建的 workflow”。"
+                        ),
+                    }
+                except Exception as exc:
+                    yield {
+                        "type": "error",
+                        "message": f"Workflow 创建失败: {exc}",
+                    }
+                yield {"type": "tool_end", "tool": tool_name}
+                yield {"type": "done"}
+                return
 
         # ── Confirm fast-paths: bypass LLM entirely ───────────────────────────
         if command == "ppt_confirm":
@@ -1150,6 +1382,8 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                 trusted_skill_name = skill.name
                 if skill.name in {"export", "report", "ppt", "dashboard"}:
                     command = skill.name
+            elif skill.source == "workflow":
+                trusted_skill_name = "workflow"
             _activation_prompt = (
                 f"[ACTIVE ANALYSIS SKILL: {skill.name}]\n"
                 f"{skill_activation.prompt}"
@@ -1233,7 +1467,63 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
             has_unnamed_columns=schema_has_unnamed_columns(
                 self._combined_schema or self._schema_cache or ""
             ),
+            needs_diagram=(
+                bool(_requested_tools.intersection({"display_diagram", "edit_diagram"}))
+                or message_needs_diagram_rules(
+                    user_message,
+                    has_canvas_skill=trusted_skill_name in {
+                        "business-model-canvas", "bcg-matrix", "swot-analysis",
+                        "value-proposition",
+                    },
+                )
+            ),
         )
+        # RAG: build skill keyword index, retrieve top-N matching user query
+        if not activation.skill_name and auto_match_skill:
+            try:
+                _ws_runtime = self._workspace_runtime()
+                _all_skills = list(SkillLoader(
+                    workspace_dir=(_ws_runtime.workdir / ".baa" / "skills")
+                    if _ws_runtime else None,
+                ).load_all().values())
+                from agent.workflows.skills import session_workflow_skills
+                _workflow_skills = session_workflow_skills(self._session_id)
+                _all_skills.extend(
+                    skill for name, skill in _workflow_skills.items()
+                    if not any(existing.name == name for existing in _all_skills)
+                )
+                _sk_catalog = build_skill_catalog(
+                    [sk.to_public_dict() for sk in _all_skills]
+                )
+                _matched = search_skill_catalog(
+                    _sk_catalog, user_message, limit=5,
+                )
+                if _matched:
+                    log.info(
+                        "[skill_discovery] matched candidates=%s",
+                        [
+                            {
+                                "name": item.get("name"),
+                                "hybrid": item.get("hybrid_score"),
+                                "vector": item.get("vector_score"),
+                                "name_score": item.get("name_score"),
+                            }
+                            for item in _matched
+                        ],
+                    )
+                    _catalog_lines = [
+                        f"- {item['name']}: {item['description']}"
+                        for item in _matched
+                    ]
+                    _prompt_context = replace(
+                        _prompt_context, skill_catalog="\n".join(_catalog_lines)
+                    )
+                    yield {"type": "skill_matched", "skills": [
+                        {"name": item["name"], "description": item["description"]}
+                        for item in _matched
+                    ]}
+            except Exception as exc:
+                log.warning("[skill_discovery] automatic matching failed: %s", exc)
         system = get_system_prompt(_prompt_context)
         if _activation_prompt:
             system += f"\n\n{_activation_prompt}"
@@ -1450,15 +1740,29 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
         _run_start = time.monotonic()
         _MAX_RUN_SECONDS = self.MAX_RUN_SECONDS
         _MAX_CONSECUTIVE_ERRORS = 3
+        _MAX_JOB_SECONDS = 1800          # wall-clock cap for a single job execution (prevents hung tools)
+        _job_start_ts = 0.0
+
+        def _reset_run_start():
+            nonlocal _run_start
+            _run_start = time.monotonic()
+        self._reset_run_start = _reset_run_start
 
         _PROPOSE_FLOW_CMDS = ("ppt", "ppt_revise", "export", "excel_revise",
-                              "report", "report_revise", "dashboard", "dashboard_revise")
+                              "report", "report_revise")
 
         _force_propose = False
+        _force_propose_retries = 0
+        _MAX_FORCE_PROPOSE_RETRIES = 3
         for _iteration in range(self.MAX_ITERATIONS):
             # ── Hard exit guards ──────────────────────────────────────────────
+            # _run_start is reset after every job completes (see _run_job), so
+            # MAX_RUN_SECONDS effectively caps the *idle* time between productive
+            # work (LLM calls + light tool calls).  Long-running jobs (e.g. decision
+            # tree training on 500k rows) will not trip this guard because the timer
+            # restarts when the job finishes.
             if time.monotonic() - _run_start > _MAX_RUN_SECONDS:
-                log.warning("[run] time limit reached (%.0fs)", _MAX_RUN_SECONDS)
+                log.warning("[run] idle time limit reached (%.0fs)", _MAX_RUN_SECONDS)
                 yield {"type": "text", "content": "分析超时，已终止。请尝试缩小问题范围后重试。"}
                 yield {"type": "done"}
                 return
@@ -1486,13 +1790,13 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                         "Call propose_excel_export now with the tables list and an optional filename. "
                         "Output ONLY the tool call — no surrounding text."
                     )
-                elif command in ("dashboard", "dashboard_revise"):
+                elif command == "dashboard":
                     nudge = (
-                        "All data schema information has been gathered. "
-                        "Call propose_dashboard_outline with a complete widgets array (2-6 widgets). "
-                        "CRITICAL: use ONLY real table/column names from the schema — do NOT fabricate. "
-                        "Each widget must have: title, chart_type, sql (valid SQL against the real tables), "
-                        "field_mapping, and grid ({x,y,w,h}). "
+                        "Proceed to the next phase of the dashboard workflow NOW. "
+                        "If you have NOT called ask_user yet, call ask_user ONCE with a multi-select "
+                        "question about which metrics the user wants. "
+                        "If the user has ALREADY answered ask_user, call propose_dashboard_outline "
+                        "with 2-6 widgets using ONLY real table/column names from the data above. "
                         "Output ONLY the tool call — no surrounding text."
                     )
                 else:
@@ -1533,6 +1837,12 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                     if ((schema.get("function") or {}).get("name") or "")
                     != "query_knowledge"
                 ]
+            if not auto_match_skill:
+                _available_tools = [
+                    schema for schema in _available_tools
+                    if ((schema.get("function") or {}).get("name") or "")
+                    != "load_analysis_skill"
+                ]
             _stage_context = infer_workflow_stage(
                 activation=activation,
                 user_message=user_message,
@@ -1549,9 +1859,28 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
             _available_tools = _scope_tool_result_reader(
                 _available_tools, _allowed_tool_result_artifacts,
             )
+            _explicit_team_plan_create = (
+                "计划" in user_message
+                and any(word in user_message for word in ("创建", "新建", "先建", "预览"))
+                and any(word in user_message for word in ("暂不执行", "不要执行", "不执行", "先不要执行"))
+                and "team_plan_create" not in _successful_tool_names
+            )
+            if _explicit_team_plan_create:
+                _force_text_only = False
+                if not any(
+                    ((schema.get("function") or {}).get("name") or "") == "team_plan_create"
+                    for schema in _available_tools
+                ):
+                    plan_schema = next(
+                        (schema for schema in AGENT_TOOLS
+                         if ((schema.get("function") or {}).get("name") or "") == "team_plan_create"),
+                        None,
+                    )
+                    if plan_schema is not None:
+                        _available_tools.append(plan_schema)
             if _skill_requires_text_only(
                 trusted_skill_name, _successful_tool_names,
-            ):
+            ) and not _explicit_team_plan_create:
                 _force_text_only = True
             if _force_text_only:
                 _available_tools = []
@@ -1559,6 +1888,17 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                 messages,
                 stage=_stage_context.stage,
                 turn_start_idx=_turn_start_idx,
+            )
+            _visible_tool_names = [
+                ((schema.get("function") or {}).get("name") or "")
+                for schema in _available_tools
+            ]
+            log.info(
+                "[tools] visible stage=%s trusted_skill=%s command=%s tools=%s",
+                _stage_context.stage,
+                trusted_skill_name or "-",
+                command or "-",
+                _visible_tool_names,
             )
             log.debug(
                 "[workflow-stage] stage=%s tools=%d archived=%d saved_chars=%d",
@@ -1649,7 +1989,15 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
             if _available_tools:
                 call_kwargs["tools"] = _available_tools
                 call_kwargs["tool_choice"] = "auto"
-                if (
+                if _explicit_team_plan_create and any(
+                    ((schema.get("function") or {}).get("name") or "") == "team_plan_create"
+                    for schema in _available_tools
+                ):
+                    call_kwargs["tool_choice"] = {
+                        "type": "function",
+                        "function": {"name": "team_plan_create"},
+                    }
+                elif (
                     trusted_skill_name == "regression"
                     and "query_data" in _successful_tool_names
                     and "run_analysis" not in _successful_tool_names
@@ -1723,6 +2071,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
             call_kwargs["stream"] = True
             call_kwargs["stream_options"] = {"include_usage": True}
             _t0 = time.monotonic()
+            yield {"type": "agent_activity", "message": "正在分析…"}
             try:
                 stream = _call_with_retry(self.client.chat.completions.create, **call_kwargs)
             except Exception as exc:
@@ -1900,6 +2249,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                 messages.append(asst_entry)
 
                 _outline_proposed = False
+                _ask_user_issued = False
 
                 # Guard: if any tool call is a blocked output tool, cancel the whole
                 # tool-call batch and instruct the model to reply with plain text.
@@ -1913,10 +2263,14 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                     "propose_dashboard_outline": {"dashboard", "dashboard_revise"},
                     "generate_dashboard":        {"dashboard_confirm"},
                 }
+                # When activated via Skill, the skill name serves as the
+                # policy token (e.g. skill "dashboard" matches guard set
+                # {"dashboard", "dashboard_revise"}).
+                _guard_token = command or (activation.name if activation.kind == "skill" else "")
                 blocked = [
                     tc for tc in tc_objects
                     if tc.function.name in _OUTPUT_TOOL_GUARDS
-                    and command not in _OUTPUT_TOOL_GUARDS[tc.function.name]
+                    and _guard_token not in _OUTPUT_TOOL_GUARDS[tc.function.name]
                 ]
                 if blocked:
                     blocked_names = ", ".join(tc.function.name for tc in blocked)
@@ -2051,6 +2405,10 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                         "send_message":         f"发送团队消息: {args.get('recipient', '?')}",
                         "agent_delegate":       f"委派分析任务: {args.get('description', '')[:40]}",
                         "plan_complete":        "提交结构化计划",
+                        "display_diagram":      f"生成图表画布：{args.get('title', '分析框架')}",
+                        "edit_diagram":         f"编辑图表画布：{args.get('project_id', '?')}",
+                        "get_diagram":          "获取当前图表",
+                        "get_shape_library":    f"查询形状库：{args.get('library', '?')}",
                     }
                     full_display = display_map.get(name, name)
                     expanded_detail = _format_tool_detail(
@@ -2093,6 +2451,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                 },
                                 session_id=self._session_id,
                                 runtime=self._workspace_runtime(),
+                                args=args,
                             )
                             yield {
                                 "type": "tool_audit",
@@ -2176,10 +2535,14 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                             },
                             session_id=self._session_id,
                             runtime=_ws_runtime,
+                            args=args,
                         )
                         return tc, name, envelope, events
 
-                    with ThreadPoolExecutor(max_workers=min(4, len(_parsed_tools))) as ex:
+                    # IO-bound parallel tool calls (LLM/MCP/knowledge lookups spend
+                    # most time waiting on network). 4 → 8: GIL released during IO,
+                    # no DuckDB writes here, so higher concurrency is pure win.
+                    with ThreadPoolExecutor(max_workers=min(8, len(_parsed_tools))) as ex:
                         futures = [ex.submit(_run_parallel_tool, item) for item in _parsed_tools]
                         parallel_results = [f.result() for f in as_completed(futures)]
 
@@ -2517,8 +2880,17 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                 "options": args.get("options", []),
                                 "multi_select": _as_bool_arg(args.get("multi_select", False)),
                             }
-                            tool_result = "问题已展示给用户，等待用户回答后继续。请不要输出任何文字。"
-                            _outline_proposed = True
+                            if command == "dashboard":
+                                tool_result = (
+                                    "问题已展示给用户，等待用户回答后继续。请不要输出任何文字。\n"
+                                    "[NEXT STEP] 当用户回答后，立即调用 propose_dashboard_outline "
+                                    "生成看板大纲。不要再调用 ask_user。"
+                                )
+                            else:
+                                tool_result = (
+                                    "问题已展示给用户，等待用户回答后继续。请不要输出任何文字。"
+                                )
+                            _ask_user_issued = True
                         elif name == "browse_webpage":
                             tool_result = browse_webpage(
                                 args.get("url", ""),
@@ -2629,14 +3001,41 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                 )
                             else:
                                 tool_result = "Unknown workspace tool"
+                        elif name in {"workflow_create", "workflow_list", "workflow_start", "workflow_status"}:
+                            from agent.tools.workflow import execute_workflow_tool
+                            tool_result = execute_workflow_tool(
+                                name, self._session_id, args,
+                            )
                         elif name == "structured_output":
                             tool_result = structured_output(args.get("output"), args.get("required_fields"))
                         elif name == "load_analysis_skill":
                             skill = self._get_skill_def(args.get("name", ""))
-                            tool_result = (
-                                {"name": skill.name, "description": skill.description, "prompt": skill.prompt}
-                                if skill else "ERROR: unknown analysis skill"
-                            )
+                            if skill:
+                                loaded_activation = SkillExecutor().activate(skill, user_message)
+                                skill_activation = loaded_activation
+                                tool_result = (
+                                    f"[SKILL LOADED: {skill.name}]\n\n"
+                                    f"{loaded_activation.prompt}\n\n"
+                                    f"[NEXT STEP] Follow the skill instructions above for the current user request. "
+                                    f"Do NOT call load_analysis_skill again."
+                                )
+                                yield {"type": "skill_activated", "name": skill.name}
+                                if skill.source == "builtin":
+                                    trusted_skill_name = skill.name
+                                    if not command and skill.name in {"export", "report", "ppt", "dashboard"}:
+                                        command = skill.name
+                                elif skill.source == "workflow":
+                                    trusted_skill_name = "workflow"
+                                log.info(
+                                    "[skills] dynamic activation name=%s source=%s requested_tools=%s trusted=%s command=%s",
+                                    skill.name,
+                                    skill.source,
+                                    sorted(loaded_activation.requested_tools),
+                                    trusted_skill_name or "-",
+                                    command or "-",
+                                )
+                            else:
+                                tool_result = "ERROR: unknown analysis skill. Check available skills in the system prompt."
                         elif name.startswith("task_"):
                             task_store = WorkspaceTaskStore(
                                 self._session_id, workspace_id=self._workspace_id,
@@ -2658,7 +3057,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                 )
                         elif name in {
                             "team_create", "team_delete", "team_list", "team_status",
-                            "send_message", "agent_delegate", "team_delegate",
+                            "send_message", "agent_delegate", "team_plan_create", "team_delegate",
                         }:
                             team_store = WorkspaceTeamStore(
                                 self._session_id, workspace_id=self._workspace_id,
@@ -2675,7 +3074,11 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                     "team_status": tool_result,
                                 }
                             elif name == "team_delete":
-                                tool_result = team_store.delete(args.get("name", ""))
+                                tool_result = team_store.delete(
+                                    args.get("name", ""),
+                                    require_inactive=True,
+                                    force=_as_bool_arg(args.get("force")),
+                                )
                                 yield {
                                     "type": "team_event",
                                     "event": "team_deleted",
@@ -2711,6 +3114,28 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                     "scope": getattr(team_store, "scope", ""),
                                     "sent": tool_result.get("sent", 0),
                                     "messages": tool_result.get("messages", []),
+                                }
+                            elif name == "team_plan_create":
+                                from agent.teams.dynamic_plans import DynamicTeamPlanStore
+
+                                team_name = str(args.get("team_name", "")).strip()
+                                assignments = args.get("assignments") or []
+                                if not team_name or not isinstance(assignments, list):
+                                    raise ValueError("team_plan_create requires team_name and assignments")
+                                dynamic_plan_store = DynamicTeamPlanStore(
+                                    self._session_id, workspace_id=self._workspace_id,
+                                )
+                                dynamic_plan = dynamic_plan_store.create(
+                                    team_name, str(args.get("goal") or "团队动态协作")[:4000],
+                                    assignments, created_by="lead", status="planned",
+                                )
+                                tool_result = {
+                                    "plan": dynamic_plan,
+                                    "execution_instruction": "After user confirmation, call team_delegate with this plan_id.",
+                                }
+                                yield {
+                                    "type": "team_event", "event": "dynamic_plan_created",
+                                    "team": team_name, "plan": dynamic_plan, "parallel": False,
                                 }
                             elif name == "team_delegate":
                                 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
@@ -2760,8 +3185,80 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                 )
                                 if not team_name:
                                     raise ValueError("team_delegate requires team_name")
-                                if not assignments:
-                                    raise ValueError("team_delegate requires non-empty assignments")
+
+                                from agent.teams.dynamic_plans import DynamicTeamPlanStore
+                                dynamic_plan_store = DynamicTeamPlanStore(
+                                    self._session_id, workspace_id=self._workspace_id,
+                                )
+                                retry_plan_id = str(args.get("retry_plan_id") or "").strip()
+                                review_plan_id = str(args.get("review_plan_id") or "").strip()
+                                plan_id = str(args.get("plan_id") or "").strip()
+                                if retry_plan_id:
+                                    retry_ids = args.get("retry_task_ids") or []
+                                    if isinstance(retry_ids, str):
+                                        retry_ids = [retry_ids]
+                                    dynamic_plan, selected_task_ids = dynamic_plan_store.prepare_retry(
+                                        retry_plan_id, retry_ids,
+                                    )
+                                    if dynamic_plan["team_name"] != team_name:
+                                        raise ValueError("retry plan belongs to a different team")
+                                    dynamic_tasks = [
+                                        task for task in dynamic_plan["tasks"]
+                                        if task["id"] in set(selected_task_ids)
+                                    ]
+                                    assignments = [{
+                                        "task_id": task["id"],
+                                        "member_name": task["member_name"],
+                                        "prompt": task["prompt"],
+                                        "description": task["title"],
+                                    } for task in dynamic_tasks]
+                                elif review_plan_id:
+                                    review_ids = args.get("review_task_ids") or []
+                                    if isinstance(review_ids, str): review_ids = [review_ids]
+                                    planned_plan = dynamic_plan_store.get(review_plan_id)
+                                    if planned_plan["team_name"] != team_name:
+                                        raise ValueError("review plan belongs to a different team")
+                                    dynamic_plan, selected_task_ids = dynamic_plan_store.prepare_review_retry(review_plan_id, review_ids)
+                                    dynamic_tasks = [task for task in dynamic_plan["tasks"] if task["id"] in set(selected_task_ids)]
+                                    assignments = [{
+                                        "task_id": task["id"], "member_name": task["member_name"], "prompt": task["prompt"],
+                                        "description": task["title"], "depends_on": task.get("depends_on") or [],
+                                    } for task in dynamic_tasks]
+                                elif plan_id:
+                                    planned_plan = dynamic_plan_store.get(plan_id)
+                                    if planned_plan["team_name"] != team_name:
+                                        raise ValueError("planned dynamic plan belongs to a different team")
+                                    dynamic_plan = dynamic_plan_store.start(plan_id)
+                                    dynamic_tasks = list(dynamic_plan["tasks"])
+                                    assignments = [{
+                                        "task_id": task["id"],
+                                        "member_name": task["member_name"],
+                                        "prompt": task["prompt"],
+                                        "description": task["title"],
+                                        "depends_on": task.get("depends_on") or [],
+                                    } for task in dynamic_tasks]
+                                else:
+                                    if not assignments:
+                                        raise ValueError("team_delegate requires non-empty assignments")
+                                    dynamic_goal = str(args.get("goal") or "团队动态协作")[:4000]
+                                    dynamic_plan = dynamic_plan_store.create(
+                                        team_name, dynamic_goal, assignments, created_by="lead",
+                                    )
+                                    dynamic_tasks = list(dynamic_plan["tasks"])
+
+                                max_workers = max(
+                                    1, min(
+                                        int(args.get("max_concurrency", len(assignments) or 1) or 1),
+                                        len(assignments) or 1, 6,
+                                    ),
+                                )
+                                dynamic_task_jobs = {task["id"]: "" for task in dynamic_tasks}
+                                yield {
+                                    "type": "team_event",
+                                    "event": "dynamic_plan_created",
+                                    "team": team_name,
+                                    "plan": dynamic_plan,
+                                }
 
                                 hook_events, _hook_prompts = self._run_hook_event(
                                     "subagent_start",
@@ -2772,9 +3269,11 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                 for hook_event in hook_events:
                                     yield hook_event
 
+                                quality_reviewer = team_store.ensure_quality_reviewer(team_name)
+                                reviewer_name = str(quality_reviewer.get("name") or "质量复核员")
                                 prepared = []
                                 results = []
-                                for assignment in assignments:
+                                for assignment_index, assignment in enumerate(assignments):
                                     member_name = str(assignment.get("member_name", "")).strip()
                                     try:
                                         assignment_prompt = str(assignment.get("prompt", ""))[:12_000]
@@ -2783,42 +3282,17 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                             if str(assignment.get("description", "")).strip()
                                             else "任务：团队并行分析\n\n"
                                         ) + assignment_prompt
-                                        assignment_message = team_store.send_message(
-                                            team_name,
-                                            member_name,
-                                            assignment_note,
-                                            sender="leader",
-                                            read=True,
-                                            queue=False,
-                                            message_type="assignment",
-                                        )
-                                        turn_info = team_store.begin_member_turn(team_name, member_name)
-                                        member = turn_info["member"]
-                                        inbox = turn_info.get("inbox", [])
-                                        inbox_context = ""
-                                        if inbox:
-                                            inbox_context = "\n\n[Unread team mailbox]\n" + "\n".join(
-                                                f"- From {msg.get('sender', '')}: {msg.get('message', '')}"
-                                                for msg in inbox
-                                            )
+                                        member = team_store.member(team_name, member_name)
                                         prepared.append({
+                                            "task_id": str(assignment.get("task_id") or dynamic_tasks[assignment_index]["id"]),
+                                            "depends_on": [str(dep) for dep in (assignment.get("depends_on") or [])],
                                             "member_name": member_name,
                                             "member": member,
                                             "prompt": assignment_prompt,
                                             "description": str(assignment.get("description", ""))[:500],
-                                            "inbox_context": inbox_context,
-                                            "consumed_messages": len(inbox),
-                                            "assignment_message": assignment_message,
+                                            "inbox_context": "",
+                                            "consumed_messages": 0,
                                         })
-                                        yield {
-                                            "type": "team_event",
-                                            "event": "member_started",
-                                            "team": team_name,
-                                            "member": member_name,
-                                            "description": assignment.get("description", ""),
-                                            "message": assignment_message,
-                                            "parallel": True,
-                                        }
                                     except Exception as exc:
                                         error_text = str(exc)
                                         results.append({
@@ -2837,115 +3311,456 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                         }
 
                                 def _run_prepared_delegate(item: dict) -> tuple[dict, dict]:
+                                    description = str(item.get("description") or "")
+                                    task_max_tokens = 2500 if any(marker in description for marker in ("报告", "可视化", "report", "visual")) else result_max_tokens
                                     delegated = self._run_delegated_llm(
                                         member=item["member"],
-                                        prompt=item["prompt"],
+                                        prompt=item["prompt"] + "\n\n交付必须完整结束；如表格过长，请压缩行数并给出完整结论，不能在表格或句子中截断。",
                                         inbox_context=item["inbox_context"],
                                         timeout_seconds=timeout_seconds,
-                                        max_tokens=result_max_tokens,
+                                        max_tokens=task_max_tokens,
                                     )
                                     return item, delegated
 
-                                pending = set()
-                                future_to_item = {}
+                                remaining = list(prepared)
+                                selected_task_ids = {task["id"] for task in dynamic_tasks}
+                                succeeded_task_ids = {
+                                    task["id"] for task in dynamic_plan["tasks"]
+                                    if task["id"] not in selected_task_ids and task.get("status") == "completed"
+                                }
+                                failed_task_ids = set()
                                 executor = ThreadPoolExecutor(max_workers=max_workers)
                                 try:
-                                    for item in prepared:
-                                        future = executor.submit(_run_prepared_delegate, item)
-                                        pending.add(future)
-                                        future_to_item[future] = item
-                                    try:
-                                        completed_iter = as_completed(
-                                            pending,
-                                            timeout=timeout_seconds + 5,
-                                        )
-                                        for future in completed_iter:
-                                            pending.discard(future)
-                                            item = future_to_item[future]
-                                            member_name = item["member_name"]
-                                            try:
-                                                _item, delegated = future.result()
-                                                content = str(delegated.get("content", ""))
-                                                tool_events = delegated.get("tool_events", [])
-                                            except Exception as exc:
-                                                content = str(exc)
-                                                tool_events = []
-                                                completion = team_store.complete_member_turn(
-                                                    team_name, member_name, content, ok=False, tool_events=tool_events
+                                    while remaining:
+                                        blocked = [
+                                            item for item in remaining
+                                            if set(item["depends_on"]) & failed_task_ids
+                                        ]
+                                        for item in blocked:
+                                            remaining.remove(item)
+                                            reason = (
+                                                "前置任务失败，当前任务未派发："
+                                                + ", ".join(
+                                                    dep for dep in item["depends_on"]
+                                                    if dep in failed_task_ids
                                                 )
-                                                results.append({
-                                                    "member": member_name,
-                                                    "status": "failed",
-                                                    "error": content,
-                                                    "result": "",
-                                                    "consumed_messages": item["consumed_messages"],
-                                                })
-                                                yield {
-                                                    "type": "team_event",
-                                                    "event": "member_failed",
-                                                    "team": team_name,
-                                                    "member": member_name,
-                                                    "message": completion.get("message", {}),
-                                                    "parallel": True,
-                                                }
-                                                continue
+                                            )
                                             completion = team_store.complete_member_turn(
-                                                team_name, member_name, content, ok=True, tool_events=tool_events
+                                                team_name, item["member_name"], reason, ok=False
                                             )
                                             results.append({
-                                                "member": member_name,
-                                                "status": "idle",
-                                                "error": "",
-                                                "result": content,
-                                                "tool_count": len(tool_events),
+                                                "task_id": item["task_id"],
+                                                "member": item["member_name"],
+                                                "status": "failed",
+                                                "error": reason,
+                                                "result": "",
                                                 "consumed_messages": item["consumed_messages"],
                                             })
                                             yield {
                                                 "type": "team_event",
-                                                "event": "member_idle",
+                                                "event": "member_blocked",
                                                 "team": team_name,
-                                                "member": member_name,
+                                                "member": item["member_name"],
                                                 "message": completion.get("message", {}),
-                                                "parallel": True,
+                                                "parallel": False,
                                             }
-                                    except TimeoutError:
-                                        pass
-                                    for future in list(pending):
-                                        future.cancel()
-                                        item = future_to_item[future]
-                                        member_name = item["member_name"]
-                                        content = f"团队成员执行超过 {timeout_seconds} 秒未完成，已停止等待。"
-                                        completion = team_store.complete_member_turn(
-                                            team_name, member_name, content, ok=False
+                                            failed_task_ids.add(item["task_id"])
+
+                                        ready = [
+                                            item for item in remaining
+                                            if set(item["depends_on"]).issubset(succeeded_task_ids)
+                                        ]
+                                        if not ready:
+                                            if remaining:
+                                                for item in list(remaining):
+                                                    remaining.remove(item)
+                                                    reason = "前置任务未满足，当前任务未派发。"
+                                                    completion = team_store.complete_member_turn(
+                                                        team_name, item["member_name"], reason, ok=False
+                                                    )
+                                                    results.append({
+                                                        "task_id": item["task_id"],
+                                                        "member": item["member_name"],
+                                                        "status": "failed",
+                                                        "error": reason,
+                                                        "result": "",
+                                                        "consumed_messages": item["consumed_messages"],
+                                                    })
+                                                    failed_task_ids.add(item["task_id"])
+                                                    yield {
+                                                        "type": "team_event",
+                                                        "event": "member_blocked",
+                                                        "team": team_name,
+                                                        "member": item["member_name"],
+                                                        "message": completion.get("message", {}),
+                                                        "parallel": False,
+                                                    }
+                                            break
+
+                                        future_to_item = {}
+                                        for item in ready:
+                                            remaining.remove(item)
+                                            assignment_message = team_store.send_message(
+                                                team_name, item["member_name"],
+                                                f"任务：{item['description']}\n\n{item['prompt']}",
+                                                sender="leader", read=True, queue=False,
+                                                message_type="assignment",
+                                            )
+                                            turn_info = team_store.begin_member_turn(
+                                                team_name, item["member_name"]
+                                            )
+                                            item["member"] = turn_info["member"]
+                                            inbox = turn_info.get("inbox", [])
+                                            item["consumed_messages"] = len(inbox)
+                                            item["inbox_context"] = "\n\n[Unread team mailbox]\n" + "\n".join(
+                                                f"- From {message.get('sender', '')}: {message.get('message', '')}"
+                                                for message in inbox
+                                            ) if inbox else ""
+                                            yield {
+                                                "type": "team_event",
+                                                "event": "member_started",
+                                                "team": team_name,
+                                                "member": item["member_name"],
+                                                "description": item["description"],
+                                                "message": assignment_message,
+                                                "parallel": len(ready) > 1,
+                                            }
+                                            task_job_id = (
+                                                self._job_runner.begin_tracked(
+                                                    "team_dynamic_task",
+                                                    f"{team_name} · {item['description']}",
+                                                )
+                                                if self._job_runner is not None else ""
+                                            )
+                                            dynamic_task_jobs[item["task_id"]] = task_job_id
+                                            dynamic_plan_store.task(
+                                                dynamic_plan["id"], item["task_id"], "running",
+                                                job_id=task_job_id,
+                                            )
+                                            future_to_item[
+                                                executor.submit(_run_prepared_delegate, item)
+                                            ] = item
+                                        try:
+                                            completed_iter = as_completed(
+                                                future_to_item, timeout=timeout_seconds + 5,
+                                            )
+                                            for future in completed_iter:
+                                                item = future_to_item[future]
+                                                member_name = item["member_name"]
+                                                task_id = item["task_id"]
+                                                try:
+                                                    _item, delegated = future.result()
+                                                    content = str(delegated.get("content", ""))
+                                                    tool_events = delegated.get("tool_events", [])
+                                                    task_usage = delegated.get("usage", {})
+                                                except Exception as exc:
+                                                    content = str(exc)
+                                                    tool_events = []
+                                                    task_usage = {}
+                                                    completion = team_store.complete_member_turn(
+                                                        team_name, member_name, content, ok=False,
+                                                        tool_events=tool_events,
+                                                    )
+                                                    results.append({
+                                                        "task_id": task_id, "member": member_name,
+                                                        "status": "failed", "error": content,
+                                                        "result": "", "consumed_messages": item["consumed_messages"],
+                                                    })
+                                                    failed_task_ids.add(task_id)
+                                                    yield {
+                                                        "type": "team_event", "event": "member_failed",
+                                                        "team": team_name, "member": member_name,
+                                                        "message": completion.get("message", {}), "parallel": True,
+                                                    }
+                                                    continue
+                                                invalid_reason = _delegated_result_invalid_reason(
+                                                    content, tool_events,
+                                                )
+                                                if invalid_reason:
+                                                    completion = team_store.complete_member_turn(
+                                                        team_name, member_name, content, ok=False,
+                                                        tool_events=tool_events,
+                                                    )
+                                                    results.append({
+                                                        "task_id": task_id, "member": member_name,
+                                                        "status": "failed", "error": invalid_reason,
+                                                        "result": content, "tool_count": len(tool_events),
+                                                        "_dynamic_tool_events": tool_events,
+                                                        "_dynamic_usage": task_usage,
+                                                        "consumed_messages": item["consumed_messages"],
+                                                    })
+                                                    failed_task_ids.add(task_id)
+                                                    yield {
+                                                        "type": "team_event", "event": "member_failed",
+                                                        "team": team_name, "member": member_name,
+                                                        "message": completion.get("message", {}), "parallel": True,
+                                                    }
+                                                    continue
+                                                completion = team_store.complete_member_turn(
+                                                    team_name, member_name, content, ok=True,
+                                                    tool_events=tool_events,
+                                                )
+                                                results.append({
+                                                    "task_id": task_id, "member": member_name,
+                                                    "status": "idle", "error": "", "result": content,
+                                                    "tool_count": len(tool_events),
+                                                    "_dynamic_tool_events": tool_events,
+                                                    "_dynamic_usage": task_usage,
+                                                    "consumed_messages": item["consumed_messages"],
+                                                })
+                                                succeeded_task_ids.add(task_id)
+                                                yield {
+                                                    "type": "team_event", "event": "member_idle",
+                                                    "team": team_name, "member": member_name,
+                                                    "message": completion.get("message", {}), "parallel": True,
+                                                }
+                                        except TimeoutError:
+                                            for future, item in future_to_item.items():
+                                                if future.done():
+                                                    continue
+                                                future.cancel()
+                                                reason = f"团队成员执行超过 {timeout_seconds} 秒未完成，已停止等待。"
+                                                completion = team_store.complete_member_turn(
+                                                    team_name, item["member_name"], reason, ok=False
+                                                )
+                                                results.append({
+                                                    "task_id": item["task_id"],
+                                                    "member": item["member_name"],
+                                                    "status": "failed", "error": reason, "result": "",
+                                                    "consumed_messages": item["consumed_messages"],
+                                                })
+                                                failed_task_ids.add(item["task_id"])
+                                                yield {
+                                                    "type": "team_event", "event": "member_failed",
+                                                    "team": team_name, "member": item["member_name"],
+                                                    "message": completion.get("message", {}), "parallel": True,
+                                                }
+                                finally:
+                                    executor.shutdown(wait=False, cancel_futures=True)
+                                if results:
+                                    review_input = {
+                                        "team": team_name,
+                                        "assignments": [
+                                            {
+                                                "member_name": item.get("member_name", ""),
+                                                "description": item.get("description", ""),
+                                            }
+                                            for item in prepared
+                                        ],
+                                        "member_results": [
+                                            {
+                                                "member": item.get("member", ""),
+                                                "status": item.get("status", ""),
+                                                "error": item.get("error", ""),
+                                                "tool_count": item.get("tool_count", 0),
+                                                "result": str(item.get("result", ""))[:1800],
+                                            }
+                                            for item in results
+                                        ],
+                                    }
+                                    review_prompt = (
+                                        "你是团队固定质量复核员，作为第二道屏障复核本轮团队输出。\n"
+                                        "硬规则：最多调用 6 次只读工具，其中 query_data 最多 5 次；"
+                                        "抽查关键指标即可，不要完整重跑所有分析；工具调用后必须输出最终 Markdown。\n"
+                                        "检查重点：1) 数字是否有本轮成员结果/工具证据；2) SQL、样本、分母、时间窗是否一致；"
+                                        "3) 成员结果是否有错误、空输出、省略号、旧值或图表失败；"
+                                        "4) 原因推断是否标为假设且没有无字段支撑的事实断言。\n"
+                                        "输出 Markdown，必须包含：通过项、需修正项、不可验证项、建议补充查询。\n\n"
+                                        + json.dumps(review_input, ensure_ascii=False)
+                                    )[:12_000]
+                                    try:
+                                        review_message = team_store.send_message(
+                                            team_name,
+                                            reviewer_name,
+                                            "任务：固定质量复核\n\n" + review_prompt,
+                                            sender="leader",
+                                            read=True,
+                                            queue=False,
+                                            message_type="quality_review_assignment",
+                                        )
+                                        review_turn = team_store.begin_member_turn(team_name, reviewer_name)
+                                        yield {
+                                            "type": "team_event",
+                                            "event": "quality_review_started",
+                                            "team": team_name,
+                                            "member": reviewer_name,
+                                            "message": review_message,
+                                            "parallel": False,
+                                        }
+                                        review_delegated = self._run_delegated_llm(
+                                            member=review_turn["member"],
+                                            prompt=review_prompt,
+                                            inbox_context="",
+                                            timeout_seconds=timeout_seconds,
+                                            max_tokens=max(result_max_tokens, 1800),
+                                            max_tool_calls=6,
+                                        )
+                                        review_content = str(review_delegated.get("content", ""))
+                                        review_tool_events = review_delegated.get("tool_events", [])
+                                        dynamic_plan_store.record_quality_review_usage(
+                                            dynamic_plan["id"], review_delegated.get("usage", {}),
+                                        )
+                                        review_blocking_reason = (
+                                            _delegated_result_invalid_reason(
+                                                review_content,
+                                                review_tool_events,
+                                            )
+                                            or _quality_review_blocking_reason(review_content)
+                                        )
+                                        review_completion = team_store.complete_member_turn(
+                                            team_name,
+                                            reviewer_name,
+                                            review_content,
+                                            ok=not review_blocking_reason,
+                                            tool_events=review_tool_events,
                                         )
                                         results.append({
-                                            "member": member_name,
-                                            "status": "failed",
-                                            "error": content,
-                                            "result": "",
-                                            "consumed_messages": item["consumed_messages"],
+                                            "member": reviewer_name,
+                                            "role": "quality_reviewer",
+                                            "status": "needs_review" if review_blocking_reason else "idle",
+                                            "error": review_blocking_reason,
+                                            "result": review_content,
+                                            "tool_count": len(review_tool_events),
+                                            "quality_review": True,
+                                            "blocking_review": bool(review_blocking_reason),
                                         })
                                         yield {
                                             "type": "team_event",
-                                            "event": "member_failed",
+                                            "event": "quality_review_completed",
                                             "team": team_name,
-                                            "member": member_name,
-                                            "message": completion.get("message", {}),
-                                            "parallel": True,
+                                            "member": reviewer_name,
+                                            "message": review_completion.get("message", {}),
+                                            "parallel": False,
                                         }
-                                finally:
-                                    executor.shutdown(wait=False, cancel_futures=True)
+                                    except Exception as exc:
+                                        review_error = str(exc)
+                                        try:
+                                            review_completion = team_store.complete_member_turn(
+                                                team_name,
+                                                reviewer_name,
+                                                review_error,
+                                                ok=False,
+                                            )
+                                        except Exception:
+                                            review_completion = {"message": {"message": review_error}}
+                                        results.append({
+                                            "member": reviewer_name,
+                                            "role": "quality_reviewer",
+                                            "status": "failed",
+                                            "error": review_error,
+                                            "result": "",
+                                            "quality_review": True,
+                                        })
+                                        yield {
+                                            "type": "team_event",
+                                            "event": "quality_review_failed",
+                                            "team": team_name,
+                                            "member": reviewer_name,
+                                            "message": review_completion.get("message", {}),
+                                            "parallel": False,
+                                        }
+
+                                delegated_results = [item for item in results if not item.get("quality_review")]
+                                results_by_task = {item.get("task_id"): item for item in delegated_results if item.get("task_id")}
+                                canceled_plan = dynamic_plan_store.get(dynamic_plan["id"])["status"] == "canceled"
+                                for dynamic_task in dynamic_tasks:
+                                    task_job_id = dynamic_task_jobs.get(dynamic_task["id"], "")
+                                    if canceled_plan:
+                                        if task_job_id and self._job_runner is not None:
+                                            self._job_runner.cancel_tracked(task_job_id)
+                                        continue
+                                    matched = results_by_task.get(dynamic_task["id"], {})
+                                    task_succeeded = matched.get("status") == "idle"
+                                    task_artifacts = []
+                                    if task_succeeded and task_job_id:
+                                        task_artifacts = [{
+                                            "artifact_id": f"team_{dynamic_plan['id']}_{dynamic_task['id']}_{task_job_id[-8:]}",
+                                            "type": "team_task_result",
+                                            "name": f"{dynamic_task['title']} 交付摘要",
+                                            "uri": f"artifact://team-plan/{dynamic_plan['id']}/{dynamic_task['id']}/{task_job_id}",
+                                            "task_id": dynamic_task["id"],
+                                            "job_id": task_job_id,
+                                            "summary": str(matched.get("result") or "")[:2000],
+                                        }]
+                                    dynamic_plan_store.task(
+                                        dynamic_plan["id"], dynamic_task["id"],
+                                        "completed" if task_succeeded else "failed",
+                                        result=str(matched.get("result") or ""),
+                                        error=str(matched.get("error") or ""),
+                                        tool_events=matched.get("_dynamic_tool_events"),
+                                        job_id=task_job_id,
+                                        artifacts=task_artifacts,
+                                        usage=matched.get("_dynamic_usage"),
+                                    )
+                                    if task_succeeded and task_job_id and self._job_runner is not None:
+                                        self._job_runner.append_tracked_event(task_job_id, {
+                                            "type": "artifact_created",
+                                            "job_id": task_job_id,
+                                            "artifact": task_artifacts[0],
+                                        })
+
+                                    if task_job_id and self._job_runner is not None:
+                                        if task_succeeded:
+                                            self._job_runner.succeed_tracked(task_job_id, {
+                                                "plan_id": dynamic_plan["id"],
+                                                "task_id": dynamic_task["id"],
+                                                "member": dynamic_task["member_name"],
+                                                "result_summary": str(matched.get("result") or "")[:500],
+                                            })
+                                        else:
+                                            self._job_runner.fail_tracked(
+                                                task_job_id, str(matched.get("error") or "task failed")
+                                            )
+                                for delegated_result in delegated_results:
+                                    delegated_result.pop("_dynamic_tool_events", None)
+                                    delegated_result.pop("_dynamic_usage", None)
+                                review_blocked = any(
+                                    item.get("quality_review") and item.get("blocking_review")
+                                    for item in results
+                                )
+                                review_summary = next((
+                                    str(item.get("error") or "") for item in results
+                                    if item.get("quality_review") and item.get("blocking_review")
+                                ), "")
+                                dynamic_plan = dynamic_plan_store.finalize(
+                                    dynamic_plan["id"], review_blocked=review_blocked,
+                                    review_summary=review_summary,
+                                )
+                                yield {
+                                    "type": "team_event",
+                                    "event": "dynamic_plan_completed",
+                                    "team": team_name,
+                                    "plan": dynamic_plan,
+                                }
 
                                 failed = [item for item in results if item.get("status") == "failed"]
+                                blocking_reviews = [
+                                    item for item in results
+                                    if item.get("status") == "needs_review"
+                                    or item.get("blocking_review")
+                                ]
+                                if dynamic_plan["status"] == "canceled":
+                                    team_status = "canceled"
+                                elif failed:
+                                    team_status = "partial_failed"
+                                elif blocking_reviews:
+                                    team_status = "needs_review"
+                                else:
+                                    team_status = "completed"
                                 tool_result = {
                                     "team": team_name,
-                                    "status": "partial_failed" if failed else "completed",
+                                    "status": team_status,
                                     "parallel": True,
                                     "assignment_count": len(assignments),
-                                    "completed_count": len(results) - len(failed),
+                                    "completed_count": len([
+                                        item for item in results
+                                        if item.get("status") == "idle"
+                                    ]),
                                     "failed_count": len(failed),
+                                    "needs_review_count": len(blocking_reviews),
                                     "results": results,
                                     "delivered_to": "leader",
+                                    "dynamic_plan_id": dynamic_plan["id"],
                                 }
                                 hook_events, _hook_prompts = self._run_hook_event(
                                     "subagent_stop",
@@ -3030,24 +3845,124 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                         }
                                     raise
                                 if team_name and member_name:
+                                    invalid_reason = _delegated_result_invalid_reason(
+                                        tool_result,
+                                        tool_events,
+                                    )
                                     completion = team_store.complete_member_turn(
-                                        team_name, member_name, tool_result, ok=True, tool_events=tool_events
+                                        team_name,
+                                        member_name,
+                                        tool_result,
+                                        ok=not invalid_reason,
+                                        tool_events=tool_events,
                                     )
                                     yield {
                                         "type": "team_event",
-                                        "event": "member_idle",
+                                        "event": "member_failed" if invalid_reason else "member_idle",
                                         "team": team_name,
                                         "member": member_name,
                                         "message": completion.get("message", {}),
                                     }
+                                    review_result = None
+                                    if member_name != "质量复核员":
+                                        reviewer = team_store.ensure_quality_reviewer(team_name)
+                                        reviewer_name = str(reviewer.get("name") or "质量复核员")
+                                        review_prompt = (
+                                            "你是团队固定质量复核员，请作为第二道屏障独立复核单成员输出。\n"
+                                            "硬规则：最多调用 4 次只读工具，其中 query_data 最多 3 次；"
+                                            "抽查关键数字即可，工具调用后必须输出最终 Markdown。\n"
+                                            "检查关键数字是否有工具证据、SQL/样本/分母/时间窗是否一致、"
+                                            "是否有工具错误、空输出或无字段支撑的业务归因。\n"
+                                            "输出 Markdown，必须包含：通过项、需修正项、不可验证项、建议补充查询。\n\n"
+                                            + json.dumps({
+                                                "team": team_name,
+                                                "member": member_name,
+                                                "description": args.get("description", ""),
+                                                "result": str(tool_result)[:2200],
+                                            }, ensure_ascii=False)
+                                        )[:8000]
+                                        try:
+                                            review_message = team_store.send_message(
+                                                team_name,
+                                                reviewer_name,
+                                                "任务：固定质量复核\n\n" + review_prompt,
+                                                sender="leader",
+                                                read=True,
+                                                queue=False,
+                                                message_type="quality_review_assignment",
+                                            )
+                                            review_turn = team_store.begin_member_turn(team_name, reviewer_name)
+                                            yield {
+                                                "type": "team_event",
+                                                "event": "quality_review_started",
+                                                "team": team_name,
+                                                "member": reviewer_name,
+                                                "message": review_message,
+                                            }
+                                            review_delegated = self._run_delegated_llm(
+                                                member=review_turn["member"],
+                                                prompt=review_prompt,
+                                                inbox_context="",
+                                                timeout_seconds=self.DELEGATED_TIMEOUT_SECONDS,
+                                                max_tokens=1800,
+                                                max_tool_calls=4,
+                                            )
+                                            review_content = str(review_delegated.get("content", ""))
+                                            review_events = review_delegated.get("tool_events", [])
+                                            review_blocking_reason = (
+                                                _delegated_result_invalid_reason(
+                                                    review_content,
+                                                    review_events,
+                                                )
+                                                or _quality_review_blocking_reason(review_content)
+                                            )
+                                            review_completion = team_store.complete_member_turn(
+                                                team_name,
+                                                reviewer_name,
+                                                review_content,
+                                                ok=not review_blocking_reason,
+                                                tool_events=review_events,
+                                            )
+                                            review_result = {
+                                                "member": reviewer_name,
+                                                "role": "quality_reviewer",
+                                                "status": "needs_review" if review_blocking_reason else "idle",
+                                                "error": review_blocking_reason,
+                                                "result": review_content,
+                                                "tool_count": len(review_events),
+                                                "blocking_review": bool(review_blocking_reason),
+                                            }
+                                            yield {
+                                                "type": "team_event",
+                                                "event": "quality_review_completed",
+                                                "team": team_name,
+                                                "member": reviewer_name,
+                                                "message": review_completion.get("message", {}),
+                                            }
+                                        except Exception as exc:
+                                            review_result = {
+                                                "member": "质量复核员",
+                                                "role": "quality_reviewer",
+                                                "status": "failed",
+                                                "error": str(exc),
+                                            }
+                                    if invalid_reason:
+                                        delegate_status = "failed"
+                                    elif review_result and review_result.get("blocking_review"):
+                                        delegate_status = "needs_review"
+                                    else:
+                                        delegate_status = completion.get("status", "idle")
                                     tool_result = {
                                         "team": team_name,
                                         "member": member_name,
-                                        "status": completion.get("status", "idle"),
+                                        "status": delegate_status,
+                                        "error": invalid_reason,
                                         "consumed_messages": len(inbox),
                                         "result": tool_result,
                                         "tool_count": len(tool_events),
+                                        "quality_review": review_result,
                                         "delivered_to": "leader",
+                                    "dynamic_plan_id": dynamic_plan["id"],
                                     }
                                 hook_events, _hook_prompts = self._run_hook_event(
                                     "subagent_stop",
@@ -3062,6 +3977,34 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                                 "summary": args.get("summary", ""),
                                 "steps": args.get("steps", []),
                             }
+                        elif name == "display_diagram":
+                            from agent.tools.business.diagram import handle_display_diagram
+                            result = handle_display_diagram(args, session_id=self._session_id)
+                            tool_result = result
+                            if result.get("ok"):
+                                yield {
+                                    "type": "canvas_event",
+                                    "canvas_action": "diagram_update",
+                                    "xml": result.get("xml", ""),
+                                    "project_id": (result.get("project") or {}).get("id", ""),
+                                }
+                        elif name == "edit_diagram":
+                            from agent.tools.business.diagram import handle_edit_diagram
+                            result = handle_edit_diagram(args, session_id=self._session_id)
+                            tool_result = result
+                            if result.get("ok"):
+                                yield {
+                                    "type": "canvas_event",
+                                    "canvas_action": "diagram_update",
+                                    "xml": result.get("xml", ""),
+                                    "project_id": args.get("project_id", ""),
+                                }
+                        elif name == "get_diagram":
+                            from agent.tools.business.diagram import handle_get_diagram
+                            tool_result = handle_get_diagram(args, session_id=self._session_id)
+                        elif name == "get_shape_library":
+                            from agent.tools.business.diagram import handle_get_shape_library
+                            tool_result = handle_get_shape_library(args, session_id=self._session_id)
                         elif name.startswith("mcp__"):
                             tool_result = self._mcp_manager.call_tool(name, args)
                             recorder = getattr(self, "_mcp_discovery_recorder", None)
@@ -3090,6 +4033,7 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                         },
                         session_id=self._session_id,
                         runtime=self._workspace_runtime(),
+                        args=args,
                     )
                     _remember_turn_tool_result_artifacts(
                         _allowed_tool_result_artifacts,
@@ -3124,14 +4068,14 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                         yield hook_event
                     _hook_prompt_backlog.extend(hook_prompts)
                     yield {"type": "tool_end", "tool": name}
-                    if not _outline_proposed:
+                    if not _outline_proposed and not _ask_user_issued:
                         yield {"type": "agent_activity", "message": "正在思考下一步…"}
 
                 hook_msg = self._hook_prompt_system_message(_hook_prompt_backlog)
                 if hook_msg:
                     messages.append(hook_msg)
 
-                if _outline_proposed:
+                if _outline_proposed or _ask_user_issued:
                     for chart_item in pending_charts:
                         yield {"type": "chart_html", **chart_item}
                     pending_charts.clear()
@@ -3140,6 +4084,68 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
 
             # ── Final text response ───────────────────────────────────────────
             else:
+                # Text fallback: some providers (e.g. MiniMax-M3) emit the
+                # display_diagram tool call as pseudo-XML inside the reply text
+                # instead of via native tool_calls. Parse and execute it here so
+                # the canvas still renders.
+                _fallback_calls = _parse_text_fallback_tool_calls(full_content)
+                if _fallback_calls and not tc_acc:
+                    from agent.tools.business.diagram import (
+                        handle_display_diagram,
+                        handle_edit_diagram,
+                    )
+                    log.info(
+                        "[tool] text-fallback recovered %d tool call(s) from reply text: %s",
+                        len(_fallback_calls),
+                        [n for n, _ in _fallback_calls],
+                    )
+                    for fb_name, fb_args in _fallback_calls:
+                        _fb_t0 = time.monotonic()
+                        yield {"type": "tool_start", "tool": fb_name, "display": fb_name}
+                        try:
+                            if fb_name == "display_diagram":
+                                fb_result = handle_display_diagram(fb_args, session_id=self._session_id)
+                            elif fb_name == "edit_diagram":
+                                fb_result = handle_edit_diagram(fb_args, session_id=self._session_id)
+                            else:
+                                fb_result = {"ok": False, "error": f"unknown fallback tool {fb_name}"}
+                        except Exception as exc:
+                            fb_result = {"ok": False, "error": str(exc)}
+                            log.error("[tool] text-fallback %s FAILED: %s", fb_name, exc)
+                        if isinstance(fb_result, dict) and fb_result.get("ok"):
+                            yield {
+                                "type": "canvas_event",
+                                "canvas_action": "diagram_update",
+                                "xml": fb_result.get("xml", ""),
+                                "project_id": (fb_result.get("project") or {}).get("id", "")
+                                or fb_args.get("project_id", ""),
+                            }
+                        yield {
+                            "type": "tool_result",
+                            "tool": fb_name,
+                            "ok": bool(isinstance(fb_result, dict) and fb_result.get("ok")),
+                            "error": fb_result.get("error") if isinstance(fb_result, dict) else "",
+                            "content": str(fb_result)[:500],
+                            "elapsed_seconds": round(time.monotonic() - _fb_t0, 3),
+                        }
+                        log.info(
+                            "[tool] text-fallback %s OK  %.2fs  ok=%s",
+                            fb_name,
+                            time.monotonic() - _fb_t0,
+                            bool(isinstance(fb_result, dict) and fb_result.get("ok")),
+                        )
+                    # Strip the pseudo-XML tool tags from the visible reply
+                    # so the user only sees the diagram + any plain commentary.
+                    _stripped = full_content
+                    for _tn in _TEXT_FALLBACK_TOOL_NAMES:
+                        _stripped = re.sub(
+                            rf"<{_tn}\b[^>]*>[\s\S]*?</{_tn}>",
+                            "",
+                            _stripped,
+                            flags=re.IGNORECASE,
+                        )
+                    full_content = _stripped.strip()
+
                 if reasoning_content:
                     all_reasoning.append(reasoning_content)
 
@@ -3194,9 +4200,30 @@ class BusinessAgent(DataToolsMixin, ExportToolsMixin):
                     continue
 
                 if command in _PROPOSE_FLOW_CMDS:
-                    messages.append({"role": "assistant", "content": full_content})
-                    _force_propose = True
-                    continue
+                    _force_propose_retries += 1
+                    if _force_propose_retries > _MAX_FORCE_PROPOSE_RETRIES:
+                        log.warning(
+                            "[run] force_propose exhausted retries (%d), ending turn",
+                            _force_propose_retries,
+                        )
+                    else:
+                        messages.append({"role": "assistant", "content": full_content})
+                        _force_propose = True
+                        continue
+
+                # Dashboard skill: if the LLM stops without proposing or
+                # asking user, nudge it to proceed to the next phase.
+                if command == "dashboard" and not _outline_proposed:
+                    _force_propose_retries += 1
+                    if _force_propose_retries > _MAX_FORCE_PROPOSE_RETRIES:
+                        log.warning(
+                            "[run] dashboard nudge exhausted retries (%d), ending turn",
+                            _force_propose_retries,
+                        )
+                    else:
+                        messages.append({"role": "assistant", "content": full_content})
+                        _force_propose = True
+                        continue
 
                 if all_reasoning:
                     yield {"type": "reasoning", "content": "\n\n---\n\n".join(all_reasoning)}

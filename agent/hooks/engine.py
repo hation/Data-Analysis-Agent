@@ -11,7 +11,10 @@ from .executors import execute_action
 from .models import Hook, HookContext, ToolRejectedError
 
 log = logging.getLogger(__name__)
-_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="baa-hook")
+# IO-bound hook execution (HTTP/command/prompt actions spend most time waiting).
+# Bumped from 4 → 8: hooks are network/IO heavy, GIL is released during waits,
+# and DuckDB is not touched by hook executors, so higher concurrency is safe.
+_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="baa-hook")
 
 
 @dataclass

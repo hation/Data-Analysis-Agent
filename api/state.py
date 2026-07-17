@@ -25,6 +25,9 @@ class _ChartStore:
     def __setitem__(self, cid: str, html: str):
         (self._dir / f"{cid}.html").write_text(html, encoding="utf-8")
 
+    def path_for(self, cid: str) -> Path:
+        return self._dir / f"{cid}.html"
+
     def __getitem__(self, cid: str) -> str:
         p = self._dir / f"{cid}.html"
         if not p.exists():
