@@ -1,0 +1,475 @@
+{
+  "nodes": [
+    {
+      "id": "file:Function/Charts_generation/charts/base.py",
+      "type": "file",
+      "name": "base.py",
+      "filePath": "Function/Charts_generation/charts/base.py",
+      "summary": "定义了图表生成的基础接口协议，包含统一的数据类和字段映射规范。",
+      "tags": ["base-class", "interface", "data-structure"],
+      "complexity": "simple",
+      "languageNotes": "使用 dataclasses 定义统一接口"
+    },
+    {
+      "id": "class:Function/Charts_generation/charts/base.py:ChartResult",
+      "type": "class",
+      "name": "ChartResult",
+      "filePath": "Function/Charts_generation/charts/base.py",
+      "lineRange": [9, 20],
+      "summary": "统一的图表结果返回结构，包含 HTML 渲染、图表规范、警告信息和元数据。",
+      "tags": ["data-structure", "return-type", "standard-interface"],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:Function/Charts_generation/charts/base.py:FieldMapping",
+      "type": "class",
+      "name": "FieldMapping",
+      "filePath": "Function/Charts_generation/charts/base.py",
+      "lineRange": [22, 55],
+      "summary": "字段映射标准名称，图表使用 mapping.xxx 读取实际列名，支持自动从字典转换。",
+      "tags": ["field-mapping", "data-binding", "standard-interface"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/color_schemes.py",
+      "type": "file",
+      "name": "color_schemes.py",
+      "filePath": "Function/Charts_generation/charts/color_schemes.py",
+      "summary": "提供多种企业配色方案（麦肯锡、BCG、贝恩、安永）的管理和查询功能。",
+      "tags": ["color-management", "visualization", "enterprise-color"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Sunburst_Diagram/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "Function/Charts_generation/charts/Sunburst_Diagram/__init__.py",
+      "summary": "旭日图模块入口文件，导出 generate 函数。",
+      "tags": ["entry-point", "export", "sunburst-diagram"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Sunburst_Diagram/chart.py",
+      "type": "file",
+      "name": "chart.py",
+      "filePath": "Function/Charts_generation/charts/Sunburst_Diagram/chart.py",
+      "summary": "实现旭日图的生成功能，支持多层级嵌套占比展示，使用 Plotly 库可视化。",
+      "tags": ["sunburst-diagram", "visualization", "plotly", "proportion"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Sunburst_Diagram/result.html",
+      "type": "file",
+      "name": "result.html",
+      "filePath": "Function/Charts_generation/charts/Sunburst_Diagram/result.html",
+      "summary": "旭日图的 HTML 渲染模板，用于展示生成的图表。",
+      "tags": ["html-template", "rendering", "visualization"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Treemap/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "Function/Charts_generation/charts/Treemap/__init__.py",
+      "summary": "矩形树图模块入口文件，导出 generate 函数。",
+      "tags": ["entry-point", "export", "treemap"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Treemap/chart.py",
+      "type": "file",
+      "name": "chart.py",
+      "filePath": "Function/Charts_generation/charts/Treemap/chart.py",
+      "summary": "实现矩形树图的生成功能，支持多层级嵌套占比展示，使用 Plotly 库可视化。",
+      "tags": ["treemap", "visualization", "plotly", "proportion"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Treemap/result.html",
+      "type": "file",
+      "name": "result.html",
+      "filePath": "Function/Charts_generation/charts/Treemap/result.html",
+      "summary": "矩形树图的 HTML 渲染模板，用于展示生成的图表。",
+      "tags": ["html-template", "rendering", "visualization"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Violin_Chart/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "Function/Charts_generation/charts/Violin_Chart/__init__.py",
+      "summary": "小提琴图模块入口文件，导出 generate 函数。",
+      "tags": ["entry-point", "export", "violin-chart"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Violin_Chart/chart.py",
+      "type": "file",
+      "name": "chart.py",
+      "filePath": "Function/Charts_generation/charts/Violin_Chart/chart.py",
+      "summary": "实现小提琴图的生成功能，结合箱线图和密度估计展示分布形状，使用 Plotly 库。",
+      "tags": ["violin-chart", "visualization", "plotly", "distribution"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Violin_Chart/result.html",
+      "type": "file",
+      "name": "result.html",
+      "filePath": "Function/Charts_generation/charts/Violin_Chart/result.html",
+      "summary": "小提琴图的 HTML 渲染模板，用于展示生成的图表。",
+      "tags": ["html-template", "rendering", "visualization"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Waffle/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "Function/Charts_generation/charts/Waffle/__init__.py",
+      "summary": "华夫格图模块入口文件，导出 generate 函数。",
+      "tags": ["entry-point", "export", "waffle-chart"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Waffle/chart.py",
+      "type": "file",
+      "name": "chart.py",
+      "filePath": "Function/Charts_generation/charts/Waffle/chart.py",
+      "summary": "实现华夫格图的生成功能，使用单元格拼成比例方格图，直观展示各分类占整体比例。",
+      "tags": ["waffle-chart", "visualization", "plotly", "proportion"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Waffle/result.html",
+      "type": "file",
+      "name": "result.html",
+      "filePath": "Function/Charts_generation/charts/Waffle/result.html",
+      "summary": "华夫格图的 HTML 渲染模板，用于展示生成的图表。",
+      "tags": ["html-template", "rendering", "visualization"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Waterfall/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "Function/Charts_generation/charts/Waterfall/__init__.py",
+      "summary": "瀑布图模块入口文件，导出 generate 函数。",
+      "tags": ["entry-point", "export", "waterfall-chart"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Waterfall/chart.py",
+      "type": "file",
+      "name": "chart.py",
+      "filePath": "Function/Charts_generation/charts/Waterfall/chart.py",
+      "summary": "实现瀑布图的生成功能，展示数值从起点经过增减变化到终点的过程，使用 Plotly 库。",
+      "tags": ["waterfall-chart", "visualization", "plotly", "cumulative-change"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Waterfall/result.html",
+      "type": "file",
+      "name": "result.html",
+      "filePath": "Function/Charts_generation/charts/Waterfall/result.html",
+      "summary": "瀑布图的 HTML 渲染模板，用于展示生成的图表。",
+      "tags": ["html-template", "rendering", "visualization"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "Function/Charts_generation/charts/__init__.py",
+      "summary": "统一图表生成框架的入口文件，保留图表实现层的公共接口（ChartResult / FieldMapping）。",
+      "tags": ["entry-point", "export", "unified-interface"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Clean/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "Function/Clean/__init__.py",
+      "summary": "数据清洁模块入口文件，导出所有清洁功能函数。",
+      "tags": ["entry-point", "export", "data-cleaning"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Clean/data_profile.py",
+      "type": "file",
+      "name": "data_profile.py",
+      "filePath": "Function/Clean/data_profile.py",
+      "summary": "数据概况分析模块，提供缺失值检测、数值统计、分布图表生成功能。",
+      "tags": ["data-profiling", "missing-values", "data-quality", "statistics"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:Function/Clean/missing_handler.py",
+      "type": "file",
+      "name": "missing_handler.py",
+      "filePath": "Function/Clean/missing_handler.py",
+      "summary": "缺失值处理模块，提供零值填充、均值填充、中位数填充等方法。",
+      "tags": ["missing-values", "data-cleaning", "imputation"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:Function/Clean/data_profile.py:profile",
+      "type": "function",
+      "name": "profile",
+      "filePath": "Function/Clean/data_profile.py",
+      "lineRange": [40, 80],
+      "summary": "对 DataFrame 进行全面数据概况分析，包括统计信息、缺失值检测和数据质量评估。",
+      "tags": ["data-profiling", "analysis", "data-quality"],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:Function/Clean/missing_handler.py:fill_missing",
+      "type": "function",
+      "name": "fill_missing",
+      "filePath": "Function/Clean/missing_handler.py",
+      "lineRange": [8, 45],
+      "summary": "填充数据中的缺失值，支持多种填充方法（零值、均值、中位数）。",
+      "tags": ["missing-values", "data-cleaning", "imputation"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Treemap/README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "Function/Charts_generation/charts/Treemap/README.md",
+      "summary": "矩形树图的文档说明，包括功能介绍、使用方法和示例。",
+      "tags": ["documentation", "usage-guide", "treemap"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Violin_Chart/README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "Function/Charts_generation/charts/Violin_Chart/README.md",
+      "summary": "小提琴图的文档说明，包括功能介绍、使用方法和示例。",
+      "tags": ["documentation", "usage-guide", "violin-chart"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Waffle/README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "Function/Charts_generation/charts/Waffle/README.md",
+      "summary": "华夫格图的文档说明，包括功能介绍、使用方法和示例。",
+      "tags": ["documentation", "usage-guide", "waffle-chart"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:Function/Charts_generation/charts/Waterfall/README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "Function/Charts_generation/charts/Waterfall/README.md",
+      "summary": "瀑布图的文档说明，包括功能介绍、使用方法和示例。",
+      "tags": ["documentation", "usage-guide", "waterfall-chart"],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:Function/Charts_generation/charts/base.py",
+      "target": "class:Function/Charts_generation/charts/base.py:ChartResult",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/base.py",
+      "target": "class:Function/Charts_generation/charts/base.py:FieldMapping",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/__init__.py",
+      "target": "file:Function/Charts_generation/charts/base.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/Sunburst_Diagram/chart.py",
+      "target": "file:Function/Charts_generation/charts/base.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/Sunburst_Diagram/chart.py",
+      "target": "file:Function/Charts_generation/charts/color_schemes.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/Treemap/chart.py",
+      "target": "file:Function/Charts_generation/charts/base.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/Treemap/chart.py",
+      "target": "file:Function/Charts_generation/charts/color_schemes.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/Violin_Chart/chart.py",
+      "target": "file:Function/Charts_generation/charts/base.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/Violin_Chart/chart.py",
+      "target": "file:Function/Charts_generation/charts/color_schemes.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/Waffle/chart.py",
+      "target": "file:Function/Charts_generation/charts/base.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/Waffle/chart.py",
+      "target": "file:Function/Charts_generation/charts/color_schemes.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/Waterfall/chart.py",
+      "target": "file:Function/Charts_generation/charts/base.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:Function/Clean/__init__.py",
+      "target": "file:Function/Clean/data_profile.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:Function/Clean/__init__.py",
+      "target": "file:Function/Clean/missing_handler.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:Function/Clean/data_profile.py",
+      "target": "function:Function/Clean/data_profile.py:profile",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:Function/Clean/missing_handler.py",
+      "target": "function:Function/Clean/missing_handler.py:fill_missing",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/Treemap/README.md",
+      "target": "file:Function/Charts_generation/charts/Treemap/chart.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/Violin_Chart/README.md",
+      "target": "file:Function/Charts_generation/charts/Violin_Chart/chart.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/Waffle/README.md",
+      "target": "file:Function/Charts_generation/charts/Waffle/chart.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/Waterfall/README.md",
+      "target": "file:Function/Charts_generation/charts/Waterfall/chart.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "class:Function/Charts_generation/charts/base.py:ChartResult",
+      "target": "file:Function/Charts_generation/charts/Sunburst_Diagram/chart.py",
+      "type": "used-by",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:Function/Charts_generation/charts/base.py:ChartResult",
+      "target": "file:Function/Charts_generation/charts/Treemap/chart.py",
+      "type": "used-by",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:Function/Charts_generation/charts/base.py:ChartResult",
+      "target": "file:Function/Charts_generation/charts/Violin_Chart/chart.py",
+      "type": "used-by",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:Function/Charts_generation/charts/base.py:ChartResult",
+      "target": "file:Function/Charts_generation/charts/Waffle/chart.py",
+      "type": "used-by",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:Function/Charts_generation/charts/base.py:ChartResult",
+      "target": "file:Function/Charts_generation/charts/Waterfall/chart.py",
+      "type": "used-by",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/color_schemes.py",
+      "target": "file:Function/Charts_generation/charts/Sunburst_Diagram/chart.py",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/color_schemes.py",
+      "target": "file:Function/Charts_generation/charts/Treemap/chart.py",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/color_schemes.py",
+      "target": "file:Function/Charts_generation/charts/Violin_Chart/chart.py",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:Function/Charts_generation/charts/color_schemes.py",
+      "target": "file:Function/Charts_generation/charts/Waffle/chart.py",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    }
+  ]
+}
