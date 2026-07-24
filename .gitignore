@@ -48,10 +48,13 @@ uploads/
 .mypy_cache/
 .ruff_cache/
 
+<<<<<<< HEAD
 # Understand-Anything
 .ua/
 .understand-anything/
 
+=======
+>>>>>>> d6a2c3e9b64fa5216021ab07c904681c0f28db14
 # ---- Local-only tests ----
 # Keep the tests already tracked by Git for GitHub Actions, but do not add
 # newly created local tests to the repository.

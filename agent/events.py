@@ -9,7 +9,7 @@ them to SSE JSON.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, ClassVar, Mapping, TypeAlias
+from typing import Any, ClassVar, Mapping, Union
 
 
 @dataclass(frozen=True)
@@ -70,20 +70,19 @@ class JobCanceledEvent(_JobEvent):
     status: str = "canceled"
 
 
-JobEvent: TypeAlias = (
-    JobCreatedEvent
-    | JobStartedEvent
-    | JobProgressEvent
-    | ArtifactCreatedEvent
-    | JobDoneEvent
-    | JobErrorEvent
-    | JobCanceledEvent
-)
+JobEvent = Union[
+    JobCreatedEvent,
+    JobStartedEvent,
+    JobProgressEvent,
+    ArtifactCreatedEvent,
+    JobDoneEvent,
+    JobErrorEvent,
+    JobCanceledEvent,
+]
 
 
-def serialize_event(event: JobEvent | Mapping[str, Any]) -> dict[str, Any]:
+def serialize_event(event: Union[JobEvent, Mapping[str, Any]]) -> dict[str, Any]:
     """Convert a typed event (or an already-persisted mapping) to JSON data."""
     if isinstance(event, _JobEvent):
         return event.to_payload()
     return dict(event)
-
